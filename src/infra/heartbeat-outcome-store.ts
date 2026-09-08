@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Insertable, Selectable } from "kysely";
+import type { EmbeddedRunTrigger } from "../agents/embedded-agent-runner/run/params.js";
 import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 import {
   resolveSqliteScope,
@@ -218,7 +219,7 @@ export function claimHeartbeatOutcomeForRun(params: {
 }
 
 /** Formats persisted state as model-only provenance context, never transcript text. */
-export function buildHeartbeatOutcomeContext(
+function buildHeartbeatOutcomeContext(
   outcome: PersistedHeartbeatOutcome | undefined,
 ): string | undefined {
   if (!outcome) {
@@ -242,4 +243,25 @@ export function buildHeartbeatOutcomeContext(
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
+}
+
+/** Claim bounded next-user context only after the runtime owner has admitted the turn. */
+export function claimHeartbeatContextForUserRun(
+  params: Omit<Parameters<typeof claimHeartbeatOutcomeForRun>[0], "sessionKey"> & {
+    sessionKey?: string;
+    trigger?: EmbeddedRunTrigger;
+    detached?: boolean;
+    assertCurrent: (() => void) | undefined;
+  },
+): string | undefined {
+  if (params.trigger !== "user" || params.detached || !params.sessionKey) {
+    return undefined;
+  }
+  if (!params.assertCurrent) {
+    throw new Error("Heartbeat outcome context requires an active admitted run");
+  }
+  params.assertCurrent();
+  return buildHeartbeatOutcomeContext(
+    claimHeartbeatOutcomeForRun({ ...params, sessionKey: params.sessionKey }),
+  );
 }

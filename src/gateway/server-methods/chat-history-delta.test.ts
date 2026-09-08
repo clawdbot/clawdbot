@@ -171,6 +171,64 @@ function readTail(scope: TranscriptScope, offset?: number) {
   });
 }
 
+describe("chat history commentary cursor reconciliation", () => {
+  it.each([false, true])(
+    "preserves keyed commentary and its tool sibling on cursor refresh (tool=%s)",
+    async (withTool) => {
+      const { scope, cursor } = await createTranscript();
+      const commentary = {
+        type: "text",
+        text: "First paragraph.\n\n- first file\n- second file",
+        textSignature: JSON.stringify({ v: 1, id: "commentary-1", phase: "commentary" }),
+      };
+      const toolCall = {
+        type: "toolCall",
+        id: "read-1",
+        name: "read",
+        arguments: { path: "workspace.txt" },
+      };
+      const savedMessage = {
+        role: "assistant",
+        content: [commentary, ...(withTool ? [toolCall] : [])],
+        stopReason: withTool ? "toolUse" : "stop",
+        __openclaw: { runId: "run-commentary" },
+      };
+      await appendTranscriptMessage(scope, {
+        eventId: "commentary-and-tool",
+        message: savedMessage,
+      });
+
+      // A saved cursor must not accept a partial envelope and permanently skip commentary.
+      expect(readDelta(scope, cursor)).toEqual({ kind: "reset" });
+      const refreshed = await readTail(scope);
+      expect(refreshed.messages).toMatchObject([
+        {
+          role: "assistant",
+          content: [{ type: "text", text: commentary.text }],
+          openclawStreamFallback: { source: "segment", itemId: "commentary-1" },
+        },
+        ...(withTool ? [{ role: "assistant", content: [toolCall] }] : []),
+      ]);
+      expect(refreshed.messages).toHaveLength(withTool ? 2 : 1);
+      expect(readTranscriptDisplayDelta(scope, { cursor })).toMatchObject({
+        kind: "page",
+        events: [{ event: { message: savedMessage } }],
+      });
+      if (!refreshed.deltaCursor) {
+        throw new Error("Reconciled commentary must resume incremental history");
+      }
+      await appendTranscriptMessage(scope, {
+        eventId: "final-answer",
+        message: { role: "assistant", content: [{ type: "text", text: "Done." }] },
+      });
+      expect(readDelta(scope, refreshed.deltaCursor)).toMatchObject({
+        kind: "delta",
+        messages: [{ messageId: "final-answer", message: { content: [{ text: "Done." }] } }],
+      });
+    },
+  );
+});
+
 describe("chat history recovery cursor eligibility", () => {
   it.each([undefined, 0])(
     "keeps refreshes authoritative while a tail error can recover (offset=%s)",

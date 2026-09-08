@@ -15,7 +15,7 @@ import {
   parseMockOpenAiPort,
 } from "../fixtures/mock-openai-config.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
-import { isExplicitPluginDisableMarker } from "../plugin-uninstall-assertions.mjs";
+import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-assertions.mjs";
 import {
   ERROR_DETAIL_TAIL_BYTES,
   fileContainsText,
@@ -218,7 +218,7 @@ function assertPluginUninstalled() {
   const records = installRecords();
   assert(!records[pluginId], `install record still present for ${pluginId}`);
   assert(
-    isExplicitPluginDisableMarker(cfg, pluginId),
+    hasExpectedPluginUninstallConfigState(cfg, pluginId),
     `exact disabled uninstall marker missing for ${pluginId}`,
   );
   assert(!(cfg.plugins?.allow ?? []).includes(pluginId), `allowlist still contains ${pluginId}`);

@@ -16,7 +16,7 @@ final class StatusMenuSummaries: NSObject {
         let revision: UInt64?
         var lease: GatewayConnection.ServerLease?
         var usage: GatewayUsageSummary?
-        var cost: GatewayCostUsageSummary?
+        var cost: (summary: GatewayCostUsageSummary, dates: CostUsageMenuDateParser)?
         var costError: String?
         var usageUpdatedAt: Date?
         var costUpdatedAt: Date?
@@ -56,7 +56,7 @@ final class StatusMenuSummaries: NSObject {
         self.currentUsageState?.usage
     }
 
-    private var cachedCost: GatewayCostUsageSummary? {
+    private var cachedCost: (summary: GatewayCostUsageSummary, dates: CostUsageMenuDateParser)? {
         self.currentUsageState?.cost
     }
 
@@ -214,14 +214,15 @@ final class StatusMenuSummaries: NSObject {
             entries.append(.info(id: "usage.loading", title: String(localized: "Loading usage…")))
         }
 
-        if let summary = self.cachedCost, !summary.daily.isEmpty {
+        if let cost = self.cachedCost, !cost.summary.daily.isEmpty {
             if !entries.isEmpty {
                 entries.append(.separator(id: "usage.cost.separator"))
             }
             entries.append(MenuEntry(id: "usage.cost.chart") { item in
                 item.title = String(localized: "Usage cost (30 days)")
                 item.isEnabled = false
-                StatusMenuRenderer.configureHostedView(item, rootView: CostUsageHistoryMenuView(summary: summary))
+                StatusMenuRenderer.configureHostedView(
+                    item, rootView: CostUsageHistoryMenuView(summary: cost.summary, dates: cost.dates))
             })
         } else if let error = self.costError {
             if !entries.isEmpty {
@@ -417,10 +418,12 @@ final class StatusMenuSummaries: NSObject {
     private func loadCost(_ refresh: Refresh, enabled: Bool) async {
         guard enabled, self.isCurrent(refresh), let lease = refresh.lease else { return }
         do {
+            let dates = CostUsageMenuDateParser(timeZone: .current)
             let data = try await self.control.request(
-                method: "usage.cost", timeoutMs: 7000, ifCurrentServerLease: lease)
+                method: "usage.cost", params: dates.requestParameters, timeoutMs: 7000, ifCurrentServerLease: lease)
             guard self.isCurrent(refresh) else { return }
-            self.usageState?.cost = try JSONDecoder().decode(GatewayCostUsageSummary.self, from: data)
+            // Cached buckets retain the request's day boundaries if the Mac changes time zones.
+            self.usageState?.cost = try (JSONDecoder().decode(GatewayCostUsageSummary.self, from: data), dates)
             self.usageState?.costError = nil
             self.usageState?.costUpdatedAt = Date()
         } catch {

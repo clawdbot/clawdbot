@@ -1167,6 +1167,7 @@ export async function runGlobalPackageUpdateSteps(params: {
           );
         }
         const swap = await swapStagedPackageInstall({
+          timeoutMs: params.timeoutMs,
           stage: stagedInstall,
           installTarget: params.installTarget,
           packageName: params.packageName,

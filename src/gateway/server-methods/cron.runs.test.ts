@@ -9,9 +9,9 @@ import {
   cronRunLogEntryToTaskDetail,
   cronRunStatusToTaskStatus,
 } from "../../cron/task-run-detail.js";
-import { saveTaskRegistryStateToSqlite } from "../../tasks/task-registry.store.sqlite.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { seedTaskRegistryRowsForTests } from "../../test-utils/task-registry-sqlite.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { cronHandlers } from "./cron.js";
@@ -120,10 +120,7 @@ async function withCronHistory(
           detail: cronRunLogEntryToTaskDetail(entry, { storeKey: cronStoreKey(storePath) }),
         };
       });
-      saveTaskRegistryStateToSqlite({
-        tasks: new Map(tasks.map((task) => [task.taskId, task])),
-        deliveryStates: new Map(),
-      });
+      seedTaskRegistryRowsForTests(new Map(tasks.map((task) => [task.taskId, task])).values());
       const context = createDirectChatContext({
         cron,
         cronStorePath: storePath,
@@ -204,7 +201,9 @@ describe("cron.runs session visibility", () => {
         ...(scope === "job" ? { id: jobId } : { scope }),
         agentId: "MAIN",
         statuses: ["error"],
+        status: "ok",
         deliveryStatuses: ["not-delivered"],
+        deliveryStatus: "delivered",
         query: "needle",
         sortDir: "asc",
         offset: 1,

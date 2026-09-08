@@ -60,7 +60,7 @@ async function loadSessionPullRequests(
 function pushedSnapshot(result: ControlUiSessionPullRequests): ControlUiSessionPullRequestSnapshot {
   return {
     ...result,
-    status: result.rateLimited ? "rate-limited" : "ready",
+    status: result.status ?? (result.rateLimited ? "rate-limited" : "ready"),
   };
 }
 

@@ -14,6 +14,56 @@ import {
 import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
 
 describe("worker placement maintenance admission", () => {
+  it("reclaims an idle session before a disjoint dispatch finishes while preserving its fence", async () => {
+    const cloudStarted = createDeferredCore();
+    const releaseCloud = createDeferredCore();
+    let reclaimed = false;
+    const dispatch = vi.fn(async (request: WorkerPlacementDispatchRequest) => {
+      if (request.sessionId === "cloud") {
+        cloudStarted.resolve();
+        await releaseCloud.promise;
+      }
+      return { ...ACTIVE_PLACEMENT, ...request };
+    });
+    const service = createCoordinatorTestService({
+      dispatch,
+      reclaim: async (_request, _authorize, _beforeDrain, serialize) => {
+        if (!serialize) {
+          throw new Error("Reclaim fixture requires the placement fence");
+        }
+        return await serialize(async () => {
+          reclaimed = true;
+          return { ...ACTIVE_PLACEMENT, state: "reclaimed" };
+        });
+      },
+    });
+    const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
+    const cloud = coordinated.dispatch({
+      ...REQUEST,
+      sessionId: "cloud",
+      sessionKey: "agent:main:cloud",
+    });
+    await cloudStarted.promise;
+    const stop = coordinated.reclaim(REQUEST);
+    let later: Promise<unknown> | undefined;
+    try {
+      await setImmediatePromise();
+      expect(reclaimed).toBe(true);
+      expect((await stop).state).toBe("reclaimed");
+      later = coordinated.dispatch({
+        ...REQUEST,
+        sessionId: "later",
+        sessionKey: "agent:main:later",
+      });
+      await setImmediatePromise();
+      expect(dispatch.mock.calls.map(([request]) => request.sessionId)).toEqual(["cloud"]);
+    } finally {
+      releaseCloud.resolve();
+      await Promise.all([cloud, stop, later]);
+    }
+    expect(dispatch.mock.calls.map(([request]) => request.sessionId)).toEqual(["cloud", "later"]);
+  });
+
   it.each(["full", "targeted", "recovery"] as const)(
     "bounds dispatch joins to the original provider cohort before %s maintenance",
     async (kind) => {

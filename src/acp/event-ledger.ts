@@ -27,7 +27,6 @@ import {
   type AcpMutableLedgerState,
 } from "./event-ledger.types.js";
 
-export { createInMemoryAcpEventLedger } from "./event-ledger.memory.js";
 export type { AcpEventLedger, AcpEventLedgerReplay } from "./event-ledger.types.js";
 
 function normalizeSqliteInteger(value: number | bigint | null): number {

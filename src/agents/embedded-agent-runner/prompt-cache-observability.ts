@@ -25,7 +25,7 @@ export type PromptCacheChange = {
   detail: string;
 };
 
-export type PromptCacheToolSnapshot = {
+type PromptCacheToolSnapshot = {
   name: string;
   descriptionDigest?: string;
   schemaDigest?: string;
@@ -56,7 +56,7 @@ type PromptCacheObservationStart = {
   previousCacheRead: number | null;
 };
 
-export type PromptCacheBreak = {
+type PromptCacheBreak = {
   previousCacheRead: number;
   cacheRead: number;
   changes: PromptCacheChange[] | null;
@@ -65,6 +65,8 @@ export type PromptCacheBreak = {
 type PromptCacheTracker = {
   snapshot: PromptCacheSnapshot;
   lastCacheRead: number | null;
+  /** Missing usage must not bind an older hit to a new request fingerprint. */
+  lastCacheReadSnapshot?: PromptCacheSnapshot;
   pendingChanges: PromptCacheChange[] | null;
 };
 
@@ -298,15 +300,23 @@ export function beginPromptCacheObservation(params: {
     toolNames: tools.map((tool) => tool.name),
   };
   const previous = trackers.get(key);
-  const changes = previous ? diffSnapshots(previous.snapshot, snapshot) : null;
+  const changes = previous
+    ? [
+        ...(previous.pendingChanges?.filter(
+          (change) => change.code === "aggregateToolResultTruncation",
+        ) ?? []),
+        ...(diffSnapshots(previous.snapshot, snapshot) ?? []),
+      ]
+    : [];
   setTracker(key, {
     snapshot,
     lastCacheRead: previous?.lastCacheRead ?? null,
-    pendingChanges: changes,
+    lastCacheReadSnapshot: previous?.lastCacheReadSnapshot,
+    pendingChanges: changes.length > 0 ? changes : null,
   });
   return {
     snapshot,
-    changes,
+    changes: changes.length > 0 ? changes : null,
     previousCacheRead: previous?.lastCacheRead ?? null,
   };
 }
@@ -348,7 +358,9 @@ export function completePromptCacheObservation(params: {
     return null;
   }
   const previousCacheRead = tracker.lastCacheRead;
+  const previousSnapshot = tracker.lastCacheReadSnapshot;
   tracker.lastCacheRead = cacheRead;
+  tracker.lastCacheReadSnapshot = tracker.snapshot;
 
   if (previousCacheRead == null || previousCacheRead <= 0) {
     tracker.pendingChanges = null;
@@ -359,13 +371,19 @@ export function completePromptCacheObservation(params: {
   const hasMeaningfulDrop =
     cacheRead < previousCacheRead * MAX_STABLE_CACHE_READ_RATIO &&
     tokenDrop >= MIN_CACHE_BREAK_TOKEN_DROP;
-  const result = hasMeaningfulDrop
-    ? {
-        previousCacheRead,
-        cacheRead,
-        changes: tracker.pendingChanges,
-      }
-    : null;
+  const completeMiss =
+    cacheRead === 0 &&
+    (params.usage?.input ?? 0) > 0 &&
+    previousSnapshot !== undefined &&
+    diffSnapshots(previousSnapshot, tracker.snapshot) === null;
+  const result =
+    hasMeaningfulDrop || completeMiss
+      ? {
+          previousCacheRead,
+          cacheRead,
+          changes: tracker.pendingChanges,
+        }
+      : null;
   tracker.pendingChanges = null;
   return result;
 }

@@ -109,6 +109,76 @@ describe("ReefInboxConnection recovery", () => {
     expect(persisted).toEqual([8, 9, 10]);
   });
 
+  it("retries a parked live entry after a later separate frame completes", async () => {
+    vi.useFakeTimers();
+    const socket = new ControlledSocket();
+    const retainedEntries: ReturnType<typeof receiptEntry>[] = [];
+    const requestedAfter: number[] = [];
+    const persisted: number[] = [];
+    const attempts: number[] = [];
+    const completed: number[] = [];
+    let parked = true;
+    const client = createClient(async (input) => {
+      const after = Number(parseRequestUrl(input).searchParams.get("after"));
+      requestedAfter.push(after);
+      const entries = retainedEntries.filter((entry) => entry.seq > after);
+      return Response.json({ entries, cursor: entries.at(-1)?.seq ?? after });
+    });
+    const abort = new AbortController();
+    const inbox = new ReefInboxConnection(
+      client,
+      async ([entry]) => {
+        attempts.push(entry!.seq);
+        if (entry!.seq === 8 && parked) {
+          throw new ReefInboxEntryParkedError("review approval pending");
+        }
+        completed.push(entry!.seq);
+      },
+      () => socket as unknown as WebSocketLike,
+      { initialCursor: 7, persistCursor: (cursor) => persisted.push(cursor) },
+    );
+
+    const running = inbox.start(abort.signal);
+    try {
+      socket.emit("open");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(requestedAfter).toEqual([7]);
+      expect(attempts).toEqual([]);
+
+      // The relay retains each entry before pushing its live notification.
+      retainedEntries.push(receiptEntry(8));
+      socket.emit("message", {
+        data: JSON.stringify({ type: "entry", entry: retainedEntries[0] }),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(attempts).toEqual([8]);
+      expect(persisted).toEqual([]);
+
+      retainedEntries.push(receiptEntry(9));
+      socket.emit("message", {
+        data: JSON.stringify({ type: "entry", entry: retainedEntries[1] }),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(completed).toEqual([9]);
+      expect(socket.closed).toBe(false);
+      // Continue through recovery even if the earlier frame's cursor barrier was lost.
+      expect.soft(persisted).toEqual([]);
+
+      parked = false;
+      const recoveryPullIndex = requestedAfter.length;
+      const recoveryAttemptIndex = attempts.length;
+      await inbox.poll(abort.signal);
+      expect.soft(requestedAfter[recoveryPullIndex]).toBe(7);
+      expect.soft(attempts.slice(recoveryAttemptIndex)).toEqual([8]);
+      expect.soft(completed).toEqual([9, 8]);
+      expect(persisted.at(-1)).toBe(9);
+    } finally {
+      abort.abort();
+      await running;
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps the live socket up while an entry stays parked", async () => {
     const socket = new ControlledSocket();
     const errors: string[] = [];

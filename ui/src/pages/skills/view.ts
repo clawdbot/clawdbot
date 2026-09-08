@@ -679,7 +679,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
   const installOption = skill.install.find((option) =>
     option.bins.some((bin) => missingBins.has(bin)),
   );
-  const showBundledBadge = Boolean(skill.bundled && skill.source !== "openclaw-bundled");
+  const showBundledBadge = skill.bundled && skill.source !== "openclaw-bundled";
   const missing = computeSkillMissing(skill);
   const reasons = computeSkillReasons(skill);
   const verdict = verdictForSkill(skill, props.clawhubVerdicts);

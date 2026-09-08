@@ -73,6 +73,7 @@ import {
 import { getVoiceProviderConfig, providerMatchesId } from "../../tts/voice-models.js";
 import { ADMIN_SCOPE, READ_SCOPE, TALK_SECRETS_SCOPE } from "../operator-scopes.js";
 import { formatForLog } from "../ws-log.js";
+import { respondUnavailable } from "./response.js";
 import { inferSpeechMimeType } from "./speech-mime.js";
 import { talkClientHandlers } from "./talk-client.js";
 import { talkSessionHandlers } from "./talk-session.js";
@@ -880,7 +881,7 @@ export const talkHandlers: GatewayRequestHandlers = {
       talk = resolved?.talk;
       realtimeClientHints = resolved?.realtimeClientHints;
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      respondUnavailable(respond, err);
       return;
     }
     if (talk) {

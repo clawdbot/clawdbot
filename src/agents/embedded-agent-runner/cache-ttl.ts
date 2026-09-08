@@ -80,7 +80,7 @@ function matchesCacheTtlContext(
 }
 
 /** Transcript entries visible to cache-TTL marker readers; stores without entries read as empty. */
-export function readCacheTtlEntries(sessionManager: unknown): CustomEntryLike[] {
+function readCacheTtlEntries(sessionManager: unknown): CustomEntryLike[] {
   const sm = sessionManager as { getEntries?: () => CustomEntryLike[] };
   return sm?.getEntries ? sm.getEntries() : [];
 }

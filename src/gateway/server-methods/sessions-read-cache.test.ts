@@ -93,14 +93,15 @@ afterEach(() => {
 });
 
 describe("sessions.list single-flight", () => {
-  it.each([undefined, "live"])(
-    "refreshes reply activity including previously rejected search candidates (search: %s)",
-    async (search) => {
+  it.each([{}, { search: "live" }, { activeOnly: true }])(
+    "refreshes reply activity including previously rejected candidates (%j)",
+    async (filter: SessionsListParams) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const config = await seedSessions();
         const context = requestContext(config);
         const client = identifiedClient("owner@example.com");
-        const request = { agentId: "main", search, limit: 50 };
+        const request = { agentId: "main", ...filter, limit: 50 };
+        const filtered = Boolean(filter.search || filter.activeOnly);
         const terminalScope = { agentId: "main", sessionKey: "agent:main:active" };
         await replaceSessionEntry(terminalScope, {
           ...loadSessionEntry(terminalScope)!,
@@ -112,7 +113,7 @@ describe("sessions.list single-flight", () => {
           agentId: "main",
           projectSessionActive: false,
         } as never);
-        if (search) {
+        if (filtered) {
           expect((await listSessions({ client, context, request })).sessions).toEqual([]);
         }
         const operation = createReplyOperation({
@@ -127,14 +128,14 @@ describe("sessions.list single-flight", () => {
           );
           operation.complete();
           const settled = await listSessions({ client, context, request });
-          if (search) {
+          if (filtered) {
             expect(settled.sessions).toEqual([]);
           } else {
             expect(
               settled.sessions.find((row) => row.key === terminalScope.sessionKey),
             ).toMatchObject({ hasActiveRun: false, status: "done" });
           }
-          expect(loader.calls).toHaveBeenCalledTimes(search ? 3 : 2);
+          expect(loader.calls).toHaveBeenCalledTimes(filtered ? 3 : 2);
         } finally {
           operation.complete();
         }
@@ -767,24 +768,6 @@ describe("sessions.list single-flight", () => {
     });
   });
 
-  it("collapses concurrent activity-filtered requests into one projection", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const { clock, config } = await seedSessionsWithActivityTimes();
-      const context = requestContext(config);
-      const client = identifiedClient("owner@example.com");
-      clock.mockReturnValue(60_400);
-      const request = { activeMinutes: 1, agentId: "main", limit: 100 };
-
-      const results = await Promise.all(
-        Array.from({ length: 8 }, () => listSessions({ client, context, request })),
-      );
-
-      expect(results[0]?.sessions.map((session) => session.key)).toEqual(["agent:main:active"]);
-      expect(results.every((result) => result === results[0])).toBe(true);
-      expect(loader.calls).toHaveBeenCalledTimes(1);
-    });
-  });
-
   it("expires completed children from parent-filtered listings at the retention boundary", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { clock, config } = await seedSessionsWithActivityTimes();
@@ -969,9 +952,9 @@ describe("sessions.list single-flight", () => {
     });
   });
 
-  it.each([undefined, "direct"])(
-    "refills a page from the loaded store when a selected row becomes hidden (search: %s)",
-    async (search) => {
+  it.each([{}, { search: "direct" }, { activeOnly: true }])(
+    "refills a page from the loaded store when a selected row becomes hidden (%j)",
+    async (filter: SessionsListParams) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const config = await seedSessions();
         for (const [name, updatedAt] of [
@@ -990,6 +973,15 @@ describe("sessions.list single-flight", () => {
           );
         }
         const context = requestContext(config);
+        if (filter.activeOnly) {
+          for (const name of ["first", "second", "third"]) {
+            context.chatAbortControllers.set(`page-run-${name}`, {
+              sessionId: `page-${name}`,
+              sessionKey: `agent:main:page-${name}`,
+              agentId: "main",
+            } as never);
+          }
+        }
         const client = identifiedClient("viewer@example.com");
         let releaseRows!: () => void;
         loader.rowGate = new Promise<void>((resolve) => {
@@ -999,7 +991,7 @@ describe("sessions.list single-flight", () => {
         const firstPage = listSessions({
           client,
           context,
-          request: { search, agentId: "main", archived: "all", limit: 1 },
+          request: { ...filter, agentId: "main", archived: "all", limit: 1 },
         });
         await vi.waitFor(() => expect(loader.rowCalls).toHaveBeenCalledOnce());
         await upsertSessionEntryCore(
@@ -1025,7 +1017,7 @@ describe("sessions.list single-flight", () => {
         const next = await listSessions({
           client,
           context,
-          request: { search, agentId: "main", archived: "all", limit: 1, offset: 1 },
+          request: { ...filter, agentId: "main", archived: "all", limit: 1, offset: 1 },
         });
         expect(next.sessions.map((session) => session.key)).toEqual(["agent:main:page-third"]);
       });

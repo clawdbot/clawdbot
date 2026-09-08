@@ -7,13 +7,24 @@ import {
 } from "./pw-tools-core.test-harness.js";
 
 installPwToolsCoreTestHooks();
+const imageSize = vi.hoisted(() => ({ width: 1280, height: 720 }));
+vi.mock("../media/media-services.js", () => ({ getImageMetadata: async () => imageSize }));
+beforeEach(() => {
+  imageSize.width = 1280;
+});
 const mod = await import("./pw-tools-core.interactions.js");
 
 function evaluateMockReturning(view: { x: number; y: number; width?: number; height?: number }) {
   // Caller reads { x, y, width, height } in one evaluate; default to a normal
   // desktop viewport so refs near the top stay in-viewport unless a test puts
   // them out of range explicitly.
-  const result = { width: 1280, height: 720, ...view };
+  const result = {
+    width: 1280,
+    height: 720,
+    fullWidth: 1280,
+    nativeCaptureWidth: 1280,
+    ...view,
+  };
   return vi.fn(async (arg: unknown) => {
     if (typeof arg === "function") {
       return result;
@@ -200,6 +211,7 @@ describe("screenshotWithLabelsViaPlaywright (element/ref)", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("captures the resolved ref element and projects relative to it", async () => {
+    imageSize.width = 200;
     const evaluate = evaluateMockReturning({ x: 0, y: 0 });
     // First call resolves the element rect (container), second resolves e1 annotation bbox.
     const boundingBox = vi

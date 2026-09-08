@@ -11,14 +11,14 @@ import {
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { appendFileTransferAudit } from "../shared/audit.js";
-import { IMAGE_MIME_INLINE_SET, mimeFromExtension } from "../shared/mime.js";
-import { readClampedInt } from "../shared/params.js";
+import { DIR_FETCH_ARCHIVE_POLICY } from "../shared/dir-fetch-archive.js";
 import {
   DIR_FETCH_DEFAULT_MAX_BYTES,
   DIR_FETCH_HARD_MAX_BYTES,
-  DIR_FETCH_TOOL_DESCRIPTOR,
-  FILE_TRANSFER_SUBDIR,
-} from "./descriptors.js";
+} from "../shared/dir-fetch-limits.js";
+import { IMAGE_MIME_INLINE_SET, mimeFromExtension } from "../shared/mime.js";
+import { readClampedInt } from "../shared/params.js";
+import { DIR_FETCH_TOOL_DESCRIPTOR, FILE_TRANSFER_SUBDIR } from "./descriptors.js";
 import { invokeNodeToolPayload, readRequiredNodePath } from "./node-tool-invoke.js";
 
 // Cap how many local file paths we surface in details.media.mediaUrls.
@@ -29,18 +29,6 @@ const DIRECTORY_TEXT_MAX_BYTES = 8192;
 
 // Hard timeout for gateway-side archive extraction.
 const TAR_UNPACK_TIMEOUT_MS = 60_000;
-
-// Cap on number of entries pre-validated. The compressed tar is already
-// capped at DIR_FETCH_HARD_MAX_BYTES upstream, and we walk the unpacked
-// tree to compute hashes — TAR_UNPACK_MAX_ENTRIES bounds how much work
-// that walk can do.
-const TAR_UNPACK_MAX_ENTRIES = 5000;
-
-// Hard caps on uncompressed extraction. Defends against decompression-bomb
-// archives that compress to <16MB but expand to gigabytes. Both caps are
-// enforced by fs-safe while extracting.
-const DIR_FETCH_MAX_UNCOMPRESSED_BYTES = 64 * 1024 * 1024;
-const DIR_FETCH_MAX_SINGLE_FILE_BYTES = 16 * 1024 * 1024;
 
 function classifyArchiveFailure(error: unknown): {
   auditCode: "TREE_TOO_LARGE" | "UNSAFE_ARCHIVE";
@@ -223,15 +211,7 @@ export function createDirFetchTool(): AnyAgentTool {
           tarGzip: true,
           timeoutMs: TAR_UNPACK_TIMEOUT_MS,
           entryModes: "clamp",
-          // fs-safe validates raw paths before supplying canonical pre-strip names.
-          entryFilter: ({ kind }) => (kind === "file" || kind === "directory" ? "extract" : "skip"),
-          onFiltered: "reject-archive",
-          limits: {
-            maxArchiveBytes: DIR_FETCH_HARD_MAX_BYTES,
-            maxEntries: TAR_UNPACK_MAX_ENTRIES,
-            maxExtractedBytes: DIR_FETCH_MAX_UNCOMPRESSED_BYTES,
-            maxEntryBytes: DIR_FETCH_MAX_SINGLE_FILE_BYTES,
-          },
+          ...DIR_FETCH_ARCHIVE_POLICY,
         });
       } catch (error) {
         await Promise.all([

@@ -7,6 +7,12 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
+source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
+
+TARGET_ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" && pwd)"
+CODEX_ASSERTIONS="$(openclaw_resolve_frozen_target_file "$TARGET_ROOT_DIR" \
+  scripts/e2e/lib/codex-on-demand/assertions.mjs \
+  "$ROOT_DIR/scripts/e2e/lib/codex-on-demand/assertions.mjs")"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-codex-on-demand-e2e" OPENCLAW_CODEX_ON_DEMAND_E2E_IMAGE)"
 DOCKER_TARGET="${OPENCLAW_CODEX_ON_DEMAND_DOCKER_TARGET:-bare}"
@@ -69,6 +75,7 @@ OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 codex-on-deman
 echo "Running Codex on-demand Docker E2E..."
 if ! docker_e2e_run_with_harness \
   -v "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}/extensions/codex/package.json:/tmp/openclaw-candidate-codex-package.json:ro" \
+  -v "$CODEX_ASSERTIONS:/app/scripts/e2e/lib/codex-on-demand/assertions.mjs:ro" \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \

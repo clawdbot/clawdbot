@@ -15,15 +15,16 @@ import {
 } from "./crabbox-worker-warm-image.test-support.js";
 
 // Only the parent clock is virtual: the real SDK owns a child that exits when released.
+// Poll inside the child: filesystem notifications can miss the atomic release rename.
 const HELD_STOP = `
   const fs = require("node:fs");
   const marker = process.argv[1];
-  const watcher = fs.watch(require("node:path").dirname(marker), () => {
+  const watcher = setInterval(() => {
     if (fs.existsSync(marker)) {
-      watcher.close();
+      clearInterval(watcher);
       process.exit(Number(fs.readFileSync(marker, "utf8")));
     }
-  });
+  }, 10);
   process.stdout.write("ready");
 `;
 

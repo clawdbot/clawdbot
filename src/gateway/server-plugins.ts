@@ -87,7 +87,11 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
   const scope = getPluginRuntimeGatewayRequestScope();
   const pluginId = scope?.pluginId?.trim();
   if (!canTrustedOfficialPluginRequestScopes(scope ?? {})) {
-    throw new Error("Gateway requests are only available to bundled or trusted official plugins.");
+    throw new Error(
+      `Gateway requests are only available to bundled or trusted official plugins. ${
+        pluginId ? `Plugin "${pluginId}" is neither.` : "This call carries no plugin identity."
+      } See https://docs.openclaw.ai/plugins/sdk-runtime#api-runtime-gateway`,
+    );
   }
   const syntheticScopes = normalizeOperatorScopeList(options?.scopes);
   return await dispatchGatewayMethodInProcess<T>(method, params, {

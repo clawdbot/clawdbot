@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createConfigIO } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import * as pluginRuntime from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { setTestEnvValue } from "../test-utils/env.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { useMockHttp } from "../test-utils/mock-http.js";
 import {
   createOpenClawTestState,
@@ -196,6 +201,65 @@ describe("anonymous telemetry", () => {
     expect(JSON.stringify(payload)).not.toContain("acme-internal-crm");
   });
 
+  it.each(
+    (["provider map", "auth profile", "model reference"] as const).flatMap((source) =>
+      [
+        { provider: "OpenAI", expected: ["openai"] },
+        { provider: " OpenAI ", expected: ["openai"] },
+        { provider: " Open AI ", expected: [] },
+        { provider: " Acme-Private ", expected: [] },
+      ].map(({ provider, expected }) => ({ source, provider, expected })),
+    ),
+  )(
+    "reports loaded $source provider $provider as $expected",
+    async ({ source, provider, expected }) => {
+      const input: OpenClawConfig = { plugins: { enabled: false } };
+      if (source === "provider map") {
+        input.models = {
+          providers: { [provider]: { baseUrl: "https://provider.example.invalid/v1", models: [] } },
+        };
+      } else if (source === "auth profile") {
+        input.auth = { profiles: { configured: { provider, mode: "api_key" } } };
+      } else {
+        input.agents = { defaults: { model: `${provider}/gpt-4o` } };
+      }
+      await testState.writeConfig(input);
+      const config = createConfigIO({
+        configPath: testState.configPath,
+        env: { OPENCLAW_STATE_DIR: testState.stateDir },
+        homedir: () => testState.home,
+        observe: false,
+      }).loadConfig();
+
+      // The real loader accepts these spellings without canonicalizing the provider identity.
+      if (source === "provider map") {
+        expect(Object.keys(config.models?.providers ?? {})).toEqual([provider]);
+      } else if (source === "auth profile") {
+        expect(config.auth?.profiles?.configured?.provider).toBe(provider);
+      }
+      expect(
+        buildTelemetryPayload(config, { surface: "gateway" }).features.providerFamilies,
+      ).toEqual(expected);
+    },
+  );
+
+  it("deduplicates canonical provider families across config maps, auth, and model references", () => {
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          OpenAI: { baseUrl: "https://provider.example.invalid/v1", models: [] },
+          " openai ": { baseUrl: "https://provider.example.invalid/v1", models: [] },
+        },
+      },
+      auth: { profiles: { configured: { provider: " OPENAI ", mode: "api_key" } } },
+      agents: { defaults: { model: "OpenAI/gpt-4o" } },
+    };
+
+    expect(buildTelemetryPayload(config, { surface: "gateway" }).features.providerFamilies).toEqual(
+      ["openai"],
+    );
+  });
+
   it("uses manifest-owned plugin activation when a CLI has no active runtime registry", () => {
     const activeRegistry = vi.spyOn(pluginRuntime, "getActivePluginRegistry").mockReturnValue(null);
     try {
@@ -268,6 +332,194 @@ describe("anonymous telemetry", () => {
       lastPingAt: NOW + DAY_MS + 1,
       latestVersion: "2026.8.25",
     });
+  });
+
+  it("retains a successful response through write failures and recovers without extending its throttle", async () => {
+    const { db } = openOpenClawStateDatabase();
+    db.exec("PRAGMA query_only = ON");
+    const update = { version: "2026.8.24", note: "A newer release is available." };
+    mockHttp.intercept({ url: TELEMETRY_URL, reply: { json: update } });
+    mockHttp.intercept({ url: TELEMETRY_URL, reply: { json: { version: "2026.8.25" } } });
+    const options = { surface: "gateway" as const, fetchImpl: globalThis.fetch };
+
+    const first = await checkTelemetryUpdate({}, { ...options, nowMs: NOW });
+    const retained = await checkTelemetryUpdate({}, { ...options, nowMs: NOW + 120_000 });
+
+    expect({ first, retained, requests: mockHttp.requests().length }).toEqual({
+      first: update,
+      retained: update,
+      requests: 1,
+    });
+    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toBeUndefined();
+
+    db.exec("PRAGMA query_only = OFF");
+    await expect(checkTelemetryUpdate({}, { ...options, nowMs: NOW + 240_000 })).resolves.toEqual(
+      update,
+    );
+    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toEqual({
+      lastPingAt: NOW,
+      latestVersion: update.version,
+      note: update.note,
+    });
+    await expect(
+      checkTelemetryUpdate({}, { ...options, nowMs: NOW + DAY_MS - 1 }),
+    ).resolves.toEqual(update);
+    expect(mockHttp.requests()).toHaveLength(1);
+
+    await expect(checkTelemetryUpdate({}, { ...options, nowMs: NOW + DAY_MS })).resolves.toEqual({
+      version: "2026.8.25",
+    });
+    expect(mockHttp.requests()).toHaveLength(2);
+    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toEqual({
+      lastPingAt: NOW + DAY_MS,
+      latestVersion: "2026.8.25",
+    });
+  });
+
+  it.each(["endpoint", "state directory", "implicit home"] as const)(
+    "keeps an unpersisted response isolated when the %s changes",
+    async (scope) => {
+      const { db } = openOpenClawStateDatabase();
+      db.exec("PRAGMA query_only = ON");
+      const options = { surface: "gateway" as const, fetchImpl: globalThis.fetch };
+      mockHttp.intercept({
+        url: TELEMETRY_URL,
+        reply: { json: { version: "2026.8.24" } },
+      });
+      await checkTelemetryUpdate({}, { ...options, nowMs: NOW });
+
+      let endpoint = TELEMETRY_URL;
+      if (scope === "endpoint") {
+        endpoint = "https://telemetry.example.invalid/api/latest-version";
+        setTestEnvValue("OPENCLAW_TELEMETRY_ENDPOINT", endpoint);
+      } else if (scope === "state directory") {
+        setTestEnvValue("OPENCLAW_STATE_DIR", testState.path("alternate-state"));
+      } else {
+        deleteTestEnvValue("OPENCLAW_STATE_DIR");
+        setTestEnvValue("OPENCLAW_HOME", testState.path("alternate-home"));
+      }
+      mockHttp.intercept({ url: endpoint, reply: { json: { version: "2026.8.25" } } });
+
+      await expect(checkTelemetryUpdate({}, { ...options, nowMs: NOW + 120_000 })).resolves.toEqual(
+        { version: "2026.8.25" },
+      );
+      expect(mockHttp.requests()).toHaveLength(2);
+      testState.applyEnv();
+
+      await expect(checkTelemetryUpdate({}, { ...options, nowMs: NOW + 240_000 })).resolves.toEqual(
+        { version: "2026.8.24" },
+      );
+      expect(mockHttp.requests()).toHaveLength(2);
+    },
+  );
+
+  it("shares the retained success across equivalent resolved state paths", async () => {
+    const { db } = openOpenClawStateDatabase();
+    db.exec("PRAGMA query_only = ON");
+    mockHttp.intercept({
+      url: TELEMETRY_URL,
+      reply: { json: { version: "2026.8.24" } },
+    });
+    const options = { surface: "gateway" as const, fetchImpl: globalThis.fetch };
+    await checkTelemetryUpdate({}, { ...options, nowMs: NOW });
+    setTestEnvValue("OPENCLAW_STATE_DIR", `${testState.stateDir}/.`);
+
+    await expect(checkTelemetryUpdate({}, { ...options, nowMs: NOW + 120_000 })).resolves.toEqual({
+      version: "2026.8.24",
+    });
+    expect(mockHttp.requests()).toHaveLength(1);
+  });
+
+  it("keeps the request's state destination when the environment changes during HTTP", async () => {
+    const { db } = openOpenClawStateDatabase();
+    db.exec("PRAGMA query_only = ON");
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => {
+      setTestEnvValue("OPENCLAW_STATE_DIR", testState.path("alternate-state"));
+      return Response.json({ version: "2026.8.24" });
+    });
+    const options = { surface: "gateway" as const, fetchImpl };
+
+    await expect(checkTelemetryUpdate({}, { ...options, nowMs: NOW })).resolves.toEqual({
+      version: "2026.8.24",
+    });
+    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toBeUndefined();
+    testState.applyEnv();
+    db.exec("PRAGMA query_only = OFF");
+
+    await expect(checkTelemetryUpdate({}, { ...options, nowMs: NOW + 120_000 })).resolves.toEqual({
+      version: "2026.8.24",
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toEqual({
+      lastPingAt: NOW,
+      latestVersion: "2026.8.24",
+    });
+  });
+
+  it("does not replace a newer persisted success with a retained older response", async () => {
+    const { db } = openOpenClawStateDatabase();
+    db.exec("PRAGMA query_only = ON");
+    mockHttp.intercept({
+      url: TELEMETRY_URL,
+      reply: { json: { version: "2026.8.24" } },
+    });
+    const options = { surface: "gateway" as const, fetchImpl: globalThis.fetch };
+    await checkTelemetryUpdate({}, { ...options, nowMs: NOW });
+    db.exec("PRAGMA query_only = OFF");
+    const newerState = { lastPingAt: NOW + 60_000, latestVersion: "2026.8.25" };
+    writeConfigMachineState(TELEMETRY_STATE_KEY, newerState);
+
+    await expect(checkTelemetryUpdate({}, { ...options, nowMs: NOW + 120_000 })).resolves.toEqual({
+      version: "2026.8.25",
+    });
+    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toEqual(newerState);
+    expect(mockHttp.requests()).toHaveLength(1);
+  });
+
+  it("preserves a newer durable success written while the request was awaiting HTTP", async () => {
+    const newerState = { lastPingAt: NOW + 60_000, latestVersion: "2026.8.25" };
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => {
+      writeConfigMachineState(TELEMETRY_STATE_KEY, newerState);
+      return Response.json({ version: "2026.8.24" });
+    });
+
+    await expect(
+      checkTelemetryUpdate({}, { surface: "gateway", fetchImpl, nowMs: NOW }),
+    ).resolves.toEqual({ version: newerState.latestVersion });
+
+    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toEqual(newerState);
+  });
+
+  it("uses a newer transaction-selected success instead of sending at the pending timestamp's expiry", async () => {
+    const { db } = openOpenClawStateDatabase();
+    db.exec("PRAGMA query_only = ON");
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ version: "2026.8.24" }))
+      .mockResolvedValueOnce(Response.json({ version: "2026.8.26" }));
+    const options = { surface: "gateway" as const, fetchImpl };
+    await checkTelemetryUpdate({}, { ...options, nowMs: NOW });
+    db.exec("PRAGMA query_only = OFF");
+
+    const newerState = { lastPingAt: NOW + DAY_MS - 60_000, latestVersion: "2026.8.25" };
+    const originalRead = readConfigMachineState;
+    const read = vi
+      .spyOn(await import("../state/config-machine-state.js"), "readConfigMachineState")
+      .mockImplementationOnce((...args) => {
+        const snapshot = originalRead(...args);
+        writeConfigMachineState(TELEMETRY_STATE_KEY, newerState);
+        return snapshot;
+      });
+    try {
+      const result = await checkTelemetryUpdate({}, { ...options, nowMs: NOW + DAY_MS });
+      expect({ result, requests: fetchImpl.mock.calls.length }).toEqual({
+        result: { version: newerState.latestVersion },
+        requests: 1,
+      });
+      expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toEqual(newerState);
+    } finally {
+      read.mockRestore();
+    }
   });
 
   it.each([
@@ -445,6 +697,21 @@ describe("anonymous telemetry", () => {
 
     expect(mockHttp.requests()).toHaveLength(1);
     expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toBeUndefined();
+    mockHttp.intercept({
+      url: TELEMETRY_URL,
+      reply: { json: { version: "2026.8.24" } },
+    });
+    await expect(
+      checkTelemetryUpdate(
+        {},
+        {
+          surface: "gateway",
+          fetchImpl: globalThis.fetch,
+          nowMs: NOW + 120_000,
+        },
+      ),
+    ).resolves.toEqual({ version: "2026.8.24" });
+    expect(mockHttp.requests()).toHaveLength(2);
   });
 
   it("bounds untrusted remote update notes before display or persistence", async () => {

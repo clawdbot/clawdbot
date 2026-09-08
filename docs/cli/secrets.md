@@ -24,7 +24,7 @@ Recommended operator loop:
 
 ```bash
 openclaw secrets audit --check
-openclaw secrets configure
+openclaw secrets configure --plan-out /tmp/openclaw-secrets-plan.json
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json
 openclaw secrets audit --check

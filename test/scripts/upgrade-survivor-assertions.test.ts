@@ -1874,6 +1874,83 @@ process.stdout.write(sessionDir + "\\n");
     ).not.toThrow();
   });
 
+  it.each([
+    "ok",
+    "queued",
+    "wait-timeout",
+    "cli-failed",
+    "not-started",
+    "turn-failed",
+    "wrong-session",
+    "user-only",
+    "wrong-reply",
+  ])("requires a completed persisted managed serving reply (%s)", (outcome) => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-survivor-serving-turn-"));
+    try {
+      const bin = join(root, "bin");
+      mkdirSync(bin);
+      writeFileSync(
+        join(bin, "openclaw"),
+        `#!${process.execPath}
+const fs = require("node:fs");
+const method = process.argv[4];
+const params = JSON.parse(process.argv[process.argv.indexOf("--params") + 1]);
+const outcome = process.env.PROBE_OUTCOME;
+if (outcome === "cli-failed") {
+  process.stderr.write(JSON.stringify(process.argv));
+  process.exit(47);
+}
+let result;
+if (method === "chat.send") {
+  fs.writeFileSync(process.env.PROBE_MARKER_FILE, params.message.match(/OPENCLAW_E2E_SURVIVOR_[A-F0-9]+/)[0]);
+  result = { status: outcome === "not-started" ? "error" : "started", runId: "serving-run" };
+} else if (method === "agent.wait") {
+  const pending = ["queued", "wait-timeout"].includes(outcome) && !fs.existsSync(process.env.PROBE_MARKER_FILE + ".waited");
+  fs.writeFileSync(process.env.PROBE_MARKER_FILE + ".waited", "waited");
+  result = { runId: params.runId, status: pending ? (outcome === "wait-timeout" ? "timeout" : "pending") : outcome === "turn-failed" ? "error" : "ok", ...(pending ? {} : { endedAt: 1788820180863 }) };
+} else if (method === "chat.history") {
+  result = { sessionId: outcome === "wrong-session" ? "replacement" : "upgrade-main-session", messages: [{
+    role: outcome === "user-only" ? "user" : "assistant",
+    content: [{ type: "text", text: outcome === "wrong-reply" ? "other" : fs.readFileSync(process.env.PROBE_MARKER_FILE, "utf8") }],
+  }] };
+} else { process.exit(47); }
+process.stdout.write(JSON.stringify(result));
+`,
+        { mode: 0o755 },
+      );
+      const receipt = join(root, "receipt.json");
+      const result = spawnSync(
+        process.execPath,
+        [ASSERTIONS_PATH, "assert-restart-serving-turn", receipt],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
+            GATEWAY_AUTH_TOKEN_REF: "synthetic-serving-token",
+            PROBE_OUTCOME: outcome,
+            PROBE_MARKER_FILE: join(root, "marker"),
+          },
+        },
+      );
+      const succeeded = outcome === "ok" || outcome === "queued" || outcome === "wait-timeout";
+      expect(result.status, result.stderr).toBe(succeeded ? 0 : 1);
+      expect(existsSync(receipt)).toBe(succeeded);
+      expect(result.stderr).not.toContain("synthetic-serving-token");
+      if (outcome === "cli-failed") {
+        expect(result.stderr).toContain("chat.send managed serving probe failed (status 47)");
+      }
+      if (succeeded) {
+        const proof = JSON.parse(readFileSync(receipt, "utf8"));
+        expect(proof.sessionId).toBe("upgrade-main-session");
+        expect(proof.reply.content[0].text).toBe(proof.marker);
+        expect(proof.completion.status).toBe("ok");
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("accepts a SQLite-only migrated session store", () => {
     expect(() =>
       runSessionStateAssertion((stateDir) => {
@@ -1881,6 +1958,71 @@ process.stdout.write(sessionDir + "\\n");
       }),
     ).not.toThrow();
   });
+
+  it.each([
+    { stage: "survival", mutation: "none", error: /metadata prompt was not preserved/ },
+    { stage: "post-inference", mutation: "none", error: undefined },
+    { stage: "post-inference", mutation: "missing-marker", error: /refreshed skills snapshot/ },
+    { stage: "post-inference", mutation: "invalid-marker", error: /refreshed skills snapshot/ },
+    { stage: "post-inference", mutation: "stale-prompt", error: /refreshed skills snapshot/ },
+    { stage: "post-inference", mutation: "malformed-skills", error: /refreshed skills snapshot/ },
+    { stage: "post-inference", mutation: "heavy-cache", error: /heavy resolvedSkills cache/ },
+    {
+      stage: "post-inference",
+      mutation: "missing-session",
+      error: /main legacy session row missing/,
+    },
+    {
+      stage: "post-inference",
+      mutation: "missing-transcript",
+      error: /transcript was not imported/,
+    },
+  ])(
+    "checks migrated session state after inference ($stage, $mutation)",
+    ({ stage, mutation, error }) => {
+      const check = () =>
+        runSessionStateAssertion((stateDir) => {
+          writeMigratedSessionState(stateDir);
+          const db = new DatabaseSync(
+            join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+          );
+          try {
+            db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
+              JSON.stringify({
+                skillsSnapshot: {
+                  prompt:
+                    mutation === "stale-prompt"
+                      ? "legacy prompt survives as metadata"
+                      : "Current runtime skill instructions",
+                  skills: mutation === "malformed-skills" ? null : [{ name: "survivor-skill" }],
+                  ...(mutation === "missing-marker"
+                    ? {}
+                    : { promptFormatVersion: mutation === "invalid-marker" ? 0 : 4 }),
+                  ...(mutation === "heavy-cache" ? { resolvedSkills: [] } : {}),
+                },
+              }),
+              "agent:main:main",
+            );
+            if (mutation === "missing-session") {
+              db.prepare("DELETE FROM session_nodes WHERE session_key = ?").run("agent:main:main");
+            }
+            if (mutation === "missing-transcript") {
+              db.prepare("DELETE FROM transcript_events WHERE session_id = ?").run(
+                "upgrade-main-session",
+              );
+            }
+          } finally {
+            db.close();
+          }
+          return { OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: stage };
+        });
+      if (error) {
+        expect(check).toThrow(error);
+      } else {
+        expect(check).not.toThrow();
+      }
+    },
+  );
 
   it("rejects retired sessionFile metadata in SQLite-backed session rows", () => {
     expect(() =>

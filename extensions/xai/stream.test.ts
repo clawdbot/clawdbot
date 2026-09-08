@@ -11,7 +11,6 @@ import {
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { XAI_BASE_URL } from "./model-definitions.js";
-import { XAI_GROK_OAUTH_BASE_URL } from "./provider-catalog.js";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import { wrapXaiProviderStream } from "./stream.js";
 import {
@@ -169,7 +168,13 @@ async function captureXaiResponsesPayloadWithThinking(
 }
 
 describe("xai stream wrappers", () => {
-  it.each(["grok-4.5", "auto"])("adds the Grok OAuth proxy request contract for %s", (id) => {
+  it.each(
+    ["grok-4.5", "auto"].flatMap((id) =>
+      ["https://cli-chat-proxy.grok.com/v1", "https://CLI-CHAT-PROXY.GROK.COM:443/v1/"].map(
+        (baseUrl) => ({ id, baseUrl }),
+      ),
+    ),
+  )("adds the Grok OAuth proxy request contract for $id at $baseUrl", ({ id, baseUrl }) => {
     let capturedHeaders: Record<string, string> | undefined;
     let capturedModelId: string | undefined;
     const baseStreamFn: StreamFn = (model, _context, options) => {
@@ -197,7 +202,7 @@ describe("xai stream wrappers", () => {
         contextWindow: 500_000,
         maxTokens: 64_000,
         params: { canonicalModelId: "grok-4.5" },
-        baseUrl: "https://cli-chat-proxy.grok.com/v1",
+        baseUrl,
       },
       { messages: [] },
       { headers: { "X-XAI-Token-Auth": "operator-value", "X-Existing": "kept" } },
@@ -215,6 +220,9 @@ describe("xai stream wrappers", () => {
   it.each([
     ["the public API-key endpoint", "xai", "https://api.x.ai/v1"],
     ["a different provider", "other", "https://cli-chat-proxy.grok.com/v1"],
+    ["a different port", "xai", "https://cli-chat-proxy.grok.com:444/v1"],
+    ["a different path", "xai", "https://cli-chat-proxy.grok.com/v10"],
+    ["a lookalike host", "xai", "https://cli-chat-proxy.grok.com.example/v1"],
   ])("does not add Grok OAuth headers for %s", (_label, provider, baseUrl) => {
     let capturedHeaders: Record<string, string> | undefined;
     const baseStreamFn: StreamFn = (_model, _context, options) => {
@@ -660,6 +668,82 @@ describe("xai stream wrappers", () => {
     ]);
   });
 
+  it.each([false, true])(
+    "keeps compatibility image history as a prefix across turns (parallel: %s)",
+    (parallel) => {
+      const image = { type: "input_image", image_url: "data:image/png;base64,QUJDRA==" };
+      const result = {
+        type: "function_call_output",
+        call_id: "call_image",
+        output: [{ type: "input_text", text: "Read image" }, image],
+      };
+      const group = [
+        result,
+        ...(parallel
+          ? [{ type: "function_call_output", call_id: "call_text", output: "No image" }]
+          : []),
+      ];
+      const history = [
+        { type: "message", role: "user", content: "Read the files" },
+        { type: "function_call", call_id: "call_image", name: "read", arguments: "{}" },
+        ...(parallel
+          ? [{ type: "function_call", call_id: "call_text", name: "read", arguments: "{}" }]
+          : []),
+        ...group,
+      ];
+      const project = (input: Array<Record<string, unknown>>) => {
+        const payload = { input: structuredClone(input) };
+        runXaiToolPayloadWrapper({ payload, input: ["text", "image"] });
+        return payload.input;
+      };
+      const first = project(history);
+      const nextTurns = [
+        { type: "message", role: "assistant", content: "I read the files." },
+        { type: "message", role: "user", content: "Read another image" },
+        { type: "function_call", call_id: "call_next", name: "read", arguments: "{}" },
+        { ...result, call_id: "call_next" },
+      ];
+      const next = project([...history, ...nextTurns]);
+
+      // Compare the actual serialized message prefix, including the image bytes.
+      expect(JSON.stringify(next.slice(0, first.length))).toBe(JSON.stringify(first));
+      expect(first.slice(-group.length - 1)).toEqual([
+        { ...result, output: "Read image" },
+        ...(parallel ? [group[1]] : []),
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Image(s) from tool result #1:" }, image],
+        },
+      ]);
+      expect(next.at(-1)).toEqual({
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: `Image(s) from tool result #${group.length + 1}:` },
+          image,
+        ],
+      });
+      expect(project(next)).toEqual(next);
+
+      // Compaction replaces old history; the retained tail establishes a fresh prefix.
+      const compactedHistory = [
+        { type: "message", role: "user", content: "Summary: the first files were read." },
+        ...nextTurns,
+      ];
+      const compacted = project(compactedHistory);
+      expect(compacted.at(-1)).toEqual(first.at(-1));
+      expect(compacted).toHaveLength(compactedHistory.length + 1);
+      expect(
+        project([
+          ...compactedHistory,
+          { type: "message", role: "assistant", content: "The next image is blue." },
+          { type: "message", role: "user", content: "Thanks" },
+        ]).slice(0, compacted.length),
+      ).toEqual(compacted);
+    },
+  );
+
   it("replays source-based input_image parts from tool results", () => {
     const payload: Record<string, unknown> = {
       input: [
@@ -747,7 +831,7 @@ describe("xai stream wrappers", () => {
   });
 
   it.each([
-    ["Grok OAuth proxy", XAI_GROK_OAUTH_BASE_URL],
+    ["Grok OAuth proxy", "https://cli-chat-proxy.grok.com/v1"],
     ["custom endpoint", "https://proxy.example/v1"],
   ])("counts every function output before replaying sparse images for %s", (_label, baseUrl) => {
     const callIds = ["a", "b", "c", "d"].map((suffix) => `${"x".repeat(64)}${suffix}`);

@@ -244,11 +244,9 @@ export async function repairLoadedGatewayServiceForStart(
     environmentValueSources,
   });
 
-  let loaded;
-  try {
-    loaded = await params.service.isLoaded({ env: installEnv });
-  } catch {
-    loaded = true;
+  const loaded = await params.service.isLoaded({ env: installEnv });
+  if (!loaded) {
+    throw new Error("Gateway service is not loaded after repair.");
   }
 
   return {

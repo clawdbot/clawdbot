@@ -21,14 +21,11 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { applyClawAddPlan } from "./add.js";
 import { clawCronGatewayInput, markClawCronRefRemoved, readClawCronRefs } from "./cron.js";
 import { withClawAgentConfigRemoval } from "./lifecycle-config-removal.js";
-import {
-  buildClawRemovalFixture,
-  quiescentClawMonitorGateway,
-} from "./lifecycle-remove.test-support.js";
+import { quiescentClawMonitorGateway } from "./lifecycle-remove.test-support.js";
 import { applyClawRemovePlan, buildClawRemovePlan, readClawStatus } from "./lifecycle-state.js";
+import { createClawRemoveTestFixtures } from "./lifecycle-state.test-helpers.js";
 import {
   persistClawInstallRecord,
   persistClawPackageRef,
@@ -45,6 +42,7 @@ afterEach(async () => {
   await state.cleanup();
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { fixture, addFixture } = createClawRemoveTestFixtures(tempDirs, () => state);
 
 const packageIntegrity = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -84,32 +82,6 @@ function seedAttachedCronJob(
     },
     0,
   );
-}
-
-async function fixture(params: Parameters<typeof buildClawRemovalFixture>[1] = {}) {
-  const current = await buildClawRemovalFixture(tempDirs.make("openclaw-claw-remove-"), params);
-  return { ...current, env: { OPENCLAW_STATE_DIR: state.stateDir } };
-}
-
-async function addFixture(
-  params: { withFile?: boolean; withCron?: boolean; withMcp?: boolean } = {},
-) {
-  const current = await fixture(params);
-  let config: OpenClawConfig = {};
-  await applyClawAddPlan(current.plan, {
-    consentPlanIntegrity: current.plan.planIntegrity,
-    env: current.env,
-    commitConfig: async (transform) => {
-      config = transform(config);
-      await state.writeConfig(config);
-    },
-    cronGateway: { add: async () => ({ id: "scheduler-daily" }) },
-    ...(params.withMcp ? { installMcpServers: async () => [] } : {}),
-  });
-  return {
-    ...current,
-    getConfig: loadConfig,
-  };
 }
 
 describe("Claw status and remove", () => {

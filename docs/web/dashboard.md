@@ -20,15 +20,15 @@ Key references:
 
 Auth is enforced at the WebSocket handshake via the configured gateway auth path:
 
-- `connect.params.auth.token`
-- `connect.params.auth.password`
+- the configured shared secret in either `connect.params.auth.token` or
+  `connect.params.auth.password`; `gateway.auth.mode` selects the configured value
 - Tailscale Serve identity headers when `gateway.auth.allowTailscale: true`
 - trusted-proxy identity headers when `gateway.auth.mode: "trusted-proxy"`
 
 See `gateway.auth` in [Gateway configuration](/gateway/configuration).
 
 <Warning>
-The Control UI is an **admin surface** (chat, config, exec approvals). Do not expose it publicly. The UI keeps dashboard URL tokens in sessionStorage for the current browser tab and selected gateway URL, and strips them from the URL after load. Prefer localhost, Tailscale Serve, or an SSH tunnel.
+The Control UI is an **admin surface** (chat, config, exec approvals). Do not expose it publicly. The UI strips credentials from the URL after load. After a successful token-mode connection, it keeps the shared secret in sessionStorage for the current browser tab and Gateway origin; passwords stay in memory only. Prefer localhost, Tailscale Serve, or an SSH tunnel.
 </Warning>
 
 ## Fast path (recommended)
@@ -40,14 +40,15 @@ The Control UI is an **admin surface** (chat, config, exec approvals). Do not ex
 - If clipboard and browser delivery both fail, `openclaw dashboard` either gives a safe manual-token
   hint or tells you to run `openclaw dashboard --json` and open its short-lived `browserUrl`; it never
   prints the shared token value in interactive logs.
-- If the UI prompts for shared-secret auth, paste the configured token or password into Control UI settings.
+- If the UI prompts for shared-secret auth, paste the configured token or type the password into **Gateway secret** on the login screen or in **Settings → Gateway**.
 
 ## Auth basics (local vs remote)
 
 - **Localhost**: open `http://127.0.0.1:18789/`.
 - **Gateway TLS**: when `gateway.tls.enabled: true`, dashboard/status links use `https://` and Control UI WebSocket links use `wss://`.
-- **Shared-secret token source**: `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`). Manual token entry
-  is kept in sessionStorage for the current tab and selected gateway URL, not localStorage.
+- **Shared-secret token source**: `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`). After a successful
+  token-mode connection, manual entry is kept in sessionStorage for the current tab and selected
+  Gateway URL, not localStorage.
 - **Host-authorized browser handoff**: `openclaw dashboard` issues a short-lived, single-use bootstrap
   instead of putting the shared Gateway token in the browser launch URL. The bootstrap is bound to
   that browser's signed device identity and exchanged for a durable administrator credential. A
@@ -121,7 +122,7 @@ Non-goals for v1:
   - Password: resolve the configured `gateway.auth.password` or `OPENCLAW_GATEWAY_PASSWORD`
   - SecretRef-managed token: run `openclaw gateway auth-token --show`; if resolution fails, repair the external secret provider and rerun it
   - Runtime token generated because no shared secret was configured: run `openclaw doctor --generate-gateway-token`, restart the Gateway, then use the configured token
-- In the dashboard settings, paste the token or password into the auth field, then connect.
+- In the dashboard settings, paste the token or password into **Gateway secret**, then connect.
 - The UI language picker lives in **Settings → Appearance → Language**.
 
 ## Related

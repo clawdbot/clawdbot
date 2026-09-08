@@ -1,7 +1,7 @@
 import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
-import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
+import { MIN_READABLE_SESSION_VERSION } from "../../config/sessions/version.js";
 import { logWarn } from "../../logger.js";
 import {
   buildSessionContext as buildCoreSessionContext,
@@ -85,7 +85,7 @@ export function migrateToCurrentVersion(
 ): boolean {
   const header = entries.find((entry) => entry.type === "session");
   const version = header?.version ?? 1;
-  if (version >= CURRENT_SESSION_VERSION) {
+  if (version >= MIN_READABLE_SESSION_VERSION) {
     return false;
   }
   const state: SessionFileEntryMigrationState = {

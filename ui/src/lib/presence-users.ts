@@ -1,4 +1,5 @@
 import type { SessionParticipantIdentity } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { PresenceEntry } from "../api/types.ts";
 import {
@@ -6,6 +7,7 @@ import {
   resolveSelfPresenceUser,
   type AuthenticatedUser,
 } from "../app/user-profile.ts";
+import { t } from "../i18n/index.ts";
 
 export type PresenceViewer = NonNullable<PresenceEntry["user"]> & {
   watchedSessions: readonly string[];
@@ -88,8 +90,21 @@ export function projectPresencePayload(value: unknown) {
   return cachedPresenceProjection;
 }
 
+export function presenceUserLabel(
+  user: Pick<PresenceViewer, "id" | "name" | "email">,
+  fallbackName = user.id,
+) {
+  const isSharedOwner = user.id === GATEWAY_OWNER_PROFILE_ID;
+  return {
+    name: isSharedOwner
+      ? t("presence.sharedOwner.name")
+      : (user.name ?? user.email ?? fallbackName),
+    isSharedOwner,
+  };
+}
+
 export function presenceViewerLabel(user: Pick<PresenceViewer, "id" | "name" | "email">): string {
-  return user.name ?? user.email ?? user.id;
+  return presenceUserLabel(user).name;
 }
 
 export function isPresenceViewerIdle(user: PresenceViewer): boolean {

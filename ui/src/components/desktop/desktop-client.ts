@@ -1,3 +1,5 @@
+import { resolveGatewayWebSocketUrl } from "../../lib/gateway-websocket-url.ts";
+
 export type DesktopDisconnectDetail = {
   clean: boolean;
   code?: number;
@@ -56,25 +58,6 @@ const loadDefaultRfb: RfbLoader = async () => {
   return module.default;
 };
 
-function resolveDesktopWebSocketUrl(wsUrl: string, gatewayUrl = globalThis.location?.href): string {
-  const base = new URL(gatewayUrl ?? globalThis.location.href, globalThis.location?.href);
-  if (base.protocol === "http:") {
-    base.protocol = "ws:";
-  } else if (base.protocol === "https:") {
-    base.protocol = "wss:";
-  }
-  const resolved = new URL(wsUrl, base);
-  if (resolved.protocol === "http:") {
-    resolved.protocol = "ws:";
-  } else if (resolved.protocol === "https:") {
-    resolved.protocol = "wss:";
-  }
-  if (resolved.protocol !== "ws:" && resolved.protocol !== "wss:") {
-    throw new Error("Desktop observer URL must use WebSocket transport");
-  }
-  return resolved.toString();
-}
-
 /** Thin owner for one noVNC RFB lifecycle. */
 export class DesktopClient {
   constructor(
@@ -85,7 +68,7 @@ export class DesktopClient {
 
   async connect(options: DesktopConnectOptions): Promise<DesktopConnectionHandle> {
     const Rfb = this.rfbConstructor ?? (await this.loadRfb());
-    const wsUrl = resolveDesktopWebSocketUrl(options.wsUrl, options.gatewayUrl);
+    const wsUrl = resolveGatewayWebSocketUrl(options.wsUrl, options.gatewayUrl);
     // The socket claims control before RFB authentication; canceled lazy loads must not open it.
     if (!options.isCurrent()) {
       throw new DOMException("Desktop connection is no longer current", "AbortError");

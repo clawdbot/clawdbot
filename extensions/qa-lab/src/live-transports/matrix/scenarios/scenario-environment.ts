@@ -33,6 +33,7 @@ type MatrixQaScenarioEnvironmentParams = {
 };
 
 type MatrixQaConfigPatchResult = {
+  changedPaths: string[];
   hash?: string;
   noop?: boolean;
   sentinel?: {
@@ -331,10 +332,6 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
       gatewayConfig,
       params.accountId,
     );
-    const matrixConfigChanged = !isDeepStrictEqual(
-      configSnapshot.config.channels?.matrix,
-      gatewayConfig.channels?.matrix,
-    );
     const patchStartedAt = Date.now();
     const accountStartAtBeforePatch = (
       await readMatrixAccountStatuses(input.gateway, 5_000, preparationDeadline).catch(() => [])
@@ -345,6 +342,9 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
       patch: gatewayPatch.patch,
       replacePaths: gatewayPatch.replacePaths,
     });
+    const matrixConfigChanged = patchResult.changedPaths.some(
+      (path) => path === "channels.matrix" || path.startsWith("channels.matrix."),
+    );
     if (!patchResult.hash) {
       throw new Error("Matrix QA config patch returned no persisted hash");
     }
@@ -356,9 +356,9 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
       gateway: input.gateway,
     });
     await waitForMatrixAccountReady({
-      // Config writes acknowledge persisted state before a deferred channel
-      // reload completes. Require the changed Matrix account to actually restart
-      // so a later config patch cannot supersede this scenario's live runtime.
+      // Use the owner's effective paths: desired tokens differ from redacted
+      // snapshots even when unchanged, while real token rotations redact alike.
+      // Actual Matrix changes must still advance the channel generation.
       afterStartAt:
         matrixConfigChanged && patchResult.noop !== true
           ? (accountStartAtBeforePatch ?? patchStartedAt - 1)

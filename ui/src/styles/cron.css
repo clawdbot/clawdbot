@@ -1110,6 +1110,43 @@
 }
 
 @media (max-width: 640px) {
+  .cron-toolbar__primary,
+  .cron-detail-meta,
+  .cron-detail-actions {
+    flex-wrap: wrap;
+  }
+
+  .cron-detail-header {
+    flex-direction: column;
+  }
+
+  .cron-detail-title,
+  .cron-detail-sub {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .cron-control {
+    width: 100%;
+    align-items: stretch;
+  }
+
+  .cron-control .cron-help {
+    text-align: start;
+  }
+
+  .cron-inline-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cron-editor-actions {
+    padding-bottom: calc(var(--space-3) + var(--safe-area-bottom));
+  }
+
+  .cron-editor-actions > .btn {
+    flex: 1 1 auto;
+  }
+
   .cron-run-entry__body table {
     display: block;
     overflow-x: auto;
@@ -1179,7 +1216,8 @@
   }
 
   .cron-new-task {
-    width: 32px;
+    width: 44px;
+    min-height: 44px;
     padding: 0;
     justify-content: center;
     font-size: 0;
@@ -1189,6 +1227,25 @@
     width: 14px;
     height: 14px;
   }
+}
+
+@media (max-width: 400px) {
+  .cron-table__row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cron-table__cell {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  }
+
+  .cron-table__actions {
+    padding-left: 0;
+  }
+}
+
+.shell--embed-settings .cron-editor-actions {
+  padding-bottom: calc(var(--space-3) + var(--safe-area-bottom));
 }
 
 /* Web Awesome popup surfaces own positioning, dismissal, and focus. */

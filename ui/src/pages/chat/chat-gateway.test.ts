@@ -34,6 +34,8 @@ import {
   rememberAuthoritativeTerminal,
   rememberLiveTerminalRun,
 } from "./terminal-message-identity.ts";
+import { createHost } from "./tool-stream.test-helpers.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
@@ -59,6 +61,44 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     ...overrides,
   };
 }
+
+it("completes an overtaken commentary item from the final cumulative delta without another item", () => {
+  const text = "- first file\n- second file\n\n```python\n    execute()\n```";
+  const state = Object.assign(
+    createState(),
+    createHost({
+      chatRunId: "run-1",
+      chatStream: text.slice(0, -4),
+    }),
+  );
+  handleAgentEvent(state, {
+    sessionKey: "main",
+    runId: "run-1",
+    seq: 1,
+    ts: 1,
+    stream: "item",
+    data: {
+      kind: "preamble",
+      phase: "end",
+      itemId: "commentary-1",
+      progressText: text.replace(/\s+/gu, " "),
+    },
+  });
+  handleChatGatewayEvent(state, {
+    sessionKey: "main",
+    runId: "run-1",
+    seq: 2,
+    state: "delta",
+    message: { role: "assistant", content: [{ type: "text", text }] },
+  });
+  expect(
+    visibleAssistantStreamParts(state, {
+      includeCurrent: true,
+      isHiddenStreamText: () => false,
+    }).map((part) => ({ text: part.text, itemId: part.itemId })),
+  ).toEqual([{ text, itemId: "commentary-1" }]);
+  expect(state.chatStream).toBe(text);
+});
 
 type HistoryResult = {
   messages: Array<unknown>;

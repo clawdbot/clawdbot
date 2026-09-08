@@ -43,6 +43,14 @@ Use `openclaw doctor --json` when an operator or script wants the advisory Docto
 
 For read-only diagnosis, use `--lint` or bare `--json`. Ordinary `doctor`, including `doctor --non-interactive`, can copy legacy config and migrate state even without `--fix`. `--non-interactive` suppresses prompts, not writes.
 
+If the shared state database uses a newer schema, Doctor refuses before offering
+an interactive update because update admission also needs that database. Run
+Doctor from the OpenClaw install that wrote the state, or another compatible
+build. A readable shared database still permits an interactive source update
+when agent databases use newer schemas; if the update does not take over,
+Doctor checks all database schemas again before diagnostics or repair. See
+[Database schemas](/reference/database-schemas).
+
 After an exec-approval format upgrade, Doctor reports older generated approvals
 that are no longer active because they were not tied to a working directory.
 `openclaw doctor --fix` removes those inactive generated entries and leaves
@@ -50,8 +58,9 @@ manual allowlist rules unchanged. Rerun affected workflows and choose
 **Always allow here** to renew trust for the intended directory. The normal
 `openclaw update` finalization runs this safe repair automatically.
 
-Explicit repair stops the matching managed Gateway before inspecting plugins or
-mutable state, excludes other processes during repair, verifies readiness,
+Explicit repair stops the matching managed Gateway and checks Gateway, state,
+and agent-database ownership before taking read-only schema snapshots. It
+excludes other processes during repair, verifies readiness,
 and restarts the same service once. It preserves the service definition and does
 not activate a service confirmed offline before maintenance. A loaded, enabled
 macOS job between respawns is not offline: Doctor stops it before repair and
@@ -64,6 +73,18 @@ needs to stop the managed Gateway, Doctor refuses inside its automatic fixing
 subtree because that stop would cancel recovery. Use read-only diagnosis or safe
 offline artifact repair followed by an atomic `openclaw gateway restart`, or ask
 an independent operator to run Doctor from a shell outside triage.
+
+Read-only database snapshots and initial integrity scans have a 30-second
+execution limit per database. A timeout names the database and asks you to stop
+its Gateway service and other OpenClaw processes before retrying. If all writers
+are stopped, inspect storage performance and the reported database; a timeout
+does not prove corruption.
+
+`openclaw doctor --fix --non-interactive` applies the supported migrations that
+block Gateway startup without prompting, including shared-state audit schema,
+legacy workspace setup, legacy session stores, and exec approvals. Malformed or
+conflicting input is retained and requires the manual action in the diagnostic.
+The updater uses this repair path before accepting the installed target.
 
 This maintenance window also applies when repair ultimately finds no changes.
 Runs without `--fix`, `--repair`, or `--yes` do not enter maintenance.
@@ -97,8 +118,19 @@ service through its owner. Once the native manager confirms it is offline,
 Doctor can repair its selected state without changing or starting that service.
 
 If migration or config repair cannot finish, Doctor leaves the stopped service
-stopped and reports an incomplete repair. Resolve the reported blocker, rerun
-`openclaw doctor --fix`, then start the service through its owner.
+stopped and reports an incomplete repair with exit code 1. When state requires
+manual recovery, the diagnosis names its path and the next action:
+
+- **Unsupported canonical workspace version:** use an OpenClaw build that supports
+  that version. Preserve the shared database unchanged.
+- **Unreadable or conflicting exec policy:** stop the Gateway and node hosts,
+  then reconcile the named legacy file or interrupted claim with a verified copy
+  of the intended policy. Preserve the existing SQLite policy.
+
+Doctor does not quarantine unsupported workspace state, discard future-version
+rows, or infer execution policy. Repeating the same repair invocation cannot
+resolve these conditions. After manual recovery, verify readiness before starting
+the service through its owner.
 
 ## Gateway service recovery
 
@@ -267,6 +299,13 @@ Bare `openclaw doctor --json` exits `0` once it emits a findings payload, includ
 `--all` controls which checks are selected before severity filtering. The default lint run excludes checks that are deep, historical, or more likely to surface repairable legacy residue; use `--all` for the complete inventory. `--only <id>` is the most precise selector and can run any registered check by id.
 
 `core/doctor/local-audio-acceleration` reports the auto-selected local STT command, separate capable/requested/observed backend evidence, and fallback order without loading a speech model. It emits an informational finding, so include `--severity-min info` to display it.
+
+`core/doctor/skill-workshop-relocation` distinguishes pending legacy collection
+backup roots from roots preserved for review. Eligible proposals or backup roots
+receive `openclaw doctor --fix` guidance, not a guarantee that every backup will
+be retired. Preserved roots require manual review of workspace ownership, backup
+manifests, and workspace migration blockers. If both kinds remain, Doctor reports
+both next steps. Do not delete preserved backups to clear the warning.
 
 ## Structured health checks
 
@@ -612,28 +651,17 @@ disposal, pending cleanup, and unexpected missing files. See
 
 ### Downgrading After Session SQLite Migration
 
-With the Gateway stopped, use the current CLI to restore archived legacy
-transcript artifacts before starting an older file-backed OpenClaw version:
+Follow [Downgrade](/install/updating#downgrade) before starting an older release.
+With writers stopped, `openclaw doctor --session-sqlite restore
+--session-sqlite-all-agents` restores manifest-recorded legacy transcript
+artifacts to their original paths. This supports recovery from retained originals;
+it does not reverse SQLite schema migrations or replace a pre-update backup.
 
-```bash
-openclaw doctor --session-sqlite restore --session-sqlite-all-agents
-```
-
-Older versions read `sessions.json` entries and the `sessionFile` paths recorded
-in those entries. After the SQLite migration, successful imports move hot JSONL
-transcripts into `session-sqlite-import-archive/`, so the older runtime cannot
-see that history until restore moves those manifest-recorded artifacts back to
-their original paths.
-
-If `openclaw update cleanup` already disposed of the originals, restore reports
-that outcome and cannot recreate them. You need an independent backup containing
-those legacy files; see [Pre-update backups](/install/updating#before-updating-create-a-verified-backup)
-for portable-archive exclusions.
-
-Restore does not delete SQLite data. Sessions created after the SQLite flip
-exist only in SQLite and will not appear to the older runtime. If you later
-upgrade again, run the normal migration validation sequence above so OpenClaw can
-compare restored legacy artifacts with the SQLite rows before importing.
+Run recovery before `openclaw update cleanup` retires those originals. After
+cleanup, restore reports intentional disposal and cannot recreate them. Sessions
+created only in SQLite will not appear to an older file-backed runtime. If you
+upgrade again, use the normal migration validation sequence above to compare
+restored artifacts with SQLite rows before importing.
 
 ## Notes
 
@@ -666,7 +694,7 @@ compare restored legacy artifacts with the SQLite rows before importing.
 - Doctor includes a memory-search readiness check and can recommend `openclaw configure --section model` when embedding credentials are missing.
 - Doctor warns when no command owner is configured. The command owner is the human operator account allowed to run owner-only commands and approve dangerous actions. DM pairing only lets someone talk to the bot; if you approved a sender before first-owner bootstrap existed, set `commands.ownerAllowFrom` explicitly.
 - Doctor reports an info note when Codex-mode agents are configured and personal Codex CLI assets exist in the operator's Codex home. Local Codex app-server launches use isolated per-agent homes; install the Codex plugin first if needed, then use `openclaw migrate plan codex` to inventory assets that should be promoted deliberately.
-- Doctor warns when skills allowed for the default agent are unavailable in the current runtime environment (missing bins, env vars, config, or OS requirements). `doctor --fix` can disable those unavailable skills with `skills.entries.<skill>.enabled=false`; install/configure the missing requirement instead if you want to keep the skill active.
+- Doctor warns when skills allowed for the default agent are unavailable in the current runtime environment (missing bins, env vars, config, or OS requirements). `doctor --fix` can disable those unavailable skills with `skills.entries.<skill>.enabled=false` and lists the changes without asking you to repeat the repair. Updater-driven repair leaves optional skill enablement unchanged. Install/configure the missing requirement instead if you want to keep the skill active.
 - If sandbox mode is enabled but Docker is unavailable, doctor reports a high-signal warning with remediation (`install Docker` or `openclaw config set agents.defaults.sandbox.mode off`).
 - Doctor identifies per-agent `agents.entries.<id>.sandbox` Docker, browser, and prune overrides ignored under shared scope. It also warns when an agent's explicit primary model omits fallbacks and therefore disables the defaults' fallback chain; both diagnostics use canonical agent paths after legacy roster normalization.
 - If legacy sandbox registry files or shard directories are present (`~/.openclaw/sandbox/containers.json`, `~/.openclaw/sandbox/browsers.json`, `~/.openclaw/sandbox/containers/`, or `~/.openclaw/sandbox/browsers/`), doctor reports them; `--fix` migrates valid entries into SQLite and quarantines invalid legacy files.

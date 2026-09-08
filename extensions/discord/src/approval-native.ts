@@ -1,6 +1,5 @@
 // Discord plugin module implements approval native behavior.
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { resolveApprovalRequestSessionConversation } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
 import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -184,6 +183,7 @@ function createDiscordApprovalCapability(configOverride?: DiscordExecApprovalCon
     resolveApproverDmTargets: createDiscordApproverDmTargetResolver(configOverride),
     notifyOriginWhenDmOnly: true,
     nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
+      capabilityBoundary: true,
       eventKinds: ["exec", "plugin", "system-agent"],
       isConfigured: ({ cfg, accountId }) =>
         isDiscordExecApprovalClientEnabled({ cfg, accountId, configOverride }),
@@ -195,8 +195,7 @@ function createDiscordApprovalCapability(configOverride?: DiscordExecApprovalCon
           configOverride,
         }),
       load: async () =>
-        (await import("./approval-handler.runtime.js"))
-          .discordApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,
+        (await import("./approval-handler.runtime.js")).discordApprovalNativeRuntime,
     }),
   });
 }

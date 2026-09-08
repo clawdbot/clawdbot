@@ -21,6 +21,7 @@ import type {
   EmbeddedAgentSubscribeContext,
 } from "./embedded-agent-subscribe.handlers.types.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
+import type { AgentMessage } from "./runtime/index.js";
 
 type AssistantStreamDelivery = {
   data: AssistantStreamData;
@@ -53,6 +54,7 @@ type ReplyDeliveryParams = {
 export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams) {
   const assistantTexts = state.assistantTexts;
   const deferredAssistantScopes: AssistantStreamScope[] = [];
+  const provisionalAssistantBlocks = new Set<number>();
   const lastEmittedCommentaryByItem = new Map<string, string>();
   const pendingBlockReplyTasks = new Set<Promise<void>>();
   const pendingPartialReplyTasks = new Set<Promise<void>>();
@@ -256,6 +258,27 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     streamScope.delivery = undefined;
     streamScope = {};
     deferredAssistantScopes.length = 0;
+    provisionalAssistantBlocks.clear();
+  };
+  const noteLastAssistant = (msg: AgentMessage, options?: { hasToolResults: boolean }) => {
+    if (msg.role !== "assistant") {
+      return;
+    }
+    state.lastAssistant = msg;
+    if (
+      state.deferBlockReplyDelivery &&
+      (msg.stopReason === "toolUse" || options?.hasToolResults)
+    ) {
+      // Async tools can leave a normal-stop tail after their tool-use fragment.
+      // The response's tool results, not its text phase, establish continuation.
+      for (
+        let index = state.assistantMessageStartIndex;
+        index <= state.assistantMessageIndex;
+        index++
+      ) {
+        provisionalAssistantBlocks.add(index);
+      }
+    }
   };
   const deferredToolMediaReplies = new WeakMap<
     BlockReplyPayload,
@@ -361,8 +384,40 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     }
     emitBlockReplySafely(taggedPayload, { pendingToolMedia, autoDeliveryMediaUrls });
   };
-  const flushDeferredBlockReplies = () => {
-    for (const payload of state.deferredBlockReplies.splice(0)) {
+  const releaseDeferredReplies = () => {
+    // A later answer supersedes deferred tool-turn text, not completed answers
+    // to earlier user inputs, media, or reasoning. Reconcile both presentation
+    // lanes before callbacks can advance the current message boundary.
+    const messageStartIndex = state.assistantMessageStartIndex;
+    const isSuperseded = (index: number | undefined) =>
+      index !== undefined && index < messageStartIndex && provisionalAssistantBlocks.has(index);
+    for (const scope of deferredAssistantScopes) {
+      const delivery = scope.delivery;
+      if (delivery && isSuperseded(delivery.blockIndex)) {
+        if (!delivery.data.mediaUrls?.length) {
+          scope.delivery = undefined;
+        } else {
+          delivery.data = { ...delivery.data, text: "", delta: "" };
+          if (delivery.eventData) {
+            delivery.eventData = { ...delivery.eventData, text: "", delta: "" };
+          }
+        }
+      }
+    }
+    const replies = state.deferredBlockReplies.splice(0);
+    for (const payload of replies) {
+      const index = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
+      if (!payload.isReasoning && isSuperseded(index)) {
+        payload.text = undefined;
+      }
+    }
+    provisionalAssistantBlocks.clear();
+    state.deferBlockReplyDelivery = false;
+    flushAssistantStream();
+    for (const payload of replies) {
+      if (!hasAssistantVisibleReply(payload)) {
+        continue;
+      }
       const deferredToolMedia = deferredToolMediaReplies.get(payload);
       emitBlockReplySafely(payload, deferredToolMedia);
     }
@@ -477,7 +532,8 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     emitBlockReply,
     finalizeAssistantTexts,
     flushAssistantStream,
-    flushDeferredBlockReplies,
+    noteLastAssistant,
+    releaseDeferredReplies,
     pendingBlockReplyTasks,
     pushAssistantText,
     replaceCurrentAssistantText,

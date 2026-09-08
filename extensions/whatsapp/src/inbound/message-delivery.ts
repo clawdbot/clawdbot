@@ -427,6 +427,22 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     if (context.skipRecentOutboundEcho === true) {
       return "completed";
     }
+    // Reactions do not normalize into chat messages. Resolve them while the drain
+    // owns the claim so transient failures remain replayable.
+    if (
+      await maybeResolveWhatsAppApprovalReaction({
+        cfg: options.loadConfig?.() ?? options.cfg,
+        accountId: options.accountId,
+        msg,
+        selfJid: self.jid,
+        selfLid: self.lid,
+        resolveInboundJid,
+        resolveReactionTargetJids,
+        logVerboseMessage: (message) => logWhatsAppVerbose(options.verbose, message),
+      })
+    ) {
+      return "completed";
+    }
     const prepared = await preparation;
     if (prepared === null) {
       return "completed";
@@ -497,8 +513,9 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
 
       const receiveOrder = nextReceiveOrder++;
-      if (
-        await maybeResolveWhatsAppApprovalReaction({
+      let approvalReactionResolved = false;
+      try {
+        approvalReactionResolved = await maybeResolveWhatsAppApprovalReaction({
           cfg: options.loadConfig?.() ?? options.cfg,
           accountId: options.accountId,
           msg,
@@ -507,8 +524,15 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
           resolveInboundJid,
           resolveReactionTargetJids,
           logVerboseMessage: (message) => logWhatsAppVerbose(options.verbose, message),
-        })
-      ) {
+        });
+      } catch (error) {
+        // Admit this reaction for durable replay without aborting its batch siblings.
+        inboundLogger.warn(
+          { error: formatError(error) },
+          "whatsapp approval reaction resolution failed; admitting reaction for durable replay",
+        );
+      }
+      if (approvalReactionResolved) {
         continue;
       }
 

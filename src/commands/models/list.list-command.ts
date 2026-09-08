@@ -20,7 +20,6 @@ import { createModelListAuthIndex } from "./list.auth-index.js";
 import { formatErrorWithStack } from "./list.errors.js";
 import { ensureFlagCompatibility } from "./list.options.js";
 import { printModelTable } from "./list.table.js";
-import type { ModelRow } from "./list.types.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
 import { createModelCatalogProviderAliasCanonicalizer } from "./provider-aliases.js";
 import { resolveModelsTargetAgent } from "./shared.js";
@@ -29,7 +28,7 @@ const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const
 
 type PromotionsModule = typeof import("./list.promotions.js");
 type RegistryModule = typeof import("./list.registry.js");
-type RowSourcesModule = typeof import("./list.row-sources.js");
+type CatalogModule = typeof import("./list.rows.js");
 
 const promotionsModuleLoader = createLazyImportLoader<PromotionsModule>(
   () => import("./list.promotions.js"),
@@ -37,9 +36,7 @@ const promotionsModuleLoader = createLazyImportLoader<PromotionsModule>(
 const registryModuleLoader = createLazyImportLoader<RegistryModule>(
   () => import("./list.registry.js"),
 );
-const rowSourcesModuleLoader = createLazyImportLoader<RowSourcesModule>(
-  () => import("./list.row-sources.js"),
-);
+const catalogModuleLoader = createLazyImportLoader<CatalogModule>(() => import("./list.rows.js"));
 
 /** Lists configured, catalog, and runtime-discovered models as text, plain, or JSON. */
 export async function modelsListCommand(
@@ -274,26 +271,14 @@ export async function modelsListCommand(
     metadataSnapshot,
     workspaceDir,
   };
-  const rows: ModelRow[] = [];
-
-  if (includePreparedCatalog) {
-    const { appendAllModelRowSources } = await rowSourcesModuleLoader.load();
-    await appendAllModelRowSources({
-      rows,
-      entries,
-      context: rowContext,
-      modelRegistry,
-      registryModels,
-    });
-  } else {
-    const { appendConfiguredModelRowSources } = await rowSourcesModuleLoader.load();
-    await appendConfiguredModelRowSources({
-      rows,
-      entries,
-      modelRegistry,
-      context: rowContext,
-    });
-  }
+  const { buildModelListRows } = await catalogModuleLoader.load();
+  const rows = await buildModelListRows({
+    includePreparedCatalog,
+    entries,
+    context: rowContext,
+    modelRegistry,
+    registryModels,
+  });
 
   if (availabilityErrorMessage !== undefined) {
     runtime.error(

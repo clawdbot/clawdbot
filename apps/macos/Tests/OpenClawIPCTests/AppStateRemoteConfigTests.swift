@@ -415,7 +415,7 @@ struct AppStateRemoteConfigTests {
             ]))
             let original = OpenClawConfigFile.loadDict()
             var saveAttempts = 0
-            let state = AppState(preview: true, gatewayConfigSaver: { _ in
+            let state = AppState(preview: true, gatewayConfigSaver: { _, _ in
                 saveAttempts += 1
                 return false
             })
@@ -458,7 +458,7 @@ struct AppStateRemoteConfigTests {
                     ],
                 ],
             ]))
-            let state = AppState(preview: true, gatewayConfigSaver: { _ in false })
+            let state = AppState(preview: true, gatewayConfigSaver: { _, _ in false })
             state._testEnableGatewayConfigSync()
 
             state.remoteToken = "app-token"
@@ -569,7 +569,7 @@ struct AppStateRemoteConfigTests {
             var rejectSaves = false
             let state = AppState(
                 preview: true,
-                gatewayConfigSaver: { root in
+                gatewayConfigSaver: { root, _ in
                     rejectSaves ? false : OpenClawConfigFile.saveDict(root)
                 })
             state.remoteIdentity = "/tmp/app-identity"

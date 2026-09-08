@@ -1401,7 +1401,7 @@ describe("plugins cli install", () => {
         diagnostics: [],
       });
       // The CLI reports the slot owner's result; first-install discovery is a separate flow.
-      const selectSlot = vi.spyOn(slotSelection, "applySlotSelectionForPlugin").mockReturnValue({
+      const selectSlot = vi.spyOn(slotSelection, "applySlotSelectionForPlugin").mockResolvedValue({
         config: enabledCfg,
         warnings: ["slot adjusted"],
       });

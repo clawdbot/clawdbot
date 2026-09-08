@@ -202,10 +202,7 @@ export async function startSshPortForward(opts: {
   // stream error cannot become an uncaught exception during active use or teardown.
   stderrStream?.on("error", () => {});
   stderrStream?.setEncoding("utf8");
-  stderrStream?.on("data", (chunk) => {
-    const lines = normalizeStringEntries(String(chunk).split("\n"));
-    stderr.push(...lines);
-  });
+  stderrStream?.on("data", (chunk: string) => stderr.push(chunk));
 
   const exited = new Promise<void>((resolve) => {
     child.once("exit", () => resolve());
@@ -263,7 +260,9 @@ export async function startSshPortForward(opts: {
     if (isAbortError(err)) {
       throw err;
     }
-    const suffix = stderr.length > 0 ? `\n${stderr.join("\n")}` : "";
+    // Pipe chunks can split diagnostic lines; normalize only after joining them.
+    const lines = normalizeStringEntries(stderr.join("").split("\n"));
+    const suffix = lines.length > 0 ? `\n${lines.join("\n")}` : "";
     throw new Error(`${formatErrorMessage(err)}${suffix}`, { cause: err });
   }
 

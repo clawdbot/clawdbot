@@ -33,6 +33,7 @@ import {
   isAuthCooldownBypassedForProvider,
   isModelScopedCooldownReason,
   resetAuthProfileFailureState,
+  resolveInlineProviderApiKeyUsageId,
   resolveProfileUnusableUntil,
 } from "./usage-state.js";
 
@@ -41,6 +42,7 @@ export {
   clearExpiredCooldowns,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
+  resolveInlineProviderApiKeyUsageId,
 } from "./usage-state.js";
 
 const authProfileUsageDeps = {
@@ -102,12 +104,6 @@ async function updateOwnedAuthProfileUsage(
     store.usageStats = { ...store.usageStats, [profileId]: usage };
   }
   return updated;
-}
-
-const INLINE_API_KEY_USAGE_ID_PREFIX = "inline-api-key:";
-
-export function resolveInlineProviderApiKeyUsageId(provider: string): string {
-  return `${INLINE_API_KEY_USAGE_ID_PREFIX}${normalizeProviderId(provider)}`;
 }
 
 const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [

@@ -1,4 +1,7 @@
-import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import {
+  readAssistantStreamSegmentIdentity,
+  readSessionMessageIdentity,
+} from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -347,8 +350,9 @@ type TerminalStreamBoundaryReconciliation =
   | { kind: "none" }
   | {
       kind: "split";
-      afterBoundaryRunId: string;
+      afterBoundaryRunId?: string;
       afterSequence: number | null;
+      preserveKeyedCommentary?: boolean;
       replacedSegmentIndexes: number[];
       tailMessage: Record<string, unknown> | null;
     };
@@ -365,7 +369,44 @@ function terminalBoundaryCandidateMatches(
   return Boolean(candidate?.boundaryRunId && terminalText.startsWith(candidate.prefix));
 }
 
-/** Reconciles a run-level cumulative terminal against its last persisted steer. */
+function retiredCommentaryBoundary(
+  state: StreamCausalBoundaryState,
+  terminalText: string,
+  boundary: TerminalBoundaryCandidate | null,
+) {
+  const runId = state.chatRunId;
+  if (!runId) {
+    return null;
+  }
+  const messages = state.chatMessages ?? [];
+  const interval = streamCausalInterval(messages, {
+    runId,
+    ...(boundary ? { afterBoundaryRunId: boundary.boundaryRunId } : {}),
+  });
+  for (const segment of (state.chatStreamSegments ?? []).toReversed()) {
+    if (
+      segment.runId !== runId ||
+      segment.persisted !== true ||
+      !segment.retiredItemId ||
+      !streamSegmentUsesAccumulatedText(segment) ||
+      (boundary && !segment.text.startsWith(boundary.prefix)) ||
+      !terminalText.startsWith(segment.text)
+    ) {
+      continue;
+    }
+    const owner = messages.slice(interval.start, interval.end).find((message) => {
+      const identity = readAssistantStreamSegmentIdentity(message);
+      return identity?.runId === runId && identity.itemId === segment.retiredItemId;
+    });
+    const identity = readSessionMessageIdentity(owner);
+    if (identity?.id && !identity.isImported && identity.sequence !== null) {
+      return { prefix: segment.text, afterSequence: identity.sequence };
+    }
+  }
+  return null;
+}
+
+/** Reconciles a cumulative terminal against its persisted steer or retired commentary. */
 export function reconcileTerminalStreamBoundary(
   message: Record<string, unknown>,
   state: StreamCausalBoundaryState,
@@ -400,21 +441,31 @@ export function reconcileTerminalStreamBoundary(
     : terminalBoundaryCandidateMatches(persistedBoundary, terminalText)
       ? persistedBoundary
       : null;
-  if (!selectedBoundary) {
+  const commentary = retiredCommentaryBoundary(state, terminalText, selectedBoundary);
+  const retiredPrefix = commentary ?? selectedBoundary;
+  if (!retiredPrefix) {
     return { kind: "none" };
   }
-  const tail = terminalText.slice(selectedBoundary.prefix.length).trimStart();
+  // A later retired item extends the cumulative prefix without moving the steer
+  // boundary. Keep its durable sequence so the answer cannot adopt either owner.
+  const suffix = terminalText.slice(retiredPrefix.prefix.length);
+  const tail = commentary ? suffix : suffix.trimStart();
   return {
     kind: "split",
-    afterBoundaryRunId: selectedBoundary.boundaryRunId,
+    ...(selectedBoundary ? { afterBoundaryRunId: selectedBoundary.boundaryRunId } : {}),
     afterSequence:
+      commentary?.afterSequence ??
       readSessionMessageIdentity(
         state.chatMessages?.find(
-          (entry) => userTurnRunId(entry) === selectedBoundary.boundaryRunId,
+          (entry) => userTurnRunId(entry) === selectedBoundary?.boundaryRunId,
         ),
-      )?.sequence ?? null,
+      )?.sequence ??
+      null,
+    ...(commentary ? { preserveKeyedCommentary: true } : {}),
     replacedSegmentIndexes:
-      selectedBoundary === persistedBoundary && liveBoundary ? liveBoundary.segmentIndexes : [],
+      selectedBoundary && selectedBoundary === persistedBoundary && liveBoundary
+        ? liveBoundary.segmentIndexes
+        : [],
     tailMessage: tail ? replaceTerminalText(message, tail) : null,
   };
 }

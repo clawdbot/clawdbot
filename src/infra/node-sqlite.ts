@@ -55,7 +55,7 @@ function assertSqliteWalResetSafeVersion(version: string, nodeVersion: string): 
   const wording = isShared ? "uses shared system" : "embeds";
   const remediation = isShared
     ? "Upgrade the system SQLite library to one of those safe versions, or use a Node build embedding a safe version."
-    : "Upgrade to Node 22.22.3+, 24.15.0+, or 25.9.0+ before retrying.";
+    : "Upgrade to Node 24.16.0+ or 26.1.0+ before retrying.";
   throw new Error(
     `OpenClaw requires SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x for WAL safety; ` +
       `Node ${nodeVersion} ${wording} SQLite ${version}, which is affected by the upstream WAL-reset ` +
@@ -92,6 +92,8 @@ function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): void {
 export function requireNodeSqlite(): typeof import("node:sqlite") {
   installProcessWarningFilter();
   try {
+    // Bun follow-up: Revalidate close/dispose file release after oven-sh/bun#40005 ships.
+    // Bun 1.4.2 retains native statements after close; node:sqlite exposes no finalizer.
     const sqlite = require("node:sqlite") as typeof import("node:sqlite");
     assertSafeSqliteRuntime(sqlite);
     return sqlite;

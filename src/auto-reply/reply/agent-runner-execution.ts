@@ -22,6 +22,7 @@ import {
   type DeferredEmbeddedRunLifecycleManager,
 } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
+import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { renderRateLimitOrOverloadedCopy } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
@@ -589,15 +590,19 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
   const modelContextLease = runtime
     ? leaseMcpAppModelContextForTurn({
         runtime,
-        prompt: executionParams.commandBody,
-        transcriptPrompt: executionParams.transcriptCommandBody,
       })
     : undefined;
   const turnParams = modelContextLease
     ? {
         ...executionParams,
-        commandBody: modelContextLease.prompt,
-        transcriptCommandBody: modelContextLease.transcriptPrompt,
+        followupRun: {
+          ...executionParams.followupRun,
+          currentInboundContext: appendCurrentInboundContext(
+            executionParams.followupRun.currentInboundContext,
+            [modelContextLease.context],
+            modelContextLease.legacyText,
+          ),
+        },
       }
     : executionParams;
   // Keep committed facts outside cleanup so a restart cannot erase them.

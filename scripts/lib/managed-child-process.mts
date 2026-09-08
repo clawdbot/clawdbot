@@ -112,7 +112,7 @@ export function signalExitCode(signal: NodeJS.Signals) {
 }
 
 export function terminateManagedChild(
-  child: { kill(signal: NodeJS.Signals): unknown; pid?: number },
+  child: ManagedProcessGroupChild & { kill(signal: NodeJS.Signals): unknown },
   signal: NodeJS.Signals = "SIGTERM",
   {
     onChildSignalError,
@@ -166,6 +166,11 @@ export function terminateManagedChild(
     }
   }
 
+  // After exit this PID can name another process. Keep descendant cleanup
+  // unverified instead of targeting that potentially unrelated owner.
+  if (child.exitCode != null || child.signalCode != null) {
+    return { processTreeState: "indeterminate" };
+  }
   const taskkillPath = resolveWindowsTaskkillPath();
   const args = ["/PID", String(child.pid), "/T"];
   if (signal === "SIGKILL") {

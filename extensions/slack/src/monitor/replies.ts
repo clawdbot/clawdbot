@@ -38,8 +38,10 @@ import {
 } from "../native-data-fallback.js";
 import {
   hasSlackReplyStructuredContent,
+  iterateSlackReplyDeliveryMessages,
   resolveSlackReplyBlockResolution,
   resolveSlackReplyBlocks,
+  type PreparedSlackReply,
 } from "../reply-blocks.js";
 import { resolveSlackReplyThreadTs } from "../thread-ts.js";
 import type { SlackEventScope } from "./event-scope.js";
@@ -121,7 +123,7 @@ function resolveSlackMediaHookSpokenText(payload: ReplyPayload): string | undefi
 
 export async function deliverReplies(params: {
   cfg: OpenClawConfig;
-  replies: ReplyPayload[];
+  replies: PreparedSlackReply[];
   target: string;
   token: string;
   accountId?: string;
@@ -153,7 +155,8 @@ export async function deliverReplies(params: {
   eventScope?: SlackEventScope;
 }) {
   let latestResult: SlackSendResult | undefined;
-  for (const payload of params.replies) {
+  for (const prepared of params.replies) {
+    const { payload } = prepared;
     if (payload.isReasoning === true) {
       continue;
     }
@@ -168,10 +171,7 @@ export async function deliverReplies(params: {
       reply.hasText && !isSilentReplyText(reply.trimmedText, SILENT_REPLY_TOKEN)
         ? reply.trimmedText
         : undefined;
-    const materializeAuthoredText = !reply.hasMedia && hasSlackReplyStructuredContent(payload);
-    const { authoredTextPlacement, segments } = resolveSlackReplyBlockResolution(payload, {
-      materializeAuthoredText,
-    });
+    const { authoredTextPlacement, segments } = prepared.resolveDelivery();
     if (!textRaw && !reply.hasMedia && segments.length === 0) {
       continue;
     }
@@ -281,44 +281,25 @@ export async function deliverReplies(params: {
         delivered ||= mediaDelivery !== "empty";
       }
 
-      for (const segment of segments) {
-        if (segment.kind === "text") {
-          const text = [outsideText, segment.text].filter(Boolean).join("\n\n");
-          outsideText = "";
-          if (!text) {
-            continue;
-          }
-          hookParts.push(text);
-          for (const chunk of chunkSlackTextAtHardLimit(text)) {
+      for (const message of iterateSlackReplyDeliveryMessages({
+        authoredTextPlacement,
+        segments,
+        text: outsideText,
+      })) {
+        hookParts.push(message.text);
+        if (message.textIsSlackPlainText) {
+          for (const chunk of chunkSlackTextAtHardLimit(message.text)) {
             lastResult = await sendReply({ text: chunk, threadTs, textIsSlackPlainText: true });
             delivered = true;
           }
           continue;
         }
-        const baseText = outsideText;
-        outsideText = "";
-        const accessibilityText =
-          buildSlackNativeDataAccessibilityText(baseText, segment.blocks) ||
-          buildSlackBlocksFallbackText(segment.blocks);
-        hookParts.push(accessibilityText);
-        const segmentPlacement = baseText
-          ? "outside-blocks"
-          : authoredTextPlacement === "blocks"
-            ? "blocks"
-            : "none";
         lastResult = await sendReply({
-          text: baseText,
+          ...(message.blocks
+            ? { ...message, text: message.nativeDataFallbackBaseText ?? "" }
+            : { text: message.text }),
           threadTs,
-          blocks: segment.blocks,
-          authoredTextPlacement: segmentPlacement,
-          ...(baseText ? { nativeDataFallbackBaseText: baseText } : {}),
         });
-        delivered = true;
-      }
-
-      if (outsideText && !reply.hasMedia) {
-        hookParts.push(outsideText);
-        lastResult = await sendReply({ text: outsideText, threadTs });
         delivered = true;
       }
     } catch (error) {

@@ -4,6 +4,7 @@ import { readToolApprovalReviews } from "../../lib/chat/tool-approval-reviews.ts
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import type { ToolStreamEntry } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
+import { resetToolStream } from "./tool-stream-state.ts";
 import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-status.ts";
 import {
   agentEvent,
@@ -11,7 +12,7 @@ import {
   TOOL_STREAM_TEST_NOW,
   useToolStreamFakeTimers,
 } from "./tool-stream.test-helpers.ts";
-import { handleAgentEvent, resetToolStream } from "./tool-stream.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 const globalWithWindow = globalThis as typeof globalThis & {
   window?: Window & typeof globalThis;

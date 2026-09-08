@@ -1,11 +1,9 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 
-type DigestInput = string | Uint8Array;
+export { sha256Hex, sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 
-export function sha256Hex(input: DigestInput): string {
-  return createHash("sha256").update(input).digest("hex");
-}
+type DigestInput = string | Uint8Array;
 
 export function sha256Base64(input: DigestInput): string {
   return createHash("sha256").update(input).digest("base64");
@@ -17,10 +15,6 @@ export function sha256Base64Url(input: DigestInput): string {
 
 export function sha256Base64UrlPrefix(input: DigestInput, length: number): string {
   return sha256Base64Url(input).slice(0, length);
-}
-
-export function sha256HexPrefixCore(input: DigestInput, length: number): string {
-  return sha256Hex(input).slice(0, length);
 }
 
 /** Streams a file, optionally stopping at an inclusive byte offset. */

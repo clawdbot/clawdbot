@@ -148,6 +148,11 @@ export function createEmbeddedModelState(
             lastUsage = { ...pending };
           }
           recordModelUsage(pending);
+          runBestEffortCallback({
+            label: "model usage observation",
+            log,
+            callback: () => params.onModelUsage?.(pending),
+          });
           pending = undefined;
           // Context-engine projection can later mutate transcript objects; retain this run's result.
           completed = structuredClone(message);

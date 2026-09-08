@@ -11,6 +11,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import { createOpenClawStateSchemaEnsurer } from "./openclaw-state-feature-schema.js";
 
 export type AgentCreatedVia = "operator" | "agent" | "claw";
 
@@ -24,31 +25,10 @@ export type AgentProvenance = {
 type AgentProvenanceDatabase = Pick<OpenClawStateKyselyDatabase, "agent_provenance">;
 type AgentProvenanceOptions = OpenClawStateDatabaseOptions & { nowMs?: number };
 
-const ensuredDatabases = new WeakSet<DatabaseSync>();
-const AGENT_PROVENANCE_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS agent_provenance (
-  agent_id TEXT PRIMARY KEY,
-  created_via TEXT NOT NULL CHECK (created_via IN ('operator', 'agent', 'claw')),
-  creator_agent_id TEXT,
-  created_at_ms INTEGER NOT NULL
-) STRICT;
-`;
-
-export function ensureAgentProvenanceSchema(options: OpenClawStateDatabaseOptions = {}): void {
-  const database = openOpenClawStateDatabase(options);
-  if (ensuredDatabases.has(database.db)) {
-    return;
-  }
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      // sqlite-allow-raw -- feature-local additive schema DDL; provenance rows use Kysely.
-      db.exec(AGENT_PROVENANCE_SCHEMA_SQL);
-    },
-    options,
-    { operationLabel: "agent-provenance.schema.ensure" },
-  );
-  ensuredDatabases.add(database.db);
-}
+export const ensureAgentProvenanceSchema = createOpenClawStateSchemaEnsurer({
+  table: "agent_provenance",
+  operationLabel: "agent-provenance.schema.ensure",
+});
 
 function fromRow(row: {
   agent_id: string;

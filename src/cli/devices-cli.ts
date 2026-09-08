@@ -1,23 +1,12 @@
 // Commander registration for device pairing and auth-token commands.
 import type { Command } from "commander";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import type { runDevicesListCommand } from "./devices-cli.runtime.js";
 import { isDevicesMachineOutput } from "./devices-output-mode.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
-type DevicesRpcOpts = {
-  url?: string;
-  token?: string;
-  password?: string;
-  timeout?: string;
-  json?: boolean;
-  latest?: boolean;
-  yes?: boolean;
-  pending?: boolean;
-  device?: string;
-  role?: string;
-  scope?: string[];
-};
+type DevicesRpcOpts = Omit<Parameters<typeof runDevicesListCommand>[0], "name">;
 
 const DEFAULT_DEVICES_TIMEOUT_MS = 10_000;
 

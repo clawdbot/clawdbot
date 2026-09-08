@@ -773,6 +773,7 @@ describe("applyPatch", () => {
 
         try {
           await withRealpathSymlinkRebindRace({
+            realpathApi: "native-sync",
             shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot")),
             symlinkPath: slot,
             symlinkTarget: outside,

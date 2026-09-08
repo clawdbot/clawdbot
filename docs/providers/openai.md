@@ -150,9 +150,13 @@ Responses endpoint. Configure the existing model settings:
 
 The example disables automatic server compaction because OpenAI cannot combine
 it with configuration updates. Cache-preserving effort changes also exclude
-automatic truncation, pro mode, and API multi-agent mode. The cache state is
-local to the running process or connection; expiry, restart, or rewritten
-history starts a fresh request using the selected effort.
+automatic truncation, pro mode, and API multi-agent mode. The original effort
+and admitted controls survive transport expiry and Gateway restarts in saved
+provider replay metadata. Matching history replays the same prefix without
+extending socket or provider cache lifetimes. Rewritten or compacted history,
+incompatible settings, or a changed model, route, session, or auth profile starts
+a fresh request using the selected effort. Older transcripts without this
+metadata also start fresh after transport expiry.
 
 The native [Codex harness](/plugins/codex-harness) owns its own Responses loop;
 these built-in-runtime capabilities do not imply native Codex support.
@@ -696,7 +700,7 @@ for the full example.
     active tokens. Configure an ordered OpenAI API-key profile and keep the
     default isolated agent-scoped Codex home. The complete catalog, app-server,
     auth, and restart recipe is in
-    [Codex harness long context](/plugins/codex-harness#direct-api-long-context).
+    [Codex harness long context](/plugins/codex-harness/configuration#direct-api-long-context).
 
     These examples are two explicit runtime choices, not one auto-selecting
     configuration. The model-scoped `agentRuntime` and runtime-owned compaction
@@ -1164,6 +1168,12 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
     exchanges the browser's SDP and returns only the answer SDP; it does not
     send an OAuth token, Platform key, or ephemeral client secret to the browser.
 
+    Gateway-relay WebRTC calls conceal malformed incoming audio packets and
+    continue playing later audio. One rejected audio packet send does not end
+    an otherwise connected call. Unusable codec state, unexpected stream changes,
+    and terminal connection states still end the call. Packet-drop diagnostics
+    omit raw error details.
+
     The enabled OpenAI plugin starts the broker automatically, including when
     you sign in after the Gateway has started. The broker opens a provider
     session only when you start Talk; signing in does not open the microphone or
@@ -1530,7 +1540,7 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     clears only the session layer. `/status` reports the resolved OpenClaw
     policy and runtime, not the upstream service tier actually honored or
     returned. See [Thinking levels](/tools/thinking#fast-mode-%2Ffast) and
-    [Codex harness](/plugins/codex-harness#shared-fast-mode-and-codex-fast-mode).
+    [Codex harness](/plugins/codex-harness/commands#shared-fast-mode-and-codex-fast-mode).
     </Note>
 
     Fast mode is premium-priced and model-specific. GPT-5.6 Sol API Fast mode

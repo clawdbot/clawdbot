@@ -1,47 +1,15 @@
 // Coverage for prompt helper decisions used before embedded attempts.
 import { describe, expect, it, vi } from "vitest";
 
-const musicGenerationTaskStatusMocks = vi.hoisted(() => ({
-  // Media task modules are mocked so prompt helper tests can assert trigger and
-  // session-key routing without real task stores.
-  buildActiveMusicGenerationTaskPromptContextForSession: vi.fn(),
-  buildMusicGenerationTaskStatusDetails: vi.fn(() => ({})),
-  buildMusicGenerationTaskStatusText: vi.fn(() => "Music generation task status"),
-  findActiveMusicGenerationTaskForSession: vi.fn(),
-  MUSIC_GENERATION_TASK_KIND: "music_generation",
-}));
-
-const imageGenerationTaskStatusMocks = vi.hoisted(() => ({
-  buildActiveImageGenerationTaskPromptContextForSession: vi.fn(),
-  buildImageGenerationTaskStatusDetails: vi.fn(() => ({})),
-  buildImageGenerationTaskStatusText: vi.fn(() => "Image generation task status"),
-  findActiveImageGenerationTaskForSession: vi.fn(),
-  IMAGE_GENERATION_TASK_KIND: "image_generation",
-}));
-
-const videoGenerationTaskStatusMocks = vi.hoisted(() => ({
-  buildActiveVideoGenerationTaskPromptContextForSession: vi.fn(),
-  buildVideoGenerationTaskStatusDetails: vi.fn(() => ({})),
-  buildVideoGenerationTaskStatusText: vi.fn(() => "Video generation task status"),
-  findActiveVideoGenerationTaskForSession: vi.fn(),
-  VIDEO_GENERATION_TASK_KIND: "video_generation",
-}));
-
 const hostHookStateMocks = vi.hoisted(() => ({
   drainPluginNextTurnInjectionContext: vi.fn(),
 }));
 
-vi.mock("../../media-generation-task-status.js", () => ({
-  ...imageGenerationTaskStatusMocks,
-  ...musicGenerationTaskStatusMocks,
-  ...videoGenerationTaskStatusMocks,
-}));
 vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
 
 import {
   forgetPromptBuildDrainCacheForRun,
   mergeOrphanedTrailingUserPrompt,
-  resolveAttemptMediaTaskSystemPromptAddition,
   resolvePromptBuildHookResult,
 } from "./attempt-prompt-helpers.js";
 import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
@@ -91,67 +59,6 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
     expect(result.prompt).not.toContain("\\ud83d");
     expect(result.prompt).toContain("[image_url]");
     expect(result.prompt).toContain("chars)");
-  });
-});
-
-describe("resolveAttemptMediaTaskSystemPromptAddition", () => {
-  it("joins active media task guidance for user triggers", () => {
-    imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
-      "Image task hint",
-    );
-    videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(
-      "Active task hint",
-    );
-    musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession.mockReturnValue(
-      "Music task hint",
-    );
-
-    const result = resolveAttemptMediaTaskSystemPromptAddition({
-      sessionKey: "agent:main:discord:direct:123",
-      trigger: "user",
-    });
-
-    expect(
-      imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession,
-    ).toHaveBeenCalledWith("agent:main:discord:direct:123", undefined);
-    expect(
-      videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession,
-    ).toHaveBeenCalledWith("agent:main:discord:direct:123", undefined);
-    expect(
-      musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession,
-    ).toHaveBeenCalledWith("agent:main:discord:direct:123", undefined);
-    expect(result).toBe("Image task hint\n\nActive task hint\n\nMusic task hint");
-  });
-
-  it("returns undefined (no media guidance) for non-user/manual triggers", () => {
-    imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReset();
-    imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
-      "Should not be used",
-    );
-    videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession.mockReset();
-    videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(
-      "Should not be used",
-    );
-    musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession.mockReset();
-    musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession.mockReturnValue(
-      "Should not be used",
-    );
-
-    const result = resolveAttemptMediaTaskSystemPromptAddition({
-      sessionKey: "agent:main:discord:direct:123",
-      trigger: "heartbeat",
-    });
-
-    expect(
-      imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession,
-    ).not.toHaveBeenCalled();
-    expect(
-      videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession,
-    ).not.toHaveBeenCalled();
-    expect(
-      musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession,
-    ).not.toHaveBeenCalled();
-    expect(result).toBeUndefined();
   });
 });
 

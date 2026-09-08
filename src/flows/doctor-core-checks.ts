@@ -37,7 +37,7 @@ import type { CronJob } from "../cron/types.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
-import { isInvalidGatewayToken } from "../gateway/known-weak-gateway-secrets.js";
+import { isInvalidGatewaySecret } from "../gateway/known-weak-gateway-secrets.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
@@ -367,6 +367,20 @@ const skillWorkshopRelocationCheck: HealthCheck = {
     if (inspection.externalProposalCount === 0 && inspection.legacyBackupRootCount === 0) {
       return [];
     }
+    const fixHints: string[] = [];
+    if (
+      inspection.externalProposalCount > 0 ||
+      inspection.legacyBackupRootCount > inspection.preservedLegacyBackupRootCount
+    ) {
+      fixHints.push(
+        "Run `openclaw doctor --fix` to process eligible Workshop relocations and legacy collection backups.",
+      );
+    }
+    if (inspection.preservedLegacyBackupRootCount > 0) {
+      fixHints.push(
+        "Preserved roots need manual review of workspace ownership, backup manifests, and workspace migration blockers; Doctor leaves them untouched until resolved. Do not delete backups to clear this warning.",
+      );
+    }
     return [
       {
         checkId: SKILL_WORKSHOP_RELOCATION_CHECK_ID,
@@ -377,10 +391,9 @@ const skillWorkshopRelocationCheck: HealthCheck = {
           .map(([agentId, count]) => `${agentId}: ${count}`)
           .join(
             ", ",
-          )}) and ${inspection.legacyBackupRootCount} legacy collection backup root${inspection.legacyBackupRootCount === 1 ? "" : "s"}.`,
+          )}) and ${inspection.legacyBackupRootCount} legacy collection backup root${inspection.legacyBackupRootCount === 1 ? "" : "s"} (${inspection.preservedLegacyBackupRootCount} preserved for review).`,
         path: "skills.workshop",
-        fixHint:
-          "Run `openclaw doctor --fix` to relocate Workshop-owned skills and retire legacy backup roots.",
+        fixHint: fixHints.join(" "),
       },
     ];
   },
@@ -448,7 +461,7 @@ export async function detectGatewayAuthHealth(
         unresolvedReasonStyle: "detailed",
         ...(gatewayTokenRef ? { envFallback: "never" as const } : {}),
       });
-  if (resolved.token && !isInvalidGatewayToken(resolved.token)) {
+  if (resolved.token && !isInvalidGatewaySecret(resolved.token)) {
     return [];
   }
   if (gatewayTokenRef) {
@@ -459,7 +472,7 @@ export async function detectGatewayAuthHealth(
         message: buildGatewayTokenSecretRefUnavailableMessage({
           cfg: ctx.cfg,
           ref: gatewayTokenRef,
-          unresolvedRefReason: isInvalidGatewayToken(resolved.token)
+          unresolvedRefReason: isInvalidGatewaySecret(resolved.token)
             ? "the resolved token is blank or the literal string undefined/null"
             : resolved.unresolvedRefReason,
         }),
@@ -469,7 +482,7 @@ export async function detectGatewayAuthHealth(
     ];
   }
   const invalid =
-    isInvalidGatewayToken(resolved.token) || isInvalidGatewayToken(ctx.cfg.gateway?.auth?.token);
+    isInvalidGatewaySecret(resolved.token) || isInvalidGatewaySecret(ctx.cfg.gateway?.auth?.token);
   return [
     {
       checkId: "core/doctor/gateway-auth",

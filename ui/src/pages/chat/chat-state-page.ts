@@ -63,7 +63,7 @@ import {
   openSlot,
 } from "./sidebar-layout.ts";
 import type { RunOutputUsage } from "./tool-stream-contract.ts";
-import { resetToolStream } from "./tool-stream.ts";
+import { resetToolStream } from "./tool-stream-state.ts";
 
 type ChatPageElement = {
   dispatchEvent: (event: Event) => boolean;
@@ -392,6 +392,13 @@ export function createPageState(
   };
   state.updateSidebarLayout = (layout) => {
     const normalized = normalizeSidebarLayout(layout);
+    // Every close route commits here; tab switches retain the pending selection.
+    if (
+      state.sidebarContent?.kind === "loading" &&
+      !normalized.columns.some((column) => column.panels.some((panel) => panel.slot === "detail"))
+    ) {
+      state.sidebarContent = null;
+    }
     state.sidebarLayout = normalized;
     state.settings = patchSettings({
       sidebarSessionLayouts: updateSidebarSessionLayout(

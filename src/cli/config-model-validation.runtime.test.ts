@@ -25,8 +25,8 @@ const primary = "pin-alpha/exact-supported";
 const fallback = "pin-beta/exact-supported";
 const providerIds = ["pin-alpha", "pin-beta", "pin-unrelated"];
 
-function clearRuntimeState() {
-  resetPreparedModelRuntimeSnapshotsForTest();
+async function clearRuntimeState() {
+  await resetPreparedModelRuntimeSnapshotsForTest();
   clearPluginLoaderCache();
 }
 
@@ -108,26 +108,26 @@ module.exports = {
       try {
         await run({ config, state, imported });
       } finally {
-        clearRuntimeState();
+        await clearRuntimeState();
       }
     },
   );
 }
 
 describe("config model validation with provider runtime", () => {
-  beforeEach(() => {
-    clearRuntimeState();
+  beforeEach(async () => {
+    await clearRuntimeState();
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
       throw new Error("Unexpected network request during config model validation");
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     try {
       expect(globalThis.fetch).not.toHaveBeenCalled();
     } finally {
       vi.restoreAllMocks();
-      clearRuntimeState();
+      await clearRuntimeState();
     }
   });
 

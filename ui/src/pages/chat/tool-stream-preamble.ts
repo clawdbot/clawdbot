@@ -1,7 +1,7 @@
 import { readAssistantStreamSegmentIdentity } from "@openclaw/gateway-client/browser";
 import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
-import { accumulatedStreamText, trimAccumulatedStreamPrefix } from "../../lib/chat/chat-types.ts";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
+import { retireCommentaryStream } from "./stream-segment-pruning.ts";
 import type { AgentEventPayload, ToolStreamHost } from "./tool-stream-contract.ts";
 import { resolveAcceptedSession } from "./tool-stream-status.ts";
 
@@ -41,51 +41,6 @@ function normalizePreambleProgressText(value: unknown): string {
   return /^NO_REPLY$/iu.test(normalized) ? "" : stripped;
 }
 
-function collapseWhitespace(text: string): string {
-  return text.replace(/\s+/gu, " ").trim();
-}
-
-/**
- * Transports that resolve commentary only at the tool boundary (openai-completions,
- * anthropic) first stream the same text unphased through the chat delta lane, where
- * it carries a run-scoped stream id instead of the item id the phase tagger later
- * assigns. Once the keyed item owns that text, retire it from the cumulative chat
- * stream as a persisted prefix so the item and the stream do not both render it.
- */
-function retireStreamTextOwnedByCommentary(
-  host: ToolStreamHost,
-  payload: AgentEventPayload,
-  progressText: string,
-): void {
-  if (host.chatRunId !== payload.runId || typeof host.chatStream !== "string") {
-    return;
-  }
-  const segments = host.chatStreamSegments ?? [];
-  const tail = trimAccumulatedStreamPrefix(host.chatStream, accumulatedStreamText(segments));
-  if (
-    !tail.trim() ||
-    collapseWhitespace(normalizePreambleProgressText(tail)) !== collapseWhitespace(progressText)
-  ) {
-    return;
-  }
-  const last = segments.at(-1);
-  const extendsPersisted =
-    last?.persisted === true &&
-    last.runId === payload.runId &&
-    !last.boundaryRunId &&
-    !last.toolCallId;
-  host.chatStreamSegments = [
-    ...(extendsPersisted ? segments.slice(0, -1) : segments),
-    {
-      ...(extendsPersisted ? last : {}),
-      text: host.chatStream,
-      ts: host.chatStreamStartedAt ?? payload.ts,
-      runId: payload.runId,
-      persisted: true,
-    },
-  ];
-}
-
 export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEventPayload): boolean {
   const progress = readPreambleProgressEvent(payload);
   if (!progress) {
@@ -99,6 +54,23 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
   if (progress.text) {
     reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
   }
+  const existingIndex = progress.itemId
+    ? host.chatStreamSegments.findIndex(
+        (segment) => segment.itemId === progress.itemId && segment.runId === payload.runId,
+      )
+    : -1;
+  const existing = host.chatStreamSegments[existingIndex];
+  const handoff =
+    progress.itemId && progress.text && (!existing || existing.pendingStreamText)
+      ? retireCommentaryStream(host, {
+          runId: payload.runId,
+          itemId: progress.itemId,
+          text: progress.text,
+          timestamp: payload.ts,
+          pendingStreamText: existing?.pendingStreamText,
+        })
+      : null;
+  progress.text = handoff?.text ?? progress.text;
   const persisted =
     progress.itemId &&
     host.chatMessages?.some((message) => {
@@ -115,23 +87,22 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
   }
   if (progress.itemId && !progress.text.trim()) {
     host.chatStreamSegments = host.chatStreamSegments.filter(
-      (segment) => segment.itemId !== progress.itemId,
+      (segment) => segment.itemId !== progress.itemId || segment.runId !== payload.runId,
     );
     return true;
   }
-  if (progress.itemId) {
-    retireStreamTextOwnedByCommentary(host, payload, progress.text);
-  }
-  const existingIndex = progress.itemId
-    ? host.chatStreamSegments.findIndex((segment) => segment.itemId === progress.itemId)
-    : -1;
-  if (existingIndex >= 0) {
-    const existing = host.chatStreamSegments[existingIndex];
-    if (!existing) {
-      return true;
-    }
-    host.chatStreamSegments = host.chatStreamSegments.map((segment, index) =>
-      index === existingIndex ? { ...segment, text: progress.text, runId: payload.runId } : segment,
+  if (existing) {
+    host.chatStreamSegments = host.chatStreamSegments.map((segment) =>
+      segment === existing
+        ? {
+            ...segment,
+            pendingStreamText: handoff?.pendingStreamText,
+            text:
+              segment.text.replace(/\s+/gu, " ").trim() === progress.text
+                ? segment.text
+                : progress.text,
+          }
+        : segment,
     );
     return true;
   }
@@ -146,6 +117,7 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
       ts: payload.ts,
       runId: payload.runId,
       ...(progress.itemId ? { itemId: progress.itemId } : {}),
+      ...(handoff?.pendingStreamText ? { pendingStreamText: handoff.pendingStreamText } : {}),
     },
   ];
   return true;

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   clearDeviceAuthToken,
+  loadCurrentDeviceAuthToken,
   loadDeviceAuthToken,
   rotateDeviceToken,
   storeDeviceAuthToken,
@@ -31,12 +32,12 @@ function createState(request: (method: string, params?: unknown) => Promise<unkn
   };
 }
 
-function storeIdentity() {
+function storeIdentity(deviceId = "00") {
   localStorage.setItem(
     "openclaw-device-identity-v1",
     JSON.stringify({
       version: 1,
-      deviceId: "00",
+      deviceId,
       publicKey: "AA",
       privateKey: "AA",
       createdAtMs: 1,
@@ -85,6 +86,55 @@ afterEach(() => {
   localStorage.clear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe("current browser device token", () => {
+  it.each(["operator.read", "operator.write", "operator.admin"])(
+    "accepts a stored credential with %s access",
+    (scope) => {
+      storeIdentity();
+      storeDeviceAuthToken({ ...tokenParams, token: "current-token", scopes: [scope] });
+
+      expect(loadCurrentDeviceAuthToken(tokenParams.gatewayUrl)).toBe("current-token");
+    },
+  );
+
+  it("keeps credentials scoped to the requested Gateway route", () => {
+    storeIdentity();
+    const gatewayUrl = `${tokenParams.gatewayUrl}/first`;
+    storeDeviceAuthToken({
+      ...tokenParams,
+      gatewayUrl,
+      token: "first-token",
+      scopes: ["operator.read"],
+    });
+
+    expect(loadCurrentDeviceAuthToken(`${tokenParams.gatewayUrl}/second`)).toBeNull();
+    expect(loadCurrentDeviceAuthToken(gatewayUrl)).toBe("first-token");
+  });
+
+  it.each([null, "another-device"])(
+    "rejects an old device credential when the current identity is %s",
+    (deviceId) => {
+      if (deviceId) {
+        storeIdentity(deviceId);
+      }
+      storeDeviceAuthToken({ ...tokenParams, token: "old-token", scopes: ["operator.read"] });
+
+      expect(loadCurrentDeviceAuthToken(tokenParams.gatewayUrl)).toBeNull();
+    },
+  );
+
+  it("rejects a credential that cannot read private content", () => {
+    storeIdentity();
+    storeDeviceAuthToken({
+      ...tokenParams,
+      token: "approval-only-token",
+      scopes: ["operator.approvals"],
+    });
+
+    expect(loadCurrentDeviceAuthToken(tokenParams.gatewayUrl)).toBeNull();
+  });
 });
 
 describe("device token request lifecycle", () => {

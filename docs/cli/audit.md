@@ -378,7 +378,7 @@ instead of being silently discarded.
 ## Related
 
 - [Audit history](/gateway/audit)
-- [Gateway protocol](/gateway/protocol#audit-ledger-rpc)
+- [Gateway protocol](/gateway/protocol/ledgers#audit-ledger-rpc)
 - [Sessions](/cli/sessions)
 - [Tasks](/cli/tasks)
 - [Cron jobs](/automation/cron-jobs)

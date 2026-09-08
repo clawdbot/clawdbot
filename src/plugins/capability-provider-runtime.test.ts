@@ -9,7 +9,11 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { clearBundledDiscoveryModeMemo } from "./bundled-discovery-state.js";
 import { removeBundledDiscoveryStateRoot } from "./bundled-discovery.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
+import type { PluginManifestRegistry } from "./manifest-registry.types.js";
+import {
+  createPluginManifestRecordFixture,
+  createPluginMetadataSnapshotFixture,
+} from "./plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
@@ -42,12 +46,7 @@ function restoreBundledDiscoveryState(): void {
   clearBundledDiscoveryModeMemo();
 }
 
-type MockManifestRegistry = {
-  plugins: Array<Record<string, unknown>>;
-  diagnostics: unknown[];
-};
-
-function createEmptyMockManifestRegistry(): MockManifestRegistry {
+function createEmptyMockManifestRegistry(): PluginManifestRegistry {
   return { plugins: [], diagnostics: [] };
 }
 
@@ -68,9 +67,9 @@ const mocks = vi.hoisted(() => ({
     (params?: unknown) => ReturnType<typeof createEmptyPluginRegistry> | undefined
   >(() => undefined),
   resolvePluginRegistryLoadCacheKey: vi.fn((options: unknown) => JSON.stringify(options)),
-  loadPluginManifestRegistryCore: vi.fn<(params?: Record<string, unknown>) => MockManifestRegistry>(
-    () => createEmptyMockManifestRegistry(),
-  ),
+  loadPluginManifestRegistryCore: vi.fn<
+    (params?: Record<string, unknown>) => PluginManifestRegistry
+  >(() => createEmptyMockManifestRegistry()),
   resolveInstalledManifestRegistryIndexFingerprint: vi.fn(() => "test-installed-index"),
   loadBundledCapabilityRuntimeRegistry: vi.fn(),
   loadPluginRegistrySnapshot: vi.fn<
@@ -240,7 +239,7 @@ function setCapabilityManifestPlugins(
   }>,
 ) {
   mocks.loadPluginManifestRegistryCore.mockReturnValue({
-    plugins: plugins.map((plugin) => ({ origin: "bundled", ...plugin })) as never,
+    plugins: plugins.map(createPluginManifestRecordFixture),
     diagnostics: [],
   });
 }
@@ -343,17 +342,17 @@ function setBundledCapabilityFixture(
 ) {
   mocks.loadPluginManifestRegistryCore.mockReturnValue({
     plugins: [
-      {
+      createPluginManifestRecordFixture({
         id: pluginId,
         origin: "bundled",
         contracts: { [contractKey]: [providerId] },
-      },
-      {
+      }),
+      createPluginManifestRecordFixture({
         id: "custom-plugin",
         origin: "workspace",
         contracts: {},
-      },
-    ] as never,
+      }),
+    ],
     diagnostics: [],
   });
 }
@@ -907,11 +906,11 @@ describe("resolvePluginCapabilityProviders", () => {
     });
     mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
-        {
+        createPluginManifestRecordFixture({
           id: "external-image",
           origin: "global",
           contracts: { imageGenerationProviders: ["external-image"] },
-        },
+        }),
       ],
       diagnostics: [],
     });
@@ -966,22 +965,22 @@ describe("resolvePluginCapabilityProviders", () => {
     });
     mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
-        {
+        createPluginManifestRecordFixture({
           id: "fal",
           origin: "bundled",
           contracts: { imageGenerationProviders: ["fal"] },
-        },
-        {
+        }),
+        createPluginManifestRecordFixture({
           id: "xai",
           origin: "bundled",
           contracts: { imageGenerationProviders: ["xai"] },
-        },
-        {
+        }),
+        createPluginManifestRecordFixture({
           id: "unconfigured-image",
           origin: "bundled",
           contracts: { imageGenerationProviders: ["unconfigured-image"] },
-        },
-      ] as never,
+        }),
+      ],
       diagnostics: [],
     });
     mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
@@ -1100,12 +1099,12 @@ describe("resolvePluginCapabilityProviders", () => {
     } as OpenClawConfig;
     mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
-        {
+        createPluginManifestRecordFixture({
           id: "openai",
           origin: "bundled",
           contracts,
-        },
-      ] as never,
+        }),
+      ],
       diagnostics: [],
     });
     mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
@@ -1205,9 +1204,17 @@ describe("resolvePluginCapabilityProviders", () => {
       } as OpenClawConfig;
       mocks.loadPluginManifestRegistryCore.mockReturnValue({
         plugins: [
-          { id: "openai", origin: "bundled", contracts: { [key]: ["openai"] } },
-          { id: "google", origin: "bundled", contracts: { [key]: ["google"] } },
-        ] as never,
+          createPluginManifestRecordFixture({
+            id: "openai",
+            origin: "bundled",
+            contracts: { [key]: ["openai"] },
+          }),
+          createPluginManifestRecordFixture({
+            id: "google",
+            origin: "bundled",
+            contracts: { [key]: ["google"] },
+          }),
+        ],
         diagnostics: [],
       });
       mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
@@ -1239,12 +1246,12 @@ describe("resolvePluginCapabilityProviders", () => {
     });
     mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
-        {
+        createPluginManifestRecordFixture({
           id: "fish-audio-speech",
           origin: "global",
           enabledByDefault: false,
           contracts: { speechProviders: ["fish-audio"] },
-        },
+        }),
       ],
       diagnostics: [],
     });
@@ -1467,17 +1474,17 @@ describe("resolvePluginCapabilityProviders", () => {
     );
     mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
-        {
+        createPluginManifestRecordFixture({
           id: "deepgram",
           origin: "bundled",
           contracts: { mediaUnderstandingProviders: ["deepgram"] },
-        },
-        {
+        }),
+        createPluginManifestRecordFixture({
           id: "google",
           origin: "bundled",
           contracts: { mediaUnderstandingProviders: ["google"] },
-        },
-      ] as never,
+        }),
+      ],
       diagnostics: [],
     });
     mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
@@ -1526,12 +1533,12 @@ describe("resolvePluginCapabilityProviders", () => {
     addSpeechProvider(active, "acme");
     mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
-        {
+        createPluginManifestRecordFixture({
           id: "microsoft",
           origin: "bundled",
           contracts: { speechProviders: ["microsoft"] },
-        },
-      ] as never,
+        }),
+      ],
       diagnostics: [],
     });
     mocks.resolveRuntimePluginRegistry.mockReturnValue(active);
@@ -1658,12 +1665,12 @@ describe("resolvePluginCapabilityProviders", () => {
     } as never);
     mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
-        {
+        createPluginManifestRecordFixture({
           id: "google",
           origin: "bundled",
           contracts: { realtimeVoiceProviders: ["google"] },
-        },
-      ] as never,
+        }),
+      ],
       diagnostics: [],
     });
     mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
@@ -1701,17 +1708,17 @@ describe("resolvePluginCapabilityProviders", () => {
     } as never);
     mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
-        {
+        createPluginManifestRecordFixture({
           id: "deepgram",
           origin: "bundled",
           contracts: { realtimeTranscriptionProviders: ["deepgram"] },
-        },
-        {
+        }),
+        createPluginManifestRecordFixture({
           id: "openai",
           origin: "bundled",
           contracts: { realtimeTranscriptionProviders: ["openai"] },
-        },
-      ] as never,
+        }),
+      ],
       diagnostics: [],
     });
     mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
@@ -2045,15 +2052,15 @@ describe("resolvePluginCapabilityProviders", () => {
     const cfg = { plugins: { allow: ["openai", "minimax"] } } as OpenClawConfig;
     mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
-        {
+        createPluginManifestRecordFixture({
           id: "openai",
           origin: "bundled",
           contracts: {
             imageGenerationProviders: ["openai"],
             videoGenerationProviders: ["openai"],
           },
-        },
-        {
+        }),
+        createPluginManifestRecordFixture({
           id: "minimax",
           origin: "bundled",
           contracts: {
@@ -2061,8 +2068,8 @@ describe("resolvePluginCapabilityProviders", () => {
             videoGenerationProviders: ["minimax"],
             musicGenerationProviders: ["minimax"],
           },
-        },
-      ] as never,
+        }),
+      ],
       diagnostics: [],
     });
 
@@ -2082,14 +2089,14 @@ describe("resolvePluginCapabilityProviders", () => {
     const cfg = { plugins: { allow: ["openai"] } } as OpenClawConfig;
     mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
-        {
+        createPluginManifestRecordFixture({
           id: "openai",
           origin: "bundled",
           contracts: {
             imageGenerationProviders: ["openai"],
           },
-        },
-      ] as never,
+        }),
+      ],
       diagnostics: [],
     });
 
@@ -2125,17 +2132,17 @@ describe("resolvePluginCapabilityProviders", () => {
     } as never);
     mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
-        {
+        createPluginManifestRecordFixture({
           id: "google",
           origin: "bundled",
           contracts: { embeddingProviders: ["gemini"] },
-        },
-        {
+        }),
+        createPluginManifestRecordFixture({
           id: "openai",
           origin: "bundled",
           contracts: { embeddingProviders: ["openai"] },
-        },
-      ] as never,
+        }),
+      ],
       diagnostics: [],
     });
     mocks.withBundledPluginEnablementCompat.mockReturnValue(enablementCompat);
@@ -2171,17 +2178,17 @@ describe("resolvePluginCapabilityProviders", () => {
     } as never);
     mocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
-        {
+        createPluginManifestRecordFixture({
           id: "google",
           origin: "bundled",
           contracts: { embeddingProviders: ["gemini"] },
-        },
-        {
+        }),
+        createPluginManifestRecordFixture({
           id: "openai",
           origin: "bundled",
           contracts: { embeddingProviders: ["openai"] },
-        },
-      ] as never,
+        }),
+      ],
       diagnostics: [],
     });
     mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>

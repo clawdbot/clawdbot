@@ -80,6 +80,7 @@ function mockHumanListModules(importedModules: string[] = []): void {
     importedModules.push("plugins-list-format");
     return {
       formatPluginLine: vi.fn(),
+      formatPluginStatus: vi.fn(),
     };
   });
 }

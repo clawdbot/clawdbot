@@ -113,6 +113,7 @@ async function handleDiscordCommandArgInteraction(params: {
   };
   const prompt = buildCommandTextFromArgs(commandDefinition, commandArgsWithRaw);
   await params.dispatchCommandInteraction({
+    readPolicy: ctx.readPolicy,
     interaction,
     prompt,
     command: commandDefinition,

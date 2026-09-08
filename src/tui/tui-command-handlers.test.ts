@@ -432,6 +432,36 @@ describe("tui command handlers", () => {
   });
 
   it.each([
+    { command: "/models", value: "fixture/model" },
+    { command: "/sessions", value: "agent:main:other" },
+    { command: "/agents", value: "other" },
+  ])(
+    "consumes $command selection before its asynchronous action finishes",
+    async ({ command, value }) => {
+      const pending = createDeferred();
+      const action = vi.fn(() => pending.promise);
+      const harness = createHarness({
+        listModels: vi.fn().mockResolvedValue([{ provider: "fixture", id: "model" }]),
+        listSessions: vi.fn().mockResolvedValue({ sessions: [{ key: "agent:main:other" }] }),
+        agents: [{ id: "main" }, { id: "other" }],
+        patchSession: action,
+        setSession: action,
+      });
+      await harness.handleCommand(command);
+      const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
+
+      selector.onSelect?.({ value });
+      expect(harness.closeOverlay).toHaveBeenCalledExactlyOnceWith(harness.overlayHandle);
+      selector.onSelect?.({ value });
+      expect(action).toHaveBeenCalledOnce();
+
+      pending.resolve();
+      await flushAsyncSelect();
+      expect(harness.closeOverlay).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
     {
       name: "model",
       command: "/models",
@@ -1114,6 +1144,7 @@ describe("tui command handlers", () => {
     const { handleCommand, getGatewayStatus, addSystem, addUser, sendChat } = createHarness({
       getGatewayStatus: vi.fn().mockResolvedValue({
         runtimeVersion: "1.2.3",
+        channelSummary: ["Telegram: not configured"],
         sessions: { count: 2, defaults: { model: "gpt-5.4", contextTokens: 200000 } },
       }),
     });
@@ -1125,6 +1156,7 @@ describe("tui command handlers", () => {
     expect(sendChat).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("Gateway status");
     expect(addSystem).toHaveBeenCalledWith("Version: 1.2.3");
+    expect(addSystem).toHaveBeenCalledWith("  Telegram: not configured");
   });
 
   it("returns to OpenClaw with an optional request", async () => {

@@ -24,11 +24,8 @@ import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { queueEmbeddedAgentMessageWithOutcomeAsync } from "../agents/embedded-agent-runner/runs.js";
 import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
-import {
-  buildAllowedModelSet,
-  buildConfiguredModelCatalog,
-  resolveThinkingDefault,
-} from "../agents/model-selection.js";
+import { createModelCatalogView } from "../agents/model-catalog-view.js";
+import { buildConfiguredModelCatalog, resolveThinkingDefault } from "../agents/model-selection.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { resolveTextCommand } from "../auto-reply/commands-registry.js";
@@ -207,17 +204,18 @@ function ensureEmbeddedHistoryRuntimePluginsLoaded(params: {
   }
 }
 
-async function loadEmbeddedTuiModelCatalog(cfg: OpenClawConfig, agentId?: string) {
+async function loadEmbeddedModelCatalogView(cfg: OpenClawConfig, agentId?: string) {
   const replaceMode = cfg.models?.mode === "replace";
   const fullDiscovery = replaceMode && hasProviderWildcardModelAllowlist(cfg);
-  if (replaceMode && !fullDiscovery) {
-    return buildConfiguredModelCatalog({ cfg });
-  }
-  return await loadGatewayModelCatalog({
-    agentId,
-    getConfig: () => cfg,
-    ...(fullDiscovery ? { readOnly: false } : {}),
-  });
+  const catalog =
+    replaceMode && !fullDiscovery
+      ? buildConfiguredModelCatalog({ cfg })
+      : await loadGatewayModelCatalog({
+          agentId,
+          getConfig: () => cfg,
+          ...(fullDiscovery ? { readOnly: false } : {}),
+        });
+  return createModelCatalogView({ cfg, catalog });
 }
 
 function resolveBtwQuestion(message: string): string | undefined {
@@ -687,7 +685,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
-      const catalog = await loadEmbeddedTuiModelCatalog(cfg, sessionAgentId);
+      const { catalog } = await loadEmbeddedModelCatalogView(cfg, sessionAgentId);
       thinkingLevel = resolveThinkingDefault({
         cfg,
         provider: resolvedSessionModel.provider,
@@ -774,7 +772,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
           storeKey: primaryKey,
           agentId: target.agentId,
           patch: opts,
-          loadGatewayModelCatalog: () => loadEmbeddedTuiModelCatalog(cfg, target.agentId),
+          loadGatewayModelCatalog: async () =>
+            (await loadEmbeddedModelCatalogView(cfg, target.agentId)).catalog,
         }),
     });
     if (!applied.ok) {
@@ -825,11 +824,13 @@ export class EmbeddedTuiBackend implements TuiBackend {
       armSessionDiffBaselineCapture: true,
       emitCommandHooks: Boolean(opts.parentSessionKey),
       commandSource: "tui:embedded",
-      loadGatewayModelCatalog: () =>
-        loadEmbeddedTuiModelCatalog(
-          cfg,
-          resolveSessionAgentId({ sessionKey: opts.key, config: cfg, agentId: opts.agentId }),
-        ),
+      loadGatewayModelCatalog: async () =>
+        (
+          await loadEmbeddedModelCatalogView(
+            cfg,
+            resolveSessionAgentId({ sessionKey: opts.key, config: cfg, agentId: opts.agentId }),
+          )
+        ).catalog,
     });
     if (!result.ok) {
       throw new Error(result.error.message);
@@ -915,20 +916,16 @@ export class EmbeddedTuiBackend implements TuiBackend {
     await this.ready;
     await this.preparedModelRuntime.waitUntilReady();
     const cfg = getRuntimeConfig();
-    const catalog = await loadEmbeddedTuiModelCatalog(cfg, opts?.agentId);
-    const { allowedCatalog } = buildAllowedModelSet({
-      cfg,
-      catalog,
-      defaultProvider: DEFAULT_PROVIDER,
-      agentId: opts?.agentId,
-    });
-    return allowedCatalog.map((entry) => ({
-      id: entry.id,
-      name: entry.name ?? entry.id,
-      provider: entry.provider,
-      contextWindow: entry.contextWindow,
-      reasoning: entry.reasoning,
-    }));
+    const view = await loadEmbeddedModelCatalogView(cfg, opts?.agentId);
+    return view
+      .selectAgent({ defaultProvider: DEFAULT_PROVIDER, agentId: opts?.agentId })
+      .map((entry) => ({
+        id: entry.id,
+        name: entry.name ?? entry.id,
+        provider: entry.provider,
+        contextWindow: entry.contextWindow,
+        reasoning: entry.reasoning,
+      }));
   }
 
   async runGoalCommand(opts: Parameters<NonNullable<TuiBackend["runGoalCommand"]>>[0]) {

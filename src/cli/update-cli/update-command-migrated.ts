@@ -8,6 +8,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   readUpdateStateSchemaVersions,
+  resolveUpdateStateContentVersion,
   updateStateSchemaVersionsMatch,
 } from "../../infra/update-candidate-state.js";
 import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
@@ -17,7 +18,7 @@ import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { resolveCliName } from "../cli-name.js";
+import { CLI_NAME } from "../cli-name.js";
 import { resolveNodeRunner } from "./shared.js";
 import type { FinishUpdateParams } from "./update-command-post-update.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
@@ -26,8 +27,6 @@ import {
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service-env.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
-
-const CLI_NAME = resolveCliName();
 
 /** Inspect private state copies without reopening migrated state through the previous runtime. */
 export async function inspectActivatedUpdateState(
@@ -52,16 +51,15 @@ export async function inspectActivatedUpdateState(
       root: result.root ?? null,
       nodeRunner: params.packageUpdateNodeRunner,
     });
-    const sharedVersion = current.find(
-      (entry) => entry.path === resolveOpenClawStateSqlitePath(env),
-    )?.userVersion;
+    const shared = current.find((entry) => entry.path === resolveOpenClawStateSqlitePath(env));
+    const sharedVersion = shared ? resolveUpdateStateContentVersion(shared) : undefined;
     if (
       result.status === "ok" &&
       candidateSchemaVersions &&
       sharedVersion !== candidateSchemaVersions.state
     ) {
-      // Doctor can warn without failing. Startup must not perform a late
-      // migration underneath the previous runtime's ledger writer.
+      // Doctor can warn without failing. Require applied content so startup
+      // cannot migrate late; deferred publication alone is already ready.
       result.status = "error";
       result.reason = `${CLI_NAME} doctor`;
       result.steps.push({

@@ -3,6 +3,7 @@ import {
   readSessionMessageIdentity,
 } from "@openclaw/gateway-client/browser";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
 import {
   accumulatedStreamText,
   advanceAccumulatedStreamText,
@@ -40,6 +41,7 @@ function pruneAccumulatedStreamSegments(
   segments: readonly ChatStreamSegment[],
   activeRunId: string | null | undefined,
   shouldPrune: (segment: ChatStreamSegment, index: number) => boolean,
+  retiredItemId?: string,
 ): ChatStreamSegment[] {
   return segments.flatMap((segment, index) => {
     if (!shouldPrune(segment, index)) {
@@ -50,7 +52,7 @@ function pruneAccumulatedStreamSegments(
     // deltas to trim, so retaining it would leak sibling-run state.
     const foreignRun = Boolean(segment.runId && activeRunId && segment.runId !== activeRunId);
     return !foreignRun && streamSegmentUsesAccumulatedText(segment)
-      ? [{ ...segment, persisted: true as const }]
+      ? [{ ...segment, persisted: true as const, ...(retiredItemId ? { retiredItemId } : {}) }]
       : [];
   });
 }
@@ -75,6 +77,25 @@ export function reconcilePersistedAssistantStream(state: StreamSegmentPruningSta
   if (!runId) {
     return;
   }
+  for (const [index, segment] of (state.chatStreamSegments ?? []).entries()) {
+    if (segment.runId !== runId || !segment.itemId || !segment.pendingStreamText) {
+      continue;
+    }
+    const handoff = retireCommentaryStream(state, {
+      runId,
+      itemId: segment.itemId,
+      text: segment.text,
+      timestamp: segment.ts,
+      pendingStreamText: segment.pendingStreamText,
+    });
+    const segments = [...(state.chatStreamSegments ?? [])];
+    segments[index] = {
+      ...segment,
+      text: handoff?.text ?? segment.text,
+      pendingStreamText: handoff?.pendingStreamText,
+    };
+    state.chatStreamSegments = segments;
+  }
   const stream = state.chatStream ?? accumulatedStreamText(state.chatStreamSegments ?? []);
   if (!stream) {
     return;
@@ -94,16 +115,28 @@ export function reconcilePersistedAssistantStream(state: StreamSegmentPruningSta
   if (!prefix) {
     return;
   }
+  retireCumulativePrefix(state, runId, prefix, Date.now());
+}
+
+function retireCumulativePrefix(
+  state: StreamSegmentPruningState,
+  runId: string,
+  prefix: string,
+  timestamp: number,
+  retirement?: { itemId: string; segmentIndex?: number },
+): void {
+  const stream = state.chatStream ?? accumulatedStreamText(state.chatStreamSegments ?? []);
   let segments = state.chatStreamSegments ?? [];
   const accumulated = state.chatStream === null ? stream : accumulatedStreamText(segments);
-  const shouldPrune = (segment: ChatStreamSegment) =>
+  const shouldPrune = (segment: ChatStreamSegment, index: number) =>
+    (!retirement || index === retirement.segmentIndex) &&
     segment.persisted !== true &&
     segment.runId === runId &&
     streamSegmentUsesAccumulatedText(segment) &&
     prefix.startsWith(segment.text);
   // Preserve renderer identity fast paths when persistence retires no segments.
   if (segments.some(shouldPrune)) {
-    segments = pruneAccumulatedStreamSegments(segments, runId, shouldPrune);
+    segments = pruneAccumulatedStreamSegments(segments, runId, shouldPrune, retirement?.itemId);
     state.chatStreamSegments = segments;
   }
   if (advanceAccumulatedStreamText(accumulated, prefix) === accumulated) {
@@ -113,17 +146,82 @@ export function reconcilePersistedAssistantStream(state: StreamSegmentPruningSta
   // prefix; keep the received buffer intact so later deltas cannot restart it.
   const last = segments.at(-1);
   const extendsPersisted =
-    last?.persisted && last.runId === runId && !last.boundaryRunId && !last.toolCallId;
+    last?.persisted &&
+    last.runId === runId &&
+    !last.boundaryRunId &&
+    !last.toolCallId &&
+    !last.retiredItemId &&
+    !retirement;
   state.chatStreamSegments = [
     ...(extendsPersisted ? segments.slice(0, -1) : segments),
     {
       ...(extendsPersisted ? last : {}),
       text: prefix,
-      ts: state.chatStreamStartedAt ?? Date.now(),
+      ts: state.chatStreamStartedAt ?? timestamp,
       runId,
       persisted: true,
+      ...(retirement ? { retiredItemId: retirement.itemId } : {}),
     },
   ];
+}
+
+/** Transfer one complete cumulative occurrence to its first keyed owner. */
+export function retireCommentaryStream(
+  state: StreamSegmentPruningState,
+  commentary: {
+    runId: string;
+    itemId: string;
+    text: string;
+    timestamp: number;
+    pendingStreamText?: string;
+  },
+): { text: string; pendingStreamText?: string } | null {
+  if (
+    state.chatRunId !== commentary.runId ||
+    state.chatStreamSegments?.some(
+      (segment) =>
+        segment.runId === commentary.runId && segment.retiredItemId === commentary.itemId,
+    )
+  ) {
+    return null;
+  }
+  const part = visibleAssistantStreamParts(state, {
+    includeCurrent: true,
+    isHiddenStreamText: () => false,
+  }).at(-1);
+  if (!part || part.itemId || part.runId !== commentary.runId || part.boundaryRunId) {
+    return null;
+  }
+  if (
+    commentary.pendingStreamText &&
+    !part.replacementText.startsWith(commentary.pendingStreamText)
+  ) {
+    return null;
+  }
+  const preceding = (state.chatStreamSegments ?? []).slice(0, part.segmentIndex);
+  const prefix = accumulatedStreamText(preceding);
+  const rawTail =
+    prefix && part.replacementText.startsWith(prefix)
+      ? part.replacementText.slice(prefix.length)
+      : part.replacementText;
+  const text = stripInlineDirectiveTagsForDelivery(rawTail)
+    .text.replace(/^(?:[ \t]*\r?\n)+/u, "")
+    .trimEnd();
+  // The preamble producer flattens whitespace. Keep the cumulative formatting
+  // when that exact projection identifies the same complete occurrence.
+  const projectedText = text.replace(/\s+/gu, " ").trim();
+  if (!text || (text !== commentary.text && projectedText !== commentary.text)) {
+    // Item events can overtake the last chat delta. Only that observed prefix
+    // may complete this pending handoff; a later unrelated occurrence cannot.
+    return projectedText && commentary.text.startsWith(projectedText)
+      ? { text: commentary.text, pendingStreamText: part.replacementText }
+      : null;
+  }
+  retireCumulativePrefix(state, commentary.runId, part.replacementText, commentary.timestamp, {
+    itemId: commentary.itemId,
+    segmentIndex: part.segmentIndex,
+  });
+  return { text };
 }
 
 /** A durable commentary row immediately replaces its keyed live projection.

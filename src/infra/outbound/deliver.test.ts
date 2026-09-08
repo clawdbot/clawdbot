@@ -1581,34 +1581,199 @@ describe("deliverOutboundPayloads", () => {
     expect(messageSendText).toHaveBeenCalledOnce();
   });
 
-  it("passes stable part indexes to exact multi-media sends", async () => {
-    const messageSendMedia = vi.fn(async (ctx: ChannelMessageSendMediaContext) =>
-      createMatrixMessageSendResult(`media-${ctx.deliveryPartIndex}`, "media"),
-    );
-    setMatrixMessageAdapter({
-      id: "matrix",
-      durableFinal: {
-        capabilities: { text: true, media: true, reconcileUnknownSend: true },
-        reconcileUnknownSendKinds: { media: true },
-        reconcileUnknownSend: async () => ({ status: "not_sent" }),
-      },
-      send: { text: vi.fn(), media: messageSendMedia },
-    });
+  it.each([
+    { payloadCapable: false, requireReconciliation: false },
+    { payloadCapable: false, requireReconciliation: true },
+    { payloadCapable: true, requireReconciliation: true },
+  ])(
+    "keeps multi-media on its declared transport ($payloadCapable, $requireReconciliation)",
+    async ({ payloadCapable, requireReconciliation }) => {
+      const messageSendMedia = vi.fn(async (ctx: ChannelMessageSendMediaContext) =>
+        createMatrixMessageSendResult(`media-${ctx.deliveryPartIndex}`, "media"),
+      );
+      const sendPayload = vi.fn();
+      setMatrixMessageAdapter(
+        {
+          id: "matrix",
+          durableFinal: {
+            capabilities: {
+              text: true,
+              media: true,
+              payload: payloadCapable,
+              reconcileUnknownSend: true,
+            },
+            reconcileUnknownSendKinds: { media: true },
+            reconcileUnknownSend: async () => ({ status: "not_sent" }),
+          },
+          send: { text: vi.fn(), media: messageSendMedia, payload: sendPayload },
+        },
+        {
+          sendPayload,
+          sendPayloadGroupsMedia: true,
+          deliveryCapabilities: { durableFinal: { payload: true } },
+        },
+      );
 
-    await expect(
-      deliverMatrix({
+      await expect(
+        deliverMatrix({
+          payloads: [
+            {
+              text: "caption",
+              mediaUrls: ["https://example.com/first.png", "https://example.com/second.png"],
+            },
+          ],
+          queuePolicy: "required",
+          requireUnknownSendReconciliation: requireReconciliation,
+        }),
+      ).resolves.toHaveLength(2);
+      expect(messageSendMedia.mock.calls.map(([ctx]) => ctx.deliveryPartIndex)).toEqual([0, 1]);
+      expect(messageSendMedia.mock.calls.map(([ctx]) => [ctx.text, ctx.deliveryPartCount])).toEqual(
+        [
+          ["caption", 2],
+          ["", 2],
+        ],
+      );
+      expect(sendPayload).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["outbound", "message"] as const)(
+    "preserves a whole media list for declared %s payload transport",
+    async (adapter) => {
+      const mediaUrls = ["https://example.com/first.png", "https://example.com/second.png"];
+      const receipt = createMessageReceiptFromOutboundResults({
+        results: [{ messageId: "media-1" }, { messageId: "media-2" }],
+        kind: "media",
+      });
+      const sendPayload = vi.fn(
+        async (_ctx: Pick<Parameters<OutboundPayloadSender>[0], "payload">) => ({
+          channel: "matrix" as const,
+          messageId: "media-2",
+          receipt,
+        }),
+      );
+      const sendMedia = vi.fn<OutboundMediaSender>(async () => ({
+        channel: "matrix",
+        messageId: "single",
+      }));
+      const capabilities = { text: true, media: true, payload: true };
+      const outbound = {
+        sendPayload,
+        sendMedia,
+        sendPayloadGroupsMedia: true,
+        deliveryCapabilities: { durableFinal: capabilities },
+      };
+      if (adapter === "message") {
+        setMatrixMessageAdapter(
+          {
+            id: "matrix",
+            durableFinal: { capabilities },
+            send: {
+              text: vi.fn(),
+              payload: async (ctx) => ({ ...(await sendPayload(ctx)), receipt }),
+            },
+          },
+          outbound,
+        );
+      } else {
+        setTestOutbound(outbound);
+      }
+      const onPayloadDeliveryOutcome = vi.fn();
+
+      const results = await deliverMatrix({
+        payloads: [{ text: "caption", mediaUrls }],
+        onPayloadDeliveryOutcome,
+      });
+
+      expect(sendPayload).toHaveBeenCalledOnce();
+      expect(sendPayload).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "payload",
+          payload: expect.objectContaining({ text: "caption", mediaUrls }),
+        }),
+      );
+      expect(sendMedia).not.toHaveBeenCalled();
+      expect(results[0]?.receipt?.platformMessageIds).toEqual(["media-1", "media-2"]);
+      expect(onPayloadDeliveryOutcome).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: "sent",
+          deliveryKind: "media",
+        }),
+      );
+
+      await deliverMatrix({ payloads: [{ text: "single caption", mediaUrl: mediaUrls[0] }] });
+      expect(sendPayload).toHaveBeenCalledOnce();
+      expect(sendMedia).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["cancellation", "owner loss"])(
+    "stops a payload-capable channel's media sequence after %s without group opt-in",
+    async (stop) => {
+      const firstSendStarted = createDeferredCore();
+      const finishFirstSend = createDeferredCore();
+      const abortController = new AbortController();
+      let ownerIsCurrent = true;
+      let acceptedUploads = 0;
+      const sendMedia = vi.fn<OutboundMediaSender>(async ({ mediaUrl }) => {
+        if (mediaUrl === "https://example.com/first.png") {
+          firstSendStarted.resolve();
+          await finishFirstSend.promise;
+        }
+        return { channel: "msteams", messageId: `media-${++acceptedUploads}` };
+      });
+      const sendPayload = vi.fn<OutboundPayloadSender>(async (ctx) => {
+        const first = await sendMedia({ ...ctx, mediaUrl: "https://example.com/first.png" });
+        await ctx.onDeliveryResult?.(first);
+        return await sendMedia({ ...ctx, text: "", mediaUrl: "https://example.com/second.png" });
+      });
+      setTestOutbound(
+        {
+          sendMedia,
+          sendPayload,
+          deliveryCapabilities: { durableFinal: { text: true, media: true, payload: true } },
+        },
+        "msteams",
+      );
+      const delivery = deliverOutboundPayloads({
+        cfg: {},
+        channel: "msteams",
+        to: "conversation:test",
         payloads: [
           {
             text: "caption",
             mediaUrls: ["https://example.com/first.png", "https://example.com/second.png"],
           },
         ],
-        queuePolicy: "required",
-        requireUnknownSendReconciliation: true,
-      }),
-    ).resolves.toHaveLength(2);
-    expect(messageSendMedia.mock.calls.map(([ctx]) => ctx.deliveryPartIndex)).toEqual([0, 1]);
-  });
+        skipQueue: true,
+        abortSignal: abortController.signal,
+        assertDirectAdapterHandoff: () => {
+          if (!ownerIsCurrent) {
+            throw new Error("delivery owner closed");
+          }
+        },
+      });
+      const outcome = delivery.then(
+        () => "sent",
+        (error: unknown) => error,
+      );
+      await firstSendStarted.promise;
+      if (stop === "cancellation") {
+        abortController.abort();
+      } else {
+        ownerIsCurrent = false;
+      }
+      finishFirstSend.resolve();
+
+      expect(await outcome).toMatchObject({
+        message: expect.stringContaining(
+          stop === "cancellation" ? "Operation aborted" : "delivery owner closed",
+        ),
+      });
+      expect(sendMedia).toHaveBeenCalledOnce();
+      expect(sendPayload).not.toHaveBeenCalled();
+    },
+  );
 
   it("freezes reply-hook media fan-out into the exact prepared send", async () => {
     hookMocks.runner.hasHooks.mockImplementation(

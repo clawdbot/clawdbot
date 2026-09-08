@@ -4,6 +4,7 @@ import {
   isLegacySecretRefEnvMarker,
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
+import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 
 type WebProviderConfigSource = {
   tools?: {
@@ -21,26 +22,6 @@ type ProviderWithCredential = {
 };
 
 type WebContentProcessEnv = Record<string, string | undefined>;
-
-function normalizeSecretInput(value: unknown): string {
-  if (typeof value !== "string") {
-    return "";
-  }
-  const collapsed = value.replace(/[\r\n\u2028\u2029]+/g, "");
-  let latin1Only = "";
-  for (const char of collapsed) {
-    const codePoint = char.codePointAt(0);
-    const isControl =
-      typeof codePoint === "number" &&
-      ((codePoint >= 0x00 && codePoint <= 0x1f) ||
-        codePoint === 0x7f ||
-        (codePoint >= 0x80 && codePoint <= 0x9f));
-    if (typeof codePoint === "number" && codePoint <= 0xff && !isControl) {
-      latin1Only += char;
-    }
-  }
-  return latin1Only.trim();
-}
 
 export function resolveWebProviderConfig(
   cfg: WebProviderConfigSource | undefined,

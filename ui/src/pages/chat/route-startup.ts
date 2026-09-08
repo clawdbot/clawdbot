@@ -94,7 +94,7 @@ export function prepareChatRouteStartup(
   };
 }
 
-export function consumeChatRouteStartup(
+export function peekChatRouteStartup(
   client: GatewayBrowserClient,
   sessionKey: string,
 ): ChatHistoryResult | undefined {
@@ -109,6 +109,16 @@ export function consumeChatRouteStartup(
   if (handoff.sessionKey !== sessionKey) {
     return undefined;
   }
-  handoff.dispose();
   return handoff.result;
+}
+
+export function consumeChatRouteStartup(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+): ChatHistoryResult | undefined {
+  const result = peekChatRouteStartup(client, sessionKey);
+  if (result) {
+    startupHandoffs.get(client)?.dispose();
+  }
+  return result;
 }

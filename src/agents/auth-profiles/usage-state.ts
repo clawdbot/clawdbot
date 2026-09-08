@@ -37,6 +37,18 @@ export function isAuthCooldownBypassedForProvider(provider: string | undefined):
   return normalized === "openrouter" || normalized === "kilocode";
 }
 
+export function resolveInlineProviderApiKeyUsageId(provider: string): string {
+  return `inline-api-key:${normalizeProviderId(provider)}`;
+}
+
+/** Reads inline-key health using the same identity and bypass policy as its writer. */
+export function readInlineProviderApiKeyUsage(store: AuthProfileStore, provider: string) {
+  const stats = isAuthCooldownBypassedForProvider(provider)
+    ? undefined
+    : store.usageStats?.[resolveInlineProviderApiKeyUsageId(provider)];
+  return { stats, unusableUntil: stats ? resolveProfileUnusableUntil(stats) : null };
+}
+
 // Per-attempt transient failures (#87462, #116464): block only the failing
 // model so fallback models on the same auth profile can still try. A model that
 // the provider does not serve (model_not_found) says nothing about sibling

@@ -191,6 +191,7 @@ export type SkillProposalManifestEntry = {
   createdAt: string;
   updatedAt: string;
   scanState: SkillProposalScannerState;
+  revisionHash: string;
   /** The durable proposal body is unavailable; metadata remains inspectable in list output. */
   degradedState?: "draft-missing";
 };

@@ -1564,6 +1564,14 @@ extension GatewayEndpointStoreTests {
                 identity: routeA.identity,
                 remotePort: routeA.remotePort,
                 hostKeyPolicy: .openssh)))
+        #expect(!RemoteTunnelManager._testCanReuse(
+            routeA,
+            for: .init(
+                target: routeA.target,
+                identity: routeA.identity,
+                remotePort: routeA.remotePort,
+                hostKeyPolicy: routeA.hostKeyPolicy,
+                preferredLocalPort: 23000)))
     }
 
     @Test func `ssh restart backoff propagates cancellation`() async {
