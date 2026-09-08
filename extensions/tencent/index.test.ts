@@ -129,27 +129,33 @@ describe("tencent provider plugin", () => {
     });
   });
 
-  it.each([
-    {
-      providerId: "tencent-tokenhub",
-      choiceId: "tokenhub-api-key",
-      flagValue: "tokenhub-test-key",
-      envVar: "TOKENHUB_API_KEY",
-      aliases: {
-        "tencent-tokenhub/hy3": { alias: "Hy3 (TokenHub)" },
-        "tencent-tokenhub/hy3-preview": { alias: "Hy3 preview (TokenHub)" },
-      },
-    },
-    {
-      providerId: "tencent-tokenplan",
-      choiceId: "tokenplan-api-key",
-      flagValue: "tokenplan-test-key",
-      envVar: "TOKENPLAN_API_KEY",
-      aliases: { "tencent-tokenplan/hy3": { alias: "Hy3 (TokenPlan)" } },
-    },
-  ] as const)(
-    "configures only $providerId through its registered auth method",
-    async ({ providerId, choiceId, flagValue, envVar, aliases }) => {
+  it.each(
+    (
+      [
+        {
+          providerId: "tencent-tokenhub",
+          choiceId: "tokenhub-api-key",
+          flagValue: "tokenhub-test-key",
+          envVar: "TOKENHUB_API_KEY",
+          aliases: {
+            "tencent-tokenhub/hy3": { alias: "Hy3 (TokenHub)" },
+            "tencent-tokenhub/hy3-preview": { alias: "Hy3 preview (TokenHub)" },
+          },
+        },
+        {
+          providerId: "tencent-tokenplan",
+          choiceId: "tokenplan-api-key",
+          flagValue: "tokenplan-test-key",
+          envVar: "TOKENPLAN_API_KEY",
+          aliases: { "tencent-tokenplan/hy3": { alias: "Hy3 (TokenPlan)" } },
+        },
+      ] as const
+    ).flatMap((provider) =>
+      ([undefined, "replace"] as const).map((mode) => Object.assign({}, provider, { mode })),
+    ),
+  )(
+    "configures only $providerId through its registered auth method in $mode mode",
+    async ({ providerId, choiceId, flagValue, envVar, aliases, mode }) => {
       const { providers } = await registerTencentPlugin();
       const provider = requireRegisteredProvider(providers, providerId);
       const resolveApiKey = vi.fn(async () => ({
@@ -163,8 +169,8 @@ describe("tencent provider plugin", () => {
       }
       const config = await method.runNonInteractive({
         authChoice: choiceId,
-        config: {},
-        baseConfig: {},
+        config: { models: { mode } },
+        baseConfig: { models: { mode } },
         opts: { tokenhubApiKey: "tokenhub-test-key", tokenplanApiKey: "tokenplan-test-key" },
         runtime: createRuntimeEnv(),
         resolveApiKey,
@@ -180,7 +186,9 @@ describe("tencent provider plugin", () => {
       expect(toApiKeyCredential).not.toHaveBeenCalled();
       expect(Object.keys(config?.models?.providers ?? {})).toEqual([providerId]);
       expect(config?.models?.providers?.[providerId]?.models.map((model) => model.id)).toEqual(
-        manifest.modelCatalog.providers[providerId].models.map((model) => model.id),
+        mode === "replace"
+          ? manifest.modelCatalog.providers[providerId].models.map((model) => model.id)
+          : [],
       );
       expect(config?.agents?.defaults?.model).toEqual({ primary: `${providerId}/hy3` });
       expect(config?.agents?.defaults?.models).toEqual(aliases);

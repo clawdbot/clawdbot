@@ -174,7 +174,20 @@ vi.mock("./directive-handling.auth.js", () => ({
   },
 }));
 
-vi.mock("../../agents/auth-profiles/store.js", () => {
+vi.mock("../../agents/auth-profiles/store.js", async (importOriginal) => {
+  const store = () => ({
+    version: 1,
+    profiles: authProfilesStoreMock.profiles,
+  });
+  return {
+    ...(await importOriginal<typeof import("../../agents/auth-profiles/store.js")>()),
+    findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
+      authProfilesStoreMock.profiles[profileId],
+    getRuntimeAuthProfileStoreSnapshot: store,
+    hasAnyAuthProfileStoreSource: () => Object.keys(authProfilesStoreMock.profiles).length > 0,
+  };
+});
+vi.mock("../../agents/auth-profiles/store-runtime.js", () => {
   const store = () => ({
     version: 1,
     profiles: authProfilesStoreMock.profiles,
@@ -182,10 +195,6 @@ vi.mock("../../agents/auth-profiles/store.js", () => {
   return {
     ensureAuthProfileStore: store,
     ensureAuthProfileStoreForLocalUpdate: store,
-    findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
-      authProfilesStoreMock.profiles[profileId],
-    getRuntimeAuthProfileStoreSnapshot: store,
-    hasAnyAuthProfileStoreSource: () => Object.keys(authProfilesStoreMock.profiles).length > 0,
     loadAuthProfileStore: store,
     loadAuthProfileStoreForRuntime: store,
     loadAuthProfileStoreForSecretsRuntime: store,

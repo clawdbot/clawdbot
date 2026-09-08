@@ -1,4 +1,4 @@
-import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
+import { normalizeToolParameterSchema } from "@openclaw/ai/internal/tool-schema";
 import { expectDefined } from "@openclaw/normalization-core";
 /**
  * Tests provider-compatible tool schema normalization.
@@ -1369,6 +1369,9 @@ describe("normalizeToolParameters", () => {
         properties: Object.fromEntries([
           ["__proto__", { type: "array", items: {} }],
           ["emptyItems", { type: "array" }],
+          ["undefinedItems", { type: "array", items: undefined }],
+          ["unionItems", { type: ["array", "null"], items: {} }],
+          ["unionUndefinedItems", { type: ["array", "null"], items: undefined }],
           ["typedItems", { type: "array", items: { type: "string" } }],
           ["falseItems", { type: "array", items: false }],
           ["nullItems", { type: "array", items: null }],
@@ -1388,6 +1391,9 @@ describe("normalizeToolParameters", () => {
       properties: Object.fromEntries([
         ["__proto__", { type: "array" }],
         ["emptyItems", { type: "array" }],
+        ["undefinedItems", { type: "array" }],
+        ["unionItems", { type: ["array", "null"] }],
+        ["unionUndefinedItems", { type: ["array", "null"], items: undefined }],
         ["typedItems", { type: "array", items: { type: "string" } }],
         ["falseItems", { type: "array", items: false }],
         ["nullItems", { type: "array", items: null }],

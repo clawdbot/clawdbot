@@ -1,9 +1,44 @@
 /** Tests bounded deterministic tool schema hints, including adversarial shapes. */
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
+import {
+  compactToolInputHint,
+  compactToolOutputHint,
+  toolSchemaDeclaration,
+} from "./tool-schema-hints.js";
 
 describe("tool schema hints", () => {
+  it("keeps unknown leaves and dictionaries honest in full declarations", () => {
+    const schema = Type.Object(
+      {
+        value: Type.Unknown(),
+        rows: Type.Record(Type.String(), Type.Number()),
+        opaque: { $ref: "#/$defs/hidden" },
+      },
+      { additionalProperties: false },
+    );
+    expect(toolSchemaDeclaration(schema)).toBe(
+      "{ opaque: unknown; rows: unknown; value: unknown }",
+    );
+    expect(
+      toolSchemaDeclaration({ type: "object", additionalProperties: { type: "string" } }),
+    ).toBe("{ [key: string]: string }");
+    expect(toolSchemaDeclaration(undefined)).toBe("unknown");
+  });
+
+  it("exposes fields beyond the compact output budget without changing compact hints", () => {
+    const schema = Type.Object(
+      Object.fromEntries(
+        Array.from({ length: 24 }, (_, index) => ["field" + index, Type.String()]),
+      ),
+      { additionalProperties: false },
+    );
+    expect(compactToolOutputHint(schema)).toBeUndefined();
+    const declaration = toolSchemaDeclaration(schema);
+    expect(declaration).toContain("field23: string");
+    expect(declaration).not.toContain("...");
+  });
+
   it.each([
     { schema: { type: "number" }, input: "number" },
     { schema: { type: "integer" }, input: "number /* integer */" },
@@ -193,6 +228,28 @@ describe("tool schema hints", () => {
 
     expect(compactToolOutputHint(outputSchema)).toBe(
       "{ count: number; messages: Array<unknown>; payload?: unknown }",
+    );
+  });
+
+  it.each([
+    { limit: 300, delta: -1 },
+    { limit: 300, delta: 0 },
+    { limit: 300, delta: 1 },
+    { limit: 800, delta: -1 },
+    { limit: 800, delta: 0 },
+    { limit: 800, delta: 1 },
+  ])("preserves the $limit UTF-16 boundary at offset $delta", ({ limit, delta }) => {
+    const literal = "x".repeat(limit - 24 + delta);
+    const schema = Type.Object(
+      { a: Type.String(), "z😀": Type.Literal(literal) },
+      { additionalProperties: false },
+    );
+    const render = limit === 300 ? compactToolInputHint : compactToolOutputHint;
+    const expected = `{ a: string; "z😀": "${literal}" }`;
+
+    expect(expected.length).toBe(limit + delta);
+    expect(render(schema)).toBe(
+      delta <= 0 ? expected : limit === 300 ? "{ a: string; ... }" : undefined,
     );
   });
 

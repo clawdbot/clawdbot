@@ -11,7 +11,11 @@ import {
 } from "../config/plugin-install-record-map.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUserPath } from "../infra/home-dir.js";
-import { compileSqliteQueryBindings, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  compileSqliteQueryBindings,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
@@ -58,25 +62,34 @@ export type InstalledPluginIndexWriteLease = {
 export type InstalledPluginIndexWriteReceipt = {
   previous: InstalledPluginIndex | null;
   revision: number;
+  /** Exact transaction-owned facts, not permission to restore or proof of current state. */
+  mutation: {
+    databasePath: string;
+    before: InstalledPluginIndexRow | null;
+    after: InstalledPluginIndexRow;
+  };
 };
 
 type InstalledPluginIndexDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
+type InstalledPluginIndexRow = Pick<
+  InstalledPluginIndexDatabase["config_machine_state"],
+  "state_key" | "value_json" | "updated_at_ms"
+>;
 type PersistedInstalledPluginIndexValue = { revision: number; index: unknown };
 
-function readInstalledPluginIndexRow(
-  database: DatabaseSync,
-): PersistedInstalledPluginIndexValue | undefined {
-  const { compiled, bind } = compileSqliteQueryBindings<void>(() =>
+function readInstalledPluginIndexRow(database: DatabaseSync): InstalledPluginIndexRow | undefined {
+  return executeSqliteQueryTakeFirstSync(
+    database,
     getNodeSqliteKysely<InstalledPluginIndexDatabase>(database)
       .selectFrom("config_machine_state")
-      .select("value_json")
+      .select(["state_key", "value_json", "updated_at_ms"])
       .where("state_key", "=", INSTALLED_PLUGIN_INDEX_STATE_KEY),
   );
-  // sqlite-allow-raw: Compiled SQL keeps the transaction's native point-read errors.
-  // SAFETY: The compiled query selects the canonical STRICT table's TEXT column.
-  const row = database.prepare(compiled.sql).get(...bind()) as
-    | Pick<InstalledPluginIndexDatabase["config_machine_state"], "value_json">
-    | undefined;
+}
+
+function parseInstalledPluginIndexRow(
+  row: InstalledPluginIndexRow | undefined,
+): PersistedInstalledPluginIndexValue | undefined {
   if (!row) {
     return undefined;
   }
@@ -184,8 +197,9 @@ function writePersistedInstalledPluginIndexToSqlite(
 ): InstalledPluginIndexWriteReceipt {
   assertWritableInstalledPluginIndexStoreOptions(options);
   const persisted = preparePersistedInstalledPluginIndex(index);
-  return runOpenClawStateWriteTransaction(({ db }) => {
-    const previousRow = readInstalledPluginIndexRow(db);
+  return runOpenClawStateWriteTransaction(({ db, path: databasePath }) => {
+    const before = readInstalledPluginIndexRow(db);
+    const previousRow = parseInstalledPluginIndexRow(before);
     if (previousRow) {
       // SAFETY: field probe on the stored value; inspectPluginInstallRecordMap validates it.
       const previousInstallRecords = (previousRow.index as { installRecords?: unknown } | null)
@@ -204,9 +218,15 @@ function writePersistedInstalledPluginIndexToSqlite(
       previousRow ? previousRow.revision : null,
     );
     writePersistedInstalledPluginIndexRow(db, persisted, revision);
+    // Capture inside the same transaction; later reads could include another writer's work.
+    const after = readInstalledPluginIndexRow(db);
+    if (!after) {
+      throw new Error("Installed plugin index write did not persist its row");
+    }
     return {
       previous: previousRow ? parseInstalledPluginIndex(previousRow.index) : null,
       revision,
+      mutation: { databasePath, before: before ?? null, after },
     };
   }, resolveInstalledPluginIndexStateDatabaseOptions(options));
 }
@@ -241,7 +261,7 @@ export async function restorePersistedInstalledPluginIndexIfCurrent(
   }
   const restored = runOpenClawStateWriteTransaction(({ db }) => {
     lease.assertOwnedInTransaction(db);
-    const currentRow = readInstalledPluginIndexRow(db);
+    const currentRow = parseInstalledPluginIndexRow(readInstalledPluginIndexRow(db));
     const currentRevision = currentRow ? currentRow.revision : null;
     if (currentRevision !== expectedRevision) {
       return false;

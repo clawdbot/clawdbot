@@ -2,6 +2,7 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import { extractEmbeddedAssistantText } from "../../embedded-agent-utils.js";
 import {
   isStrictAgenticSupportedProviderModel,
   stripProviderPrefix,
@@ -40,6 +41,43 @@ export type IncompleteTurnAttempt = Pick<
   | "toolMetas"
 > &
   Partial<Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">>;
+
+function readAssistantSnapshotText(message: AgentMessage): string {
+  return message.role === "assistant" ? extractEmbeddedAssistantText(message).trim() : "";
+}
+
+/** Keeps pre-tool commentary distinct from a composed answer at both recovery gates. */
+export function hasComposedVisibleAnswerAfterSettledTools(params: {
+  assistantTexts: readonly string[];
+  messagesSnapshot: EmbeddedRunAttemptResult["messagesSnapshot"];
+}): boolean {
+  // Prior turns cannot explain this attempt's visible subscription text.
+  const latestUserIndex = params.messagesSnapshot.findLastIndex(
+    (message) => message.role === "user",
+  );
+  const currentMessages = params.messagesSnapshot.slice(latestUserIndex + 1);
+  const lastToolResultIndex = currentMessages.findLastIndex(
+    (message) => message.role === "toolResult",
+  );
+  if (lastToolResultIndex < 0) {
+    return params.assistantTexts.some((text) => text.trim().length > 0);
+  }
+  if (
+    currentMessages
+      .slice(lastToolResultIndex + 1)
+      .some((message) => readAssistantSnapshotText(message).length > 0)
+  ) {
+    return true;
+  }
+  // A repeated fragment is ambiguous; only whole commentary messages explain text.
+  const preToolTexts = new Set(
+    currentMessages.slice(0, lastToolResultIndex).map(readAssistantSnapshotText),
+  );
+  return params.assistantTexts.some((text) => {
+    const trimmed = text.trim();
+    return trimmed.length > 0 && !preToolTexts.has(trimmed);
+  });
+}
 
 export function hasPositiveOutputTokenUsage(message: AgentMessage | null): boolean {
   if (!message || typeof message !== "object") {

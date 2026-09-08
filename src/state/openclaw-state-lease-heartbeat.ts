@@ -16,6 +16,7 @@ export function startOpenClawStateLeaseHeartbeat(
     onLost: (error: Error) => void;
   },
 ) {
+  const startedAt = performance.now();
   const shared = new BigInt64Array(new SharedArrayBuffer(3 * BigInt64Array.BYTES_PER_ELEMENT));
   const url = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.stateLeaseHeartbeat);
   const worker = new Worker(url, {
@@ -50,23 +51,41 @@ export function startOpenClawStateLeaseHeartbeat(
     ready.reject(error);
     params.onLost(error);
   };
-  const settleStartup = () => {
+  const settleStartup = (trigger: "timeout" | "message") => {
     clearTimeout(startTimer);
     // Readiness precedes notification delivery. A delayed parent must not
     // overwrite ready; callback entry still requires a fresh acknowledgement.
-    if (Atomics.compareExchange(shared, state.status, state.starting, state.lost) === state.ready) {
+    const observedStatus = Atomics.compareExchange(
+      shared,
+      state.status,
+      state.starting,
+      state.lost,
+    );
+    if (observedStatus === state.ready) {
       ready.resolve();
     } else {
-      fail(new Error("state lease heartbeat did not become ready"));
+      // Report the status before our transition, not the lost state it writes.
+      const status =
+        observedStatus === state.starting
+          ? "starting"
+          : observedStatus === state.lost
+            ? "lost"
+            : "closed";
+      fail(
+        new Error(
+          `state lease heartbeat did not become ready (phase=startup, trigger=${trigger}, status=${status}, elapsedMs=${Math.round(performance.now() - startedAt)}, timeoutMs=${startupTimeoutMs})`,
+        ),
+      );
     }
   };
-  const startTimer = setTimeout(
-    settleStartup,
-    Math.max(1, Math.min(WORKER_START_TIMEOUT_MS, params.expiresAt - Date.now())),
+  const startupTimeoutMs = Math.max(
+    1,
+    Math.min(WORKER_START_TIMEOUT_MS, params.expiresAt - Date.now()),
   );
+  const startTimer = setTimeout(() => settleStartup("timeout"), startupTimeoutMs);
   worker.once("error", fail);
   worker.once("exit", () => fail(new Error("state lease heartbeat exited")));
-  worker.once("message", settleStartup);
+  worker.once("message", () => settleStartup("message"));
   let stopping: Promise<number> | undefined;
   const close = () => {
     Atomics.store(shared, state.status, state.closed);

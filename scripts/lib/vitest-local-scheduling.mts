@@ -70,6 +70,25 @@ export function detectVitestHostInfo() {
   };
 }
 
+// Vite bundles each project config on its own, so a module-level cache would be
+// per-project. The snapshot must live on globalThis to span every bundle in a process.
+const SCHEDULING_HOST_INFO = Symbol.for("openclaw.vitestSchedulingHostInfo");
+
+/**
+ * Worker sizing reads the 1m load average, so re-detecting per Vitest project lets two
+ * projects resolve different maxWorkers. Vitest rejects a run whose projects share
+ * sequence.groupOrder but disagree on maxWorkers, and the selection then collects zero
+ * tests. Size every project in a process against one snapshot; live readings stay on
+ * detectVitestHostInfo for the resource reporter.
+ */
+function schedulingHostInfo(): ReturnType<typeof detectVitestHostInfo> {
+  const store = globalThis as Record<PropertyKey, unknown>;
+  if (!Object.hasOwn(store, SCHEDULING_HOST_INFO)) {
+    store[SCHEDULING_HOST_INFO] = detectVitestHostInfo();
+  }
+  return store[SCHEDULING_HOST_INFO] as ReturnType<typeof detectVitestHostInfo>;
+}
+
 function resolveMemoryPressureWorkerLimit(system: VitestHostInfo) {
   const freeMemoryGb = (system.freeMemoryBytes ?? 0) / 1024 ** 3;
   if (!Number.isFinite(freeMemoryGb) || freeMemoryGb <= 0) {
@@ -89,7 +108,7 @@ function resolveMemoryPressureWorkerLimit(system: VitestHostInfo) {
  */
 export function resolveLocalVitestScheduling(
   env: Record<string, string | undefined> = process.env,
-  system: VitestHostInfo = detectVitestHostInfo(),
+  system: VitestHostInfo = schedulingHostInfo(),
   pool: "forks" | "threads" = "threads",
 ): LocalVitestScheduling {
   const override = parsePositiveInt(
@@ -195,7 +214,7 @@ export function resolveLocalVitestScheduling(
 /** @internal Shared repository-script contract. */
 export function resolveLocalFullSuiteProfile(
   env: Record<string, string | undefined> = process.env,
-  system: VitestHostInfo = detectVitestHostInfo(),
+  system: VitestHostInfo = schedulingHostInfo(),
 ) {
   const scheduling = resolveLocalVitestScheduling(env, system, "threads");
   return {

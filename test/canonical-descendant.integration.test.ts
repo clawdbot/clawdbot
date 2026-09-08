@@ -1,14 +1,13 @@
 import http from "node:http";
-import { fileURLToPath } from "node:url";
+import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createPluginRuntimeMock,
   createPluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import codexPlugin from "../extensions/codex/index.js";
 import { createCanonicalForkFixtureForTest } from "../extensions/codex/test-api.js";
-import openaiPlugin from "../extensions/openai/index.js";
 import {
   prepareAgentRunAdmission,
   createOperationalRunInstanceRef,
@@ -41,7 +40,14 @@ import {
   createPluginStateSyncKeyedStore,
   type OpenKeyedStoreOptions,
 } from "../src/plugin-state/plugin-state-store.js";
+import { createRuntimePluginManifestLookup } from "../src/plugins/active-runtime-registry.js";
+import { resolvePluginCapabilityCatalogContext } from "../src/plugins/loader-runtime-load.js";
 import { resolvePluginMetadataSnapshot } from "../src/plugins/plugin-metadata-snapshot.js";
+import {
+  bindPluginRuntimeArtifactSelection,
+  resolvePluginRuntimeArtifactSelection,
+  resolvePluginRuntimeExecutionArtifact,
+} from "../src/plugins/plugin-runtime-artifact-selection.js";
 import {
   markPluginRegistryActive,
   markPluginRegistryRetired,
@@ -51,7 +57,10 @@ import { setPluginRuntimeLoadContext } from "../src/plugins/runtime/load-context
 import { resolvePluginRuntimeLoadContext } from "../src/plugins/runtime/load-context.resolve.js";
 import { createRuntimeAgent } from "../src/plugins/runtime/runtime-agent.js";
 import { createPluginRecord } from "../src/plugins/status.test-helpers.js";
-import type { OpenClawPluginMcpServerConnectionResolver } from "../src/plugins/types.js";
+import type {
+  OpenClawPluginDefinition,
+  OpenClawPluginMcpServerConnectionResolver,
+} from "../src/plugins/types.js";
 import {
   listSessionStateEventsSince,
   registerSessionStateWatch,
@@ -306,140 +315,177 @@ async function withFixture(
         };
       },
     });
-    config.plugins = {
-      allow: ["codex", "openai"],
-      entries: {
-        codex: { enabled: true, config: fixture.pluginConfig },
-        openai: { enabled: true },
-      },
-    };
-    const { registry, createApi } = createPluginRegistry({
-      runtime,
-      logger: { info() {}, warn() {}, error() {} },
-      activateGlobalSideEffects: false,
-    });
-    const metadataSnapshot = resolvePluginMetadataSnapshot({
-      config,
-      workspaceDir: state.workspaceDir,
-      preferPersisted: false,
-    });
-    for (const plugin of [codexPlugin, openaiPlugin]) {
-      const rootDir = fileURLToPath(new URL(`../extensions/${plugin.id}/`, import.meta.url));
-      const record = createPluginRecord({
-        id: plugin.id,
-        contracts: expectDefined(metadataSnapshot.byPluginId.get(plugin.id), "plugin manifest")
-          .contracts,
-        origin: "bundled",
-        rootDir,
-        source: `${rootDir}index.ts`,
-      });
-      registry.plugins.push(record);
-      plugin.register(
-        createApi(record, {
-          config,
-          pluginConfig: config.plugins.entries?.[plugin.id]?.config,
-        }),
-      );
-    }
-    if (options.mcpResolver) {
-      const record = createPluginRecord({ id: "canonical-requester-mcp" });
-      registry.plugins.push(record);
-      createApi(record, { config }).registerMcpServerConnectionResolver(options.mcpResolver);
-    }
-    expect(registry.diagnostics.filter((entry) => entry.level === "error")).toEqual([]);
-    markPluginRegistryActive(registry);
-    setPluginRuntimeLoadContext(
-      registry,
-      resolvePluginRuntimeLoadContext({
-        config,
-        workspaceDir: state.workspaceDir,
-        metadataSnapshot,
-      }),
-    );
-    const fork = async (sessionKey: string, entryId: string) => {
-      expect(
-        listRegisteredAgentHarnesses().map((entry) => entry.harness.sessionFork?.upstreamKinds),
-      ).toEqual([["codex-app-server"]]);
-      let result: { ok: boolean; key?: string; message?: string } | undefined;
-      const request = { sessionKey, entryId };
-      await expectDefined(
-        sessionRewindHandlers["sessions.fork"],
-        "fork handler",
-      )({
-        req: { type: "req", id: "canonical-descendant", method: "sessions.fork", params: request },
-        params: request,
-        client: null,
-        isWebchatConnect: () => false,
-        // SAFETY: these are the complete Gateway collaborators used by the real fork handler.
-        context: {
-          getRuntimeConfig: () => config,
-          chatAbortControllers: new Map(),
-          getSessionEventSubscriberConnIds: () => new Set(),
-          broadcastToConnIds: () => {},
-        } as unknown as GatewayRequestContext,
-        respond: (ok, payload, error) => {
-          const key =
-            payload &&
-            typeof payload === "object" &&
-            "sessionKey" in payload &&
-            typeof payload.sessionKey === "string"
-              ? payload.sessionKey
-              : undefined;
-          result = { ok, key, ...(error ? { message: error.message } : {}) };
-        },
-      });
-      return expectDefined(result, "fork response");
-    };
     try {
-      await withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry: registry }, () =>
-        run(
-          fixture,
-          fork,
-          (target, sourceKey) => {
-            if (target === "registry") {
-              markPluginRegistryRetired(registry);
-              return;
-            }
-            const key =
-              target === "source"
-                ? sourceKey
-                : expectDefined(
-                    listSessionEntriesCore({
-                      agentId: "main",
-                      storePath: fixture.storePath,
-                    }).find(({ entry }) => entry.initializationPending === true)?.sessionKey,
-                    "pending child",
-                  );
-            const entry = expectDefined(
-              loadSessionEntry({ sessionKey: key, storePath: fixture.storePath }),
-              "revoked owner",
-            );
-            runOpenClawAgentWriteTransaction(
-              (database) =>
-                writeSessionEntry(database, key, {
-                  ...entry,
-                  lifecycleRevision: "successor-generation",
-                }),
-              { agentId: "main" },
-            );
-          },
-          admissions,
-          runtime,
-        ),
-      );
-    } finally {
-      if (options.mcpResolver) {
-        for (const { entry } of listSessionEntriesCore({
-          agentId: "main",
-          storePath: fixture.storePath,
-        })) {
-          await retireSessionMcpRuntime({
-            sessionId: entry.sessionId,
-            reason: "canonical requester fixture complete",
+      config.plugins = {
+        allow: ["codex", "openai"],
+        entries: {
+          codex: { enabled: true, config: fixture.pluginConfig },
+          openai: { enabled: true },
+        },
+      };
+      const { registry, createApi } = createPluginRegistry({
+        runtime,
+        logger: { info() {}, warn() {}, error() {} },
+        resolveCapabilityCatalogContext: resolvePluginCapabilityCatalogContext,
+        activateGlobalSideEffects: false,
+      });
+      try {
+        const metadataSnapshot = resolvePluginMetadataSnapshot({
+          config,
+          workspaceDir: state.workspaceDir,
+          preferPersisted: false,
+        });
+        for (const pluginId of ["codex", "openai"]) {
+          const manifest = expectDefined(
+            metadataSnapshot.byPluginId.get(pluginId),
+            "plugin manifest",
+          );
+          const artifact = resolvePluginRuntimeExecutionArtifact(
+            resolvePluginRuntimeArtifactSelection({
+              ...manifest,
+              entryKind: "runtime",
+              preferBuiltPluginArtifacts: false,
+            }),
+          );
+          const plugin: OpenClawPluginDefinition = (
+            await import(pathToFileURL(artifact.source).href)
+          ).default;
+          expect(plugin.id).toBe(pluginId);
+          const record = createPluginRecord({
+            id: manifest.id,
+            contracts: manifest.contracts,
+            origin: manifest.origin,
+            ...artifact,
           });
+          // Register the selected artifact itself so retained tool ownership agrees
+          // with both source-only and built metadata discovery.
+          bindPluginRuntimeArtifactSelection(record, {
+            ...manifest,
+            preferBuiltPluginArtifacts: false,
+            runtimeEntry: artifact,
+          });
+          registry.plugins.push(record);
+          expectDefined(
+            plugin.register,
+            "fixture plugin registration",
+          )(
+            createApi(record, {
+              config,
+              pluginConfig: config.plugins.entries?.[pluginId]?.config,
+            }),
+          );
         }
+        if (options.mcpResolver) {
+          const record = createPluginRecord({ id: "canonical-requester-mcp" });
+          registry.plugins.push(record);
+          createApi(record, { config }).registerMcpServerConnectionResolver(options.mcpResolver);
+        }
+        expect(registry.diagnostics.filter((entry) => entry.level === "error")).toEqual([]);
+        const fixtureOwners = createRuntimePluginManifestLookup(registry, metadataSnapshot.plugins);
+        expect(
+          registry.plugins
+            .filter((record) => record.id === "codex" || record.id === "openai")
+            .map((record) => fixtureOwners(record.id) === record),
+        ).toEqual([true, true]);
+        markPluginRegistryActive(registry);
+        setPluginRuntimeLoadContext(
+          registry,
+          resolvePluginRuntimeLoadContext({
+            config,
+            workspaceDir: state.workspaceDir,
+            metadataSnapshot,
+          }),
+        );
+        const fork = async (sessionKey: string, entryId: string) => {
+          expect(
+            listRegisteredAgentHarnesses().map((entry) => entry.harness.sessionFork?.upstreamKinds),
+          ).toEqual([["codex-app-server"]]);
+          let result: { ok: boolean; key?: string; message?: string } | undefined;
+          const request = { sessionKey, entryId };
+          await expectDefined(
+            sessionRewindHandlers["sessions.fork"],
+            "fork handler",
+          )({
+            req: {
+              type: "req",
+              id: "canonical-descendant",
+              method: "sessions.fork",
+              params: request,
+            },
+            params: request,
+            client: null,
+            isWebchatConnect: () => false,
+            // SAFETY: these are the complete Gateway collaborators used by the real fork handler.
+            context: {
+              getRuntimeConfig: () => config,
+              chatAbortControllers: new Map(),
+              getSessionEventSubscriberConnIds: () => new Set(),
+              broadcastToConnIds: () => {},
+            } as unknown as GatewayRequestContext,
+            respond: (ok, payload, error) => {
+              const key =
+                payload &&
+                typeof payload === "object" &&
+                "sessionKey" in payload &&
+                typeof payload.sessionKey === "string"
+                  ? payload.sessionKey
+                  : undefined;
+              result = { ok, key, ...(error ? { message: error.message } : {}) };
+            },
+          });
+          return expectDefined(result, "fork response");
+        };
+        await withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry: registry }, () =>
+          run(
+            fixture,
+            fork,
+            (target, sourceKey) => {
+              if (target === "registry") {
+                markPluginRegistryRetired(registry);
+                return;
+              }
+              const key =
+                target === "source"
+                  ? sourceKey
+                  : expectDefined(
+                      listSessionEntriesCore({
+                        agentId: "main",
+                        storePath: fixture.storePath,
+                      }).find(({ entry }) => entry.initializationPending === true)?.sessionKey,
+                      "pending child",
+                    );
+              const entry = expectDefined(
+                loadSessionEntry({ sessionKey: key, storePath: fixture.storePath }),
+                "revoked owner",
+              );
+              runOpenClawAgentWriteTransaction(
+                (database) =>
+                  writeSessionEntry(database, key, {
+                    ...entry,
+                    lifecycleRevision: "successor-generation",
+                  }),
+                { agentId: "main" },
+              );
+            },
+            admissions,
+            runtime,
+          ),
+        );
+      } finally {
+        if (options.mcpResolver) {
+          for (const { entry } of listSessionEntriesCore({
+            agentId: "main",
+            storePath: fixture.storePath,
+          })) {
+            await retireSessionMcpRuntime({
+              sessionId: entry.sessionId,
+              reason: "canonical requester fixture complete",
+            });
+          }
+        }
+        markPluginRegistryRetired(registry);
       }
-      markPluginRegistryRetired(registry);
+    } finally {
       await fixture.dispose();
     }
   });
@@ -1109,6 +1155,20 @@ describe("canonical descendant lifecycle through real owners", () => {
             "canonical native thread",
           );
           const currentBefore = structuredClone(current);
+          if (!Array.isArray(current.dynamicTools)) {
+            throw new Error("Expected the canonical native dynamic tool catalog");
+          }
+          expect(
+            current.dynamicTools.flatMap((spec) =>
+              isRecord(spec) && spec.type === "namespace" && Array.isArray(spec.tools)
+                ? spec.tools
+                : [spec],
+            ),
+          ).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ type: "function", name: "codex_threads" }),
+            ]),
+          );
           const entries = await fixture.readEntries(source.sessionKey);
           const users = entries.filter((entry) => entry.role === "user");
           expect(users).toHaveLength(4);

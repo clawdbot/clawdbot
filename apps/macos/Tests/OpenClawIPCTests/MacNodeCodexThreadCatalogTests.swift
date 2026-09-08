@@ -1330,31 +1330,63 @@ extension MacNodeCodexThreadCatalogTests {
         await client.shutdown()
     }
 
-    @Test func `timeout restarts the client without dropping the next request`() async throws {
-        let fake = try makeBlockedRequestServer(warmup: true)
+    @Test func `timeout recovers with a best-effort concurrent successor`() async throws {
+        let fake = try makeBlockedRequestServer(warmup: true, requestGate: true)
+        defer { withExtendedLifetime(fake) {} }
         let client = CodexAppServerThreadClient(idleTimeoutSeconds: 10)
-        // Complete the real handshake before exercising an active or queued deadline.
-        _ = try await self.requestEmptyList(client: client, executable: fake.executable)
+        do {
+            _ = try await self.requestEmptyList(client: client, executable: fake.executable)
+        } catch {
+            await client.shutdown()
+            throw error
+        }
 
+        let readiness = Task {
+            try await self.openFIFOForWriting(
+                URL(fileURLWithPath: fake.executable.path + ".request-gate"))
+        }
         let first = Task {
-            try await self.requestEmptyList(
+            defer { readiness.cancel() }
+            return try await self.requestEmptyList(
                 client: client,
                 executable: fake.executable,
                 timeoutSeconds: 0.5)
         }
-        #expect(await self.waitForFile(
-            URL(fileURLWithPath: fake.executable.path + ".request-started")))
-        let second = Task {
-            try await self.requestEmptyList(client: client, executable: fake.executable)
-        }
+        var requestGate: FileHandle?
+        defer { try? requestGate?.close() }
+        var second: Task<Data, Error>?
+        do {
+            do {
+                requestGate = try await readiness.value
+                // Peer receipt permits overlap; Task creation does not prove queue admission.
+                second = Task {
+                    try await self.requestEmptyList(client: client, executable: fake.executable)
+                }
+            } catch is CancellationError {
+                // The first deadline may precede receipt; require its typed timeout below.
+            }
 
-        await #expect(throws: MacNodeCodexThreadCatalog.CatalogError.timedOut) {
-            try await first.value
+            await #expect(throws: MacNodeCodexThreadCatalog.CatalogError.timedOut) {
+                try await first.value
+            }
+            let result: Data = if let second {
+                try await second.value
+            } else {
+                try await self.requestEmptyList(client: client, executable: fake.executable)
+            }
+            #expect(try (JSONSerialization.jsonObject(with: result) as? [String: Any])?["data"] != nil)
+            #expect(try self.readTrimmed(
+                URL(fileURLWithPath: fake.executable.path + ".processes")) == "2")
+        } catch {
+            readiness.cancel()
+            first.cancel()
+            second?.cancel()
+            _ = await first.result
+            _ = await readiness.result
+            _ = await second?.result
+            await client.shutdown()
+            throw error
         }
-        let result = try await second.value
-        #expect(try (JSONSerialization.jsonObject(with: result) as? [String: Any])?["data"] != nil)
-        #expect(try self.readTrimmed(
-            URL(fileURLWithPath: fake.executable.path + ".processes")) == "2")
         await client.shutdown()
     }
 

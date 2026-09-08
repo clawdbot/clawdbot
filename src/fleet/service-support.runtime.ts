@@ -390,7 +390,7 @@ function rebuildInspectedEnvironment(
   labels: Readonly<Record<string, string>>,
   token: string,
   context: "upgrade" | "restore" = "upgrade",
-): Record<string, string> {
+): Pick<CellContainerProfile, "environment" | "userEnvironmentKeys"> {
   const encodedKeys = labels[FLEET_ENV_KEYS_LABEL];
   if (encodedKeys === undefined) {
     throw new Error(`Cannot ${context} cell: user environment provenance label is missing.`);
@@ -406,7 +406,10 @@ function rebuildInspectedEnvironment(
     }
     return `${key}=${value}`;
   });
-  return buildCellEnvironment(token, parseEnvAssignments(assignments));
+  return {
+    environment: buildCellEnvironment(token, parseEnvAssignments(assignments)),
+    userEnvironmentKeys: keys,
+  };
 }
 
 export function buildProfileBaseFromInspection(params: {
@@ -436,7 +439,7 @@ export function buildProfileBaseFromInspection(params: {
     ...(params.inspection.labels[FLEET_DISK_LIMIT_LABEL] !== undefined
       ? { diskSize: params.inspection.labels[FLEET_DISK_LIMIT_LABEL] }
       : {}),
-    environment: rebuildInspectedEnvironment(
+    ...rebuildInspectedEnvironment(
       params.inspection.environment,
       params.inspection.labels,
       params.token,

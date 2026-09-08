@@ -2,21 +2,25 @@
 summary: "Managed and external llama.cpp servers for GGUF chat and embeddings."
 read_when:
   - You are installing, configuring, or auditing the llama-cpp plugin
-title: "Llama Cpp plugin"
+title: "Llama Cpp plugin reference"
 ---
 
-# Llama Cpp plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Managed and external llama.cpp servers for GGUF chat and embeddings.
 
 ## Distribution
 
 - Package: `@openclaw/llama-cpp-provider`
-- Install route: npm; ClawHub
+- Install route: npm or ClawHub
 
 ## Surface
 
-providers: `llama-cpp`; contracts: `embeddingProviders`
+- Providers: `llama-cpp`
+- Contracts: `embeddingProviders`
 
 <!-- openclaw-plugin-reference:manual-start -->
 

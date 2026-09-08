@@ -28,6 +28,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasSetTextAction
@@ -255,6 +256,38 @@ class InitialOnboardingLayoutTest {
     composeRule.onNodeWithText("Use system trust").performClick()
     composeRule.onNodeWithText("Cancel").performClick()
     assertEquals(listOf<String?>(null), accepted)
+    assertEquals(1, systemTrustCount)
+    assertEquals(1, declineCount)
+  }
+
+  @Test
+  fun manualGatewayTrustValidatesThePinWithoutConflatingSystemTrustOrDecline() {
+    val accepted = mutableListOf<String?>()
+    var systemTrustCount = 0
+    var declineCount = 0
+    composeRule.setContent {
+      ClawDesignTheme {
+        GatewayTrustDialog(
+          prompt = gatewayTrustPrompt.copy(systemTrustAvailable = true),
+          confirmLabel = "Trust and continue",
+          cancelLabel = "Cancel",
+          onAccept = { accepted.add(it) },
+          onUseSystemTrust = { systemTrustCount++ },
+          onDecline = { declineCount++ },
+        )
+      }
+    }
+    val input = composeRule.onNode(hasSetTextAction())
+    val trust = composeRule.onNodeWithText("Trust and continue")
+    trust.performScrollTo().assertIsNotEnabled().performClick()
+    input.performScrollTo().performTextReplacement("not-a-fingerprint")
+    trust.performScrollTo().assertIsNotEnabled()
+    assertTrue(accepted.isEmpty())
+    input.performScrollTo().performTextReplacement(List(32) { "AB" }.joinToString(":"))
+    trust.performScrollTo().assertIsEnabled().performClick()
+    composeRule.onNodeWithText("Use system trust").performScrollTo().performClick()
+    composeRule.onNodeWithText("Cancel").performScrollTo().performClick()
+    assertEquals(listOf("ab".repeat(32)), accepted)
     assertEquals(1, systemTrustCount)
     assertEquals(1, declineCount)
   }

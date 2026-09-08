@@ -1,13 +1,9 @@
 /** Reads ACP session status from the runtime and reconciles persisted identity metadata. */
 import { resolveSessionIdentityFromMeta } from "@openclaw/acp-core/runtime/session-identity";
-import type {
-  AcpRuntime,
-  AcpRuntimeCapabilities,
-  AcpRuntimeHandle,
-  AcpRuntimeStatus,
-} from "@openclaw/acp-core/runtime/types";
+import type { AcpRuntimeStatus } from "@openclaw/acp-core/runtime/types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
+import { resolveManagerRuntimeCapabilities } from "./manager.runtime-controls.js";
 import type {
   AcpSessionStatus,
   EnsureManagerRuntimeHandle,
@@ -26,10 +22,6 @@ export async function runManagerGetSessionStatus(params: {
   throwIfAborted: (signal?: AbortSignal) => void;
   resolveSession: ResolveManagerSession;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
-  resolveRuntimeCapabilities: (params: {
-    runtime: AcpRuntime;
-    handle: AcpRuntimeHandle;
-  }) => Promise<AcpRuntimeCapabilities>;
   reconcileRuntimeSessionIdentifiers: ReconcileManagerRuntimeSessionIdentifiers;
 }): Promise<AcpSessionStatus> {
   params.throwIfAborted(params.signal);
@@ -50,7 +42,7 @@ export async function runManagerGetSessionStatus(params: {
     meta: resolvedMeta,
   });
   let handle = ensuredHandle;
-  const capabilities = await params.resolveRuntimeCapabilities({ runtime, handle });
+  const capabilities = await resolveManagerRuntimeCapabilities({ runtime, handle });
   let runtimeStatus: AcpRuntimeStatus | undefined;
   if (runtime.getStatus) {
     runtimeStatus = await withAcpRuntimeErrorBoundary({

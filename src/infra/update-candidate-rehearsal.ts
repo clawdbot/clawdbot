@@ -13,10 +13,8 @@ import { tryListenOnPort } from "./ports-probe.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
-import {
-  resolveUpdateCandidateStatePath,
-  UpdateStateSchemaVersionsSchema,
-} from "./update-candidate-state.js";
+import { resolveUpdateCandidateStatePath } from "./update-candidate-paths.js";
+import { UpdateCandidateStateSnapshotSchema } from "./update-candidate-state.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   UPDATE_RUN_ID_ENV,
@@ -50,8 +48,27 @@ function isolatedConfig(
   stateDir: string,
   port: number,
   sourceEnv: NodeJS.ProcessEnv,
+  pluginPaths: Record<string, string>,
 ): OpenClawConfig {
   const copied = structuredClone(config);
+  const projectPluginPath = (value: string) => {
+    const projected = pluginPaths[resolveUserPath(value, sourceEnv)];
+    if (!projected) {
+      throw new Error("Plugin locator was not included in the candidate snapshot");
+    }
+    return projected;
+  };
+  for (const record of Object.values(copied.plugins?.installs ?? {})) {
+    if (record.source === "path" && record.sourcePath) {
+      record.sourcePath = projectPluginPath(record.sourcePath);
+    }
+    if (record.installPath) {
+      record.installPath = projectPluginPath(record.installPath);
+    }
+  }
+  if (copied.plugins?.load?.paths) {
+    copied.plugins.load.paths = copied.plugins.load.paths.map(projectPluginPath);
+  }
   const workspace = path.join(stateDir, "workspace");
   const entries =
     copied.agents?.entries ??
@@ -82,9 +99,7 @@ function isolatedConfig(
   // Copy effective config, never its include graph or ambient shell overrides.
   delete copied.env;
   delete copied.diagnostics;
-  if (copied.session) {
-    delete copied.session.store;
-  }
+  delete copied.session?.store;
   copied.logging = { ...copied.logging, file: path.join(stateDir, "canary.log") };
   copied.gateway = {
     ...copied.gateway,
@@ -107,6 +122,7 @@ function isolatedConfig(
 export async function prepareUpdateCandidateRehearsal(params: {
   config: OpenClawConfig;
   sourceConfigHash?: string | null;
+  candidateRoot: string;
   stateDir: string;
   env?: NodeJS.ProcessEnv;
   nodeRunner?: string;
@@ -122,8 +138,12 @@ export async function prepareUpdateCandidateRehearsal(params: {
     }
     return milliseconds;
   };
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-canary-"));
+  const tempDir = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-canary-")),
+  );
   const sourceEnv = params.env ?? process.env;
+  const configPath = path.join(tempDir, "openclaw.json");
+  const workspaceDir = path.join(tempDir, "workspace");
   const copiedAgentDir = (directory: string | undefined) =>
     directory?.trim()
       ? resolveUpdateCandidateStatePath(
@@ -145,8 +165,8 @@ export async function prepareUpdateCandidateRehearsal(params: {
     XDG_STATE_HOME: path.join(tempDir, "state"),
     OPENCLAW_HOME: tempDir,
     OPENCLAW_STATE_DIR: tempDir,
-    OPENCLAW_CONFIG_PATH: path.join(tempDir, "openclaw.json"),
-    OPENCLAW_WORKSPACE_DIR: path.join(tempDir, "workspace"),
+    OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_WORKSPACE_DIR: workspaceDir,
     OPENCLAW_AGENT_DIR: copiedAgentDir(sourceEnv.OPENCLAW_AGENT_DIR),
     PI_CODING_AGENT_DIR: copiedAgentDir(sourceEnv.PI_CODING_AGENT_DIR),
     OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
@@ -207,6 +227,7 @@ export async function prepareUpdateCandidateRehearsal(params: {
           stateDir: params.stateDir,
           config: params.config,
           targetStateDir: tempDir,
+          candidateRoot: params.candidateRoot,
           env: {
             HOME: sourceEnv.HOME,
             OPENCLAW_HOME: sourceEnv.OPENCLAW_HOME,
@@ -227,36 +248,44 @@ export async function prepareUpdateCandidateRehearsal(params: {
         `Candidate state snapshot failed (${snapshot.termination}): ${redactSupportString(snapshot.stderr.toString("utf8"), { env: sourceEnv, stateDir: params.stateDir }, { maxLength: 20_000 })}`,
       );
     }
-    UpdateStateSchemaVersionsSchema.parse(JSON.parse(snapshot.stdout.toString("utf8")));
+    const { pluginPaths } = UpdateCandidateStateSnapshotSchema.parse(
+      JSON.parse(snapshot.stdout.toString("utf8")),
+    );
     const port = await tryListenOnPort({
       port: 0,
       host: "127.0.0.1",
       signal: AbortSignal.timeout(remaining()),
     });
     const serialized = JSON.stringify(
-      isolatedConfig(params.config, path.resolve(params.stateDir), tempDir, port, sourceEnv),
+      isolatedConfig(
+        params.config,
+        path.resolve(params.stateDir),
+        tempDir,
+        port,
+        sourceEnv,
+        pluginPaths,
+      ),
     );
     const baseline: Record<string, unknown> = JSON.parse(serialized);
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, serialized, { mode: 0o600 });
-    await fs.mkdir(env.OPENCLAW_WORKSPACE_DIR!, { recursive: true, mode: 0o700 });
+    await fs.writeFile(configPath, serialized, { mode: 0o600 });
+    await fs.mkdir(workspaceDir, { recursive: true, mode: 0o700 });
     return {
       sourceConfig: params.config,
       sourceConfigHash: params.sourceConfigHash,
       stateDir: tempDir,
-      configPath: env.OPENCLAW_CONFIG_PATH!,
-      workspaceDir: env.OPENCLAW_WORKSPACE_DIR!,
+      configPath,
+      workspaceDir,
       env,
       port,
       changedConfigKeys: async () => {
-        const current: unknown = JSON5.parse(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8"));
+        const current: unknown = JSON5.parse(await fs.readFile(configPath, "utf8"));
         if (!isRecord(current)) {
           throw new Error("Rehearsal config is not an object.");
         }
         // Compare against the same live config projection: private paths, the
         // canary token and disabled background services are isolation, not repairs.
-        const before = baseline;
-        return [...new Set([...Object.keys(before), ...Object.keys(current)])]
-          .filter((key) => !isDeepStrictEqual(before[key], current[key]))
+        return [...new Set([...Object.keys(baseline), ...Object.keys(current)])]
+          .filter((key) => !isDeepStrictEqual(baseline[key], current[key]))
           .toSorted();
       },
       cleanup: () => fs.rm(tempDir, { recursive: true, force: true }),

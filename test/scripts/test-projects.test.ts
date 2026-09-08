@@ -53,6 +53,7 @@ describe("test runtime prerequisites", () => {
   it.each([
     ["lifecycle file", ["extensions/qa-lab/src/suite-process-lifecycle.test.ts"], "private-qa"],
     ["QA directory", ["extensions/qa-lab"], "private-qa"],
+    ["tooling config", ["test/vitest/vitest.tooling.config.ts"], "private-qa"],
     ["QA config", ["test/vitest/vitest.extension-qa.config.ts"], "private-qa"],
     ["all plugins", ["extensions"], "private-qa"],
     ["full local suite", [], "private-qa"],
@@ -106,6 +107,11 @@ describe("test runtime prerequisites", () => {
       "Doctor source module probe",
       ["src/commands/doctor-config-preflight.pristine.process.test.ts"],
       undefined,
+    ],
+    [
+      "Codex delivery Gateway",
+      ["test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts"],
+      "private-qa",
     ],
     ["Active Memory Gateway", ["src/gateway/gateway-active-memory.test.ts"], "runtime"],
     ["concurrent Gateway streams", ["src/gateway/gateway-concurrent-streams.test.ts"], "runtime"],
@@ -166,6 +172,7 @@ describe("test runtime prerequisites", () => {
     ],
     ["gateway", ["gateway-*.test.ts"], "runtime"],
     ["gateway", ["server*.test.ts"], "runtime"],
+    ["tooling", ["**/gateway-codex-delivery-cache.test.ts"], "runtime"],
   ] as const)("keeps %s selection scoped after excluding %s", (project, exclude, expected) => {
     const selections = resolveVitestRuntimeCliSelections(
       `test/vitest/vitest.${project}.config.ts`,
@@ -524,7 +531,11 @@ describe("scripts/test-projects changed-target routing", () => {
     (scriptPath) => {
       expectChangedTargets(
         [scriptPath],
-        ["test/scripts/direct-run-entrypoints.test.ts", "test/scripts/lint-status.test.ts"],
+        [
+          "test/scripts/direct-run-entrypoints.test.ts",
+          "test/scripts/lint-status.test.ts",
+          "test/scripts/local-check-runtime.test.ts",
+        ],
       );
     },
   );
@@ -1183,6 +1194,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/authorized-beta-focused-evidence.test.ts",
         "test/scripts/clawhub-parent-authorization.test.ts",
         "test/scripts/clawhub-postpublish.test.ts",
+        "test/scripts/plugin-npm-extended-stable-workflow.test.ts",
         "test/scripts/release-candidate-checklist.test.ts",
         "test/scripts/release-no-push-workflow.test.ts",
         "test/scripts/release-plan-producer.test.ts",
@@ -1405,7 +1417,12 @@ describe("scripts/test-projects changed-target routing", () => {
       [".github/workflows/mantis-slack-desktop-smoke.yml", packageAcceptanceTargets],
       [
         ".github/workflows/mantis-web-ui-chat-proof.yml",
-        ["test/scripts/mantis-web-ui-chat-proof-workflow.test.ts", ...packageAcceptanceTargets],
+        [
+          "test/scripts/mantis-web-ui-chat-proof-workflow.test.ts",
+          ...packageAcceptanceTargets,
+          "test/scripts/mantis-request-proof.test.ts",
+          "test/scripts/mantis-telegram-proof.test.ts",
+        ],
       ],
     ]);
 
@@ -1434,6 +1451,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/package-source-preflight.test.ts",
         "test/scripts/release-ci-summary.test.ts",
         "test/scripts/release-no-push-workflow.test.ts",
+        "test/scripts/upgrade-survivor-baselines.test.ts",
       ],
     );
   });
@@ -3007,6 +3025,23 @@ describe("scripts/test-projects changed-target routing", () => {
         "unknown/file.txt",
       ]),
     ).toStrictEqual([]);
+  });
+
+  it("fails safe for raw Git paths that explicit-path normalization would rewrite", () => {
+    for (const changedPath of [
+      " scripts/changed-lanes.mts",
+      String.raw`scripts\changed-lanes.mts`,
+    ]) {
+      expect(
+        resolveChangedTestTargetPlanForArgs(
+          ["--changed", "origin/main"],
+          process.cwd(),
+          () => [changedPath],
+          { broad: true },
+        ),
+        changedPath,
+      ).toEqual({ mode: "broad", targets: [] });
+    }
   });
 
   it("keeps unknown root surface skip reasons available to changed-mode callers", () => {

@@ -554,6 +554,18 @@ describe("ensureGatewayStartupAuth", () => {
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
+  it.each(["undefined", "null", "  undefined  ", "", "  "])(
+    "rejects invalid password %j with password-specific recovery advice",
+    async (password) => {
+      await expect(
+        runStartupAuth({ cfg: gatewayAuthConfig({ mode: "password", password }), env: emptyEnv() }),
+      ).rejects.toThrow(
+        /gateway auth password.*Generate a real secret.*OPENCLAW_GATEWAY_PASSWORD.*gateway.auth.password/,
+      );
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["", "  "])(
     "rejects persisted blank token %j instead of generating an ephemeral replacement",
     async (token) => {

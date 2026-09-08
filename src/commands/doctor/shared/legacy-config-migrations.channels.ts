@@ -88,8 +88,6 @@ function migrateRoutingAllowFrom(raw: Record<string, unknown>, changes: string[]
   }
 
   delete routing.allowFrom;
-  channels.whatsapp = whatsapp;
-  raw.channels = channels;
   cleanupEmptyRecord(raw, "routing");
 }
 
@@ -123,8 +121,6 @@ function migrateRoutingGroupChatMessages(params: {
 
   if (Object.keys(params.groupChat).length === 0) {
     delete params.routing.groupChat;
-  } else {
-    params.routing.groupChat = params.groupChat;
   }
 }
 
@@ -154,9 +150,7 @@ function migrateRoutingGroupChatRequireMention(params: {
         requireMention,
         changes: params.changes,
       });
-      channels[channelId] = section;
     }
-    params.raw.channels = channels;
   }
 
   if (!matchedChannel) {
@@ -194,8 +188,6 @@ function migrateTelegramRequireMention(raw: Record<string, unknown>, changes: st
     changes,
   });
   delete telegram.requireMention;
-  channels.telegram = telegram;
-  raw.channels = channels;
 }
 
 function hasLegacyFeishuAccountBotName(value: unknown): boolean {
@@ -232,12 +224,7 @@ function migrateFeishuAccountBotName(raw: Record<string, unknown>, changes: stri
       changes.push(`Removed ${legacyPath} (${currentPath} already set).`);
     }
     delete account.botName;
-    accounts[accountId] = account;
   }
-
-  feishu.accounts = accounts;
-  channels.feishu = feishu;
-  raw.channels = channels;
 }
 
 function hasLegacyThreadBindingTtl(value: unknown): boolean {
@@ -271,7 +258,6 @@ function migrateThreadBindingsTtlHoursForPath(params: ThreadBindingMigrationPara
     threadBindings.idleHours = threadBindings.ttlHours;
   }
   delete threadBindings.ttlHours;
-  params.owner.threadBindings = threadBindings;
 
   if (hadIdleHours) {
     params.changes.push(
@@ -316,7 +302,6 @@ function migrateThreadBindingsSpawnSessionsForPath(params: ThreadBindingMigratio
   if (!hadSpawnSessions && resolved !== undefined) {
     threadBindings.spawnSessions = resolved;
   }
-  params.owner.threadBindings = threadBindings;
 
   if (hadSpawnSessions) {
     params.changes.push(
@@ -443,7 +428,6 @@ function migrateRetiredWebchatChannelConfig(raw: Record<string, unknown>, change
   }
 
   delete channels.webchat;
-  raw.channels = channels;
   cleanupEmptyRecord(raw, "channels");
   changes.push("Removed retired channels.webchat config.");
 }

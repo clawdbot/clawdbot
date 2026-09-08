@@ -28,46 +28,7 @@ const MCP_CONNECTION_RESOLVER_TIMEOUT_MS = 10_000;
  * How long a full-set requester runtime may skip re-resolve while active.
  * Revocation/rotation takes effect within this window even for continuously active requesters.
  */
-const MCP_CONNECTION_REVALIDATE_MS = 5 * 60 * 1000;
-
-const MCP_CONNECTION_RESOLVER_TEST_STATE_KEY = Symbol.for(
-  "openclaw.mcpServerConnectionResolverTestState",
-);
-
-type McpConnectionResolverTestState = {
-  resolversByServerName?: Map<string, McpServerConnectionResolverEntry>;
-  resolveTimeoutMs?: number;
-  revalidateMs?: number;
-};
-
-function getTestState(): McpConnectionResolverTestState {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalStore[MCP_CONNECTION_RESOLVER_TEST_STATE_KEY] as
-    | McpConnectionResolverTestState
-    | undefined;
-  if (existing) {
-    return existing;
-  }
-  const state: McpConnectionResolverTestState = {};
-  globalStore[MCP_CONNECTION_RESOLVER_TEST_STATE_KEY] = state;
-  return state;
-}
-
-function resolveConnectionResolverTimeoutMs(): number {
-  const override = getTestState().resolveTimeoutMs;
-  if (typeof override === "number" && Number.isFinite(override) && override > 0) {
-    return Math.floor(override);
-  }
-  return MCP_CONNECTION_RESOLVER_TIMEOUT_MS;
-}
-
-export function resolveMcpConnectionRevalidateMs(): number {
-  const override = getTestState().revalidateMs;
-  if (typeof override === "number" && Number.isFinite(override) && override > 0) {
-    return Math.floor(override);
-  }
-  return MCP_CONNECTION_REVALIDATE_MS;
-}
+export const MCP_CONNECTION_REVALIDATE_MS = 5 * 60 * 1000;
 
 /**
  * Ephemeral per-process HMAC key for connection digests. Never exported, logged,
@@ -133,10 +94,6 @@ function listMcpServerConnectionResolversByServerName(): Map<
   string,
   McpServerConnectionResolverEntry
 > {
-  const testOverrides = getTestState().resolversByServerName;
-  if (testOverrides) {
-    return new Map([...testOverrides.entries()].toSorted(([a], [b]) => a.localeCompare(b)));
-  }
   const byName = new Map<string, McpServerConnectionResolverEntry>();
   const registry =
     getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry();
@@ -254,7 +211,7 @@ export async function resolveRequesterScopedMcpConnections(params: {
       ? { messageChannel: normalizeOptionalString(params.messageChannel) }
       : {}),
   };
-  const timeoutMs = resolveConnectionResolverTimeoutMs();
+  const timeoutMs = MCP_CONNECTION_RESOLVER_TIMEOUT_MS;
   const sortedNames = [...params.serverNames].toSorted((a, b) => a.localeCompare(b));
   const settled = await Promise.all(
     sortedNames.map(async (serverName) => {
@@ -388,39 +345,3 @@ export function buildMcpRequesterRuntimeCacheKey(params: {
     requesterSenderId: params.requesterSenderId,
   });
 }
-
-export const testing = {
-  setMcpServerConnectionResolversForTest(
-    resolvers?: Iterable<OpenClawPluginMcpServerConnectionResolver & { pluginId?: string }> | null,
-  ): void {
-    if (!resolvers) {
-      getTestState().resolversByServerName = undefined;
-      return;
-    }
-    const map = new Map<string, McpServerConnectionResolverEntry>();
-    for (const resolver of resolvers) {
-      const serverName = normalizeOptionalString(resolver.serverName);
-      if (!serverName || typeof resolver.resolve !== "function") {
-        continue;
-      }
-      map.set(serverName, {
-        pluginId: normalizeOptionalString(resolver.pluginId) ?? "test-plugin",
-        serverName,
-        resolve: resolver.resolve,
-      });
-    }
-    getTestState().resolversByServerName = map;
-  },
-  setMcpConnectionResolverTimeoutMsForTest(timeoutMs?: number): void {
-    getTestState().resolveTimeoutMs =
-      typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-        ? Math.floor(timeoutMs)
-        : undefined;
-  },
-  setMcpConnectionRevalidateMsForTest(revalidateMs?: number): void {
-    getTestState().revalidateMs =
-      typeof revalidateMs === "number" && Number.isFinite(revalidateMs) && revalidateMs > 0
-        ? Math.floor(revalidateMs)
-        : undefined;
-  },
-};

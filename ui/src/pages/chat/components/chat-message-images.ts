@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, noChange, nothing } from "lit";
 import { AsyncDirective, directive } from "lit/async-directive.js";
 import { Directive } from "lit/directive.js";
@@ -6,6 +7,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { beginClipboardCopy } from "../../../lib/clipboard.ts";
 import {
   reserveExternalWindowForDeferredNavigation,
   resolveSafeExternalUrl,
@@ -600,13 +602,13 @@ async function readManagedOutgoingImageBlob(
 
 function imageDownloadFileName(title: string, mimeType: string): string {
   const extension = mimeType === "image/jpeg" ? "jpg" : mimeType.split("/", 2)[1] || "img";
-  const stem = Array.from(title, (character) =>
+  const rawStem = Array.from(title, (character) =>
     character.codePointAt(0)! <= 0x1f || '<>:"/\\|?*'.includes(character) ? "-" : character,
   )
     .join("")
     .replace(/\.[a-z0-9]{1,10}$/iu, "")
-    .replace(/[. -]+$/u, "")
-    .slice(0, 120);
+    .replace(/[. -]+$/u, "");
+  const stem = truncateUtf16Safe(rawStem, 120);
   return `${stem || "generated-image"}.${/^[a-z0-9.+-]{1,12}$/u.test(extension) ? extension : "img"}`;
 }
 
@@ -656,6 +658,7 @@ function renderManagedImageActions(image: ImageBlock, opts: ImageRenderOptions |
     }
   };
   const copy = async () => {
+    beginClipboardCopy();
     try {
       if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
         throw new Error("image clipboard is unavailable");

@@ -73,13 +73,11 @@ export async function writeArchiveStreamToFile(params: {
   createArchiveStream: (
     reportProgress: (progress?: BackupArchiveProgress) => void,
   ) => DestroyableArchiveStream;
-  idleTimeoutMs?: number;
-  onPartialArchive?: (receipt: BackupArchiveCleanupReceipt) => void;
+  onPartialArchive: (receipt: BackupArchiveCleanupReceipt) => void;
 }): Promise<PreparedBackupArchive> {
   // Own both stream lifecycles so a tar read error closes the output handle
   // before retry cleanup touches the partial archive. Exclusive creation also
   // refuses a pre-existing path instead of following a symlink.
-  const idleTimeoutMs = params.idleTimeoutMs ?? BACKUP_ARCHIVE_IDLE_TIMEOUT_MS;
   const controller = new AbortController();
   let archiveStream: DestroyableArchiveStream | undefined;
   let openedIdentity: Stats | undefined;
@@ -116,11 +114,11 @@ export async function writeArchiveStreamToFile(params: {
           ? `, entry=${JSON.stringify(sliceUtf16Safe(lastEntryPath, -512))}`
           : "";
         idleTimeoutError = new Error(
-          `Backup archive write stalled: no progress observed for ${idleTimeoutMs}ms (phase=${lastProgress?.phase ?? "starting"}${entrySuffix}, rawBytes=${producerBytes}, outputBytes=${outputBytes})`,
+          `Backup archive write stalled: no progress observed for ${BACKUP_ARCHIVE_IDLE_TIMEOUT_MS}ms (phase=${lastProgress?.phase ?? "starting"}${entrySuffix}, rawBytes=${producerBytes}, outputBytes=${outputBytes})`,
         );
         archiveStream?.destroy(idleTimeoutError);
         controller.abort(idleTimeoutError);
-      }, idleTimeoutMs);
+      }, BACKUP_ARCHIVE_IDLE_TIMEOUT_MS);
   };
   const progress = new Transform({
     transform(chunk, _encoding, callback) {
@@ -184,24 +182,7 @@ export async function writeArchiveStreamToFile(params: {
       (!cleanupReceipt.identity ||
         !removePreparedBackupArchive(cleanupReceipt as PreparedBackupArchive))
     ) {
-      params.onPartialArchive?.(cleanupReceipt);
-    }
-    if (cleanupReceipt && !cleanupReceipt.identity) {
-      // The outer cleanup owns the retry because this scope cannot safely
-      // unlink a pathname whose identity is temporarily unavailable.
-      if (!params.onPartialArchive) {
-        try {
-          const currentIdentity = fsSync.lstatSync(cleanupReceipt.archivePath);
-          if (currentIdentity.isFile()) {
-            removePreparedBackupArchive({
-              archivePath: cleanupReceipt.archivePath,
-              identity: currentIdentity,
-            });
-          }
-        } catch {
-          // No outer owner was provided; preserve the original write error.
-        }
-      }
+      params.onPartialArchive(cleanupReceipt);
     }
     throw idleTimeoutError ?? err;
   } finally {

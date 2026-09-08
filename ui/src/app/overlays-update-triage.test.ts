@@ -1,5 +1,7 @@
 // @vitest-environment node
+import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayRequestError } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createUpdateRunFixture as updateRunFixture } from "../test-helpers/update-run.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
@@ -202,7 +204,14 @@ describe("update failure triage admission", () => {
   );
 
   it("reports a preparation failure without dispatching or diagnosing an update", async () => {
-    const request = vi.fn<RequestFn>(async () => ({}));
+    const previous = updateRunFixture({
+      status: "succeeded",
+      phase: "finished",
+      finishedAtMs: 3_000,
+    });
+    const request = vi.fn<RequestFn>(async (method) =>
+      method === "update.status" ? { lastRun: previous } : {},
+    );
     const harness = updateRunHarness(request);
     const onUpdateFailure = vi.fn();
     const overlays = createApplicationOverlays(harness.gateway, {
@@ -212,7 +221,10 @@ describe("update failure triage admission", () => {
       },
     });
     try {
+      await flushMicrotasks();
+      expect(overlays.snapshot.updateRun).toEqual(previous);
       await overlays.runUpdate();
+      expect(overlays.snapshot.updateRun).toBeNull();
       expect(request.mock.calls.some(([method]) => method === "update.run")).toBe(false);
       expect(overlays.snapshot.updateRunning).toBe(false);
       expect(overlays.snapshot.updateReconciliationPending).toBe(false);
@@ -285,4 +297,61 @@ describe("update failure triage admission", () => {
       overlays.dispose();
     }
   });
+  it.each([
+    { code: "INVALID_REQUEST", message: "Invalid update request parameters" },
+    { code: "INVALID_REQUEST", message: "Missing operator.admin scope" },
+    { code: "UNAVAILABLE", message: "Gateway restart admission is unavailable" },
+  ])("preserves the sent rejection $message over historical success", async (failure) => {
+    const previous = updateRunFixture({
+      status: "succeeded",
+      phase: "finished",
+      finishedAtMs: 3_000,
+    });
+    const request = vi.fn<RequestFn>(async (method, _params, options) => {
+      if (method === "update.run") {
+        options?.onSent?.();
+        throw new GatewayRequestError(failure);
+      }
+      return method === "update.status" ? { lastRun: previous } : {};
+    });
+    const harness = updateRunHarness(request);
+    const overlays = createApplicationOverlays(harness.gateway);
+    try {
+      await flushMicrotasks();
+      expect(overlays.snapshot.updateRun).toEqual(previous);
+      await overlays.runUpdate();
+      expect(overlays.snapshot.updateStatusBanner?.text).toContain(failure.message);
+      expect(overlays.snapshot.updateRun).toBeNull();
+      expect(overlays.snapshot.updateRunning).toBe(false);
+    } finally {
+      overlays.dispose();
+    }
+  });
+
+  it.each(["recorded:1000", "stable-handoff"])(
+    "does not replay the stable v2026.9.1 consumed diagnostic %s after reload",
+    async (id) => {
+      const scope = gatewayCredentialScope("ws://gateway.test");
+      const stored = JSON.stringify({ triaged: [JSON.stringify([scope, null, id])] });
+      sessionStorage.setItem("openclaw:control-ui:update:v1", stored);
+      const harness = updateRunHarness(async () => ({
+        sentinel: {
+          kind: "update",
+          status: "error",
+          ts: 1_000,
+          stats: { reason: "build-failed", ...(id === "stable-handoff" ? { handoffId: id } : {}) },
+        },
+      }));
+      const onUpdateFailure = vi.fn();
+      const overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
+      try {
+        await flushMicrotasks();
+        expect(overlays.snapshot.recordedUpdateAttempt?.reason).toBe("build-failed");
+        expect(onUpdateFailure).not.toHaveBeenCalled();
+        expect(sessionStorage.getItem("openclaw:control-ui:update:v1")).toBe(stored);
+      } finally {
+        overlays.dispose();
+      }
+    },
+  );
 });

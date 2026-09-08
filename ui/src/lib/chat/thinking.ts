@@ -73,10 +73,10 @@ export function formatThinkingCommandOptionsForSession(
   defaults?: SessionsListResult["defaults"],
   catalog: readonly ModelCatalogEntry[] = [],
 ): string {
-  const options = resolveThinkingLevelOptionsForSession(session, defaults, catalog)
-    .map((level) => level.label)
-    .join(", ");
-  return options.split(", ").includes("default") ? options : `default, ${options}`;
+  const options = resolveThinkingLevelOptionsForSession(session, defaults, catalog).map(
+    (level) => level.label,
+  );
+  return (options.includes("default") ? options : ["default", ...options]).join(", ");
 }
 
 export function resolveThinkingLevelInput(
@@ -205,13 +205,9 @@ function resolveThinkingLevelOptions(params: {
   const { catalogEntry } = params;
   const modelMatchesDefaults = sessionModelMatchesDefaults(params.session, params.defaults);
   const explicitLevels =
-    (params.session?.thinkingLevels?.length ? params.session.thinkingLevels : null) ??
-    (params.session?.model && catalogEntry?.thinkingLevels?.length
-      ? catalogEntry.thinkingLevels
-      : null) ??
-    (modelMatchesDefaults && params.defaults?.thinkingLevels?.length
-      ? params.defaults.thinkingLevels
-      : null);
+    params.session?.thinkingLevels ??
+    (params.session?.model ? catalogEntry?.thinkingLevels : undefined) ??
+    (modelMatchesDefaults ? params.defaults?.thinkingLevels : undefined);
   if (explicitLevels) {
     if (
       params.hideUnsupportedOffOnly &&
@@ -223,10 +219,8 @@ function resolveThinkingLevelOptions(params: {
     return explicitLevels;
   }
   const explicitLabels =
-    (params.session?.thinkingOptions?.length ? params.session.thinkingOptions : null) ??
-    (modelMatchesDefaults && params.defaults?.thinkingOptions?.length
-      ? params.defaults.thinkingOptions
-      : null);
+    params.session?.thinkingOptions ??
+    (modelMatchesDefaults ? params.defaults?.thinkingOptions : undefined);
   if (params.hideUnsupportedOffOnly && catalogEntry?.reasoning === false) {
     if (!explicitLabels || explicitLabels.every(isOffThinkingOption)) {
       return [];

@@ -1,5 +1,7 @@
 // Update failures and control-plane results share one reporting boundary.
+import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   markControlPlaneUpdateRestartSentinelFailure,
@@ -15,17 +17,21 @@ import { defaultRuntime } from "../../runtime.js";
 import { printResult } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
+import type { PreManagedServiceStop } from "./update-command-service-maintenance.js";
 
 /** Unwind update ownership before diagnostics or an interactive agent can run. */
 export class UpdateCommandFailure extends Error {
+  readonly automaticTriage?: TriageFailureContext;
+
   constructor(
     readonly result: UpdateRunResult,
     readonly exitCode = 1,
     readonly detail?: string,
-    options?: ErrorOptions,
+    options?: ErrorOptions & { automaticTriage?: TriageFailureContext },
   ) {
     super(detail ?? result.reason ?? "Update failed", options);
     this.name = "UpdateCommandFailure";
+    this.automaticTriage = options?.automaticTriage;
   }
 }
 
@@ -41,7 +47,7 @@ export function mergeWindowsTaskRecoveryFailure(
         { ...failure.error.result, status: "error" },
         1,
         `${failure.error.message}; Windows autostart recovery: ${formatErrorMessage(recoveryError)}`,
-        { cause: recoveryError },
+        { cause: recoveryError, automaticTriage: failure.error.automaticTriage },
       ),
     };
   }
@@ -56,6 +62,55 @@ export function mergeWindowsTaskRecoveryFailure(
   };
 }
 
+export function resolveAutomaticUpdateTriage(
+  result: UpdateRunResult,
+  detail: string | undefined,
+  params: {
+    mutationStarted: boolean;
+    root: string;
+    installKindChanged: boolean;
+    expectedVersion?: string;
+    gateway: TriageFailureContext["gateway"];
+    preManagedServiceStop?: Pick<PreManagedServiceStop, "serviceMutationAllowed">;
+  },
+): TriageFailureContext | undefined {
+  // Triage follows a failed update, never a verified rollback: the restored
+  // generation is serving, and an autonomous repair turn there is unwanted.
+  const verifiedRollback =
+    result.recovery?.serviceRestartSafe === true &&
+    result.recovery.packageRollbackVerified === true &&
+    result.recovery.service === "healthy";
+  const eligible =
+    !verifiedRollback &&
+    (params.mutationStarted || result.reason === "restart-unhealthy") &&
+    result.reason !== "service-revalidation-failed" &&
+    !(
+      result.recovery?.serviceRestartSafe === false &&
+      result.recovery.reason === "rollback-checkout-dirty"
+    ) &&
+    !result.postUpdate?.plugins?.npm.outcomes.some(
+      (outcome) => outcome.code === PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+    ) &&
+    params.preManagedServiceStop?.serviceMutationAllowed !== false &&
+    !result.steps.some((step) => step.termination === "signal");
+  const failedStep = result.steps.find((step) => step.exitCode !== 0 && !step.advisory);
+  const phase = result.reason ?? "update";
+  return eligible
+    ? {
+        kind: "update",
+        phase,
+        error: detail ?? failedStep?.stderrTail ?? failedStep?.stdoutTail ?? phase,
+        // Global exposure, not the candidate checkout, identifies a package-to-Git target.
+        installationRoot:
+          params.installKindChanged && result.mode === "git"
+            ? params.root
+            : (result.root ?? params.root),
+        expectedVersion: params.expectedVersion ?? result.after?.version ?? undefined,
+        gateway: params.gateway,
+      }
+    : undefined;
+}
+
 export async function reportPreMutationUpdateFailure(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
@@ -63,7 +118,7 @@ export async function reportPreMutationUpdateFailure(params: {
   message?: string;
   opts: UpdateCommandOptions;
   controlPlaneUpdateSentinelMeta: ControlPlaneUpdateSentinelMetaFile["meta"] | null;
-}): Promise<void> {
+}): Promise<never> {
   const run = params.opts.run;
   const active = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
   if (run && active && params.message) {

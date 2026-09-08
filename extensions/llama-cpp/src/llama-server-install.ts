@@ -28,6 +28,10 @@ export {
 
 const DOWNLOAD_TIMEOUT_MS = 30 * 60_000;
 const VERSION_TIMEOUT_MS = 15_000;
+// Freshly extracted macOS binaries can spend tens of seconds in Gatekeeper
+// evaluation. Keep this wider budget at the pre-publication version check;
+// reused, post-publication, and CUDA probes retain the fast default.
+const FRESH_VERSION_TIMEOUT_MS = 120_000;
 
 export type LlamaDownloadProgress = (status: {
   downloadedSize: number;
@@ -240,12 +244,13 @@ async function runServerCommand(
   command: string,
   args: string[],
   signal?: AbortSignal,
+  timeoutMs = VERSION_TIMEOUT_MS,
 ): Promise<string> {
   return await new Promise((resolve, reject) => {
     execFile(
       command,
       args,
-      { timeout: VERSION_TIMEOUT_MS, signal, windowsHide: true },
+      { timeout: timeoutMs, signal, windowsHide: true },
       (error, stdout, stderr) => {
         if (error) {
           reject(new Error(error.message, { cause: error }));
@@ -278,10 +283,11 @@ async function validateInstalledServer(
   command: string,
   asset: LlamaServerAsset,
   signal?: AbortSignal,
+  versionTimeoutMs = VERSION_TIMEOUT_MS,
 ): Promise<void> {
   let version: string;
   try {
-    version = await runServerCommand(command, ["--version"], signal);
+    version = await runServerCommand(command, ["--version"], signal, versionTimeoutMs);
   } catch (error) {
     signal?.throwIfAborted();
     throw formatRuntimeDependencyError(error);
@@ -376,7 +382,12 @@ async function installLlamaServer(
     }
     options.signal?.throwIfAborted();
     await fsp.chmod(extractedCommand, 0o755);
-    await validateInstalledServer(extractedCommand, asset, options.signal);
+    await validateInstalledServer(
+      extractedCommand,
+      asset,
+      options.signal,
+      FRESH_VERSION_TIMEOUT_MS,
+    );
     await fsp.mkdir(path.dirname(installDir), { recursive: true });
     options.signal?.throwIfAborted();
     await fsp.rm(installDir, { recursive: true, force: true });

@@ -65,6 +65,185 @@ describe("plugin service replacement", () => {
     resetPluginRuntimeStateForTest();
   });
 
+  it.each(["initial", "reload"] as const)("retries a failed %s service start", async (phase) => {
+    let attempts = 0;
+    let ready = false;
+    const order: string[] = [];
+    const failAt = phase === "initial" ? 1 : 2;
+    const failure = new Error("transient service start failure");
+    const start = vi.fn(() => {
+      order.push("dependency");
+      if (++attempts === failAt) {
+        throw failure;
+      }
+      ready = true;
+    });
+    const stop = vi.fn(() => {
+      ready = false;
+    });
+    const siblingStart = vi.fn(() => {
+      order.push("dependent");
+      if (!ready) {
+        throw new Error("dependency service is not running");
+      }
+    });
+    const registry = createRegistry([
+      { id: "retry-service", start, stop },
+      { id: "sibling", start: siblingStart, stop: () => {} },
+    ]);
+    const serviceIds = new Set(["retry-service", "sibling"]);
+    const config = createServiceConfig();
+    const handle = await startPluginServices({ registry, config });
+    try {
+      if (phase === "reload") {
+        await expect(handle.reload(config, serviceIds)).rejects.toThrow();
+      }
+      expect(listPluginServiceHealthFailures(registry)).toContainEqual(
+        expect.objectContaining({ serviceId: "retry-service", error: failure.message }),
+      );
+      await handle.reload(config, serviceIds);
+      expect(order.slice(-2)).toEqual(["dependency", "dependent"]);
+      expect(start).toHaveBeenCalledTimes(failAt + 1);
+      expect(siblingStart).toHaveBeenCalledTimes(2);
+      expect(listPluginServiceHealthFailures(registry)).toEqual([]);
+    } finally {
+      await handle.stop();
+    }
+  });
+
+  it.each(["initial", "reload"] as const)(
+    "cleans resources acquired after strict stop times out during %s startup",
+    async (phase) => {
+      vi.useFakeTimers();
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const event = `service-late-start-${phase}`;
+      const listener = () => {};
+      const listenerCount = process.listenerCount(event);
+      const order: string[] = [];
+      const stop = vi.fn(() => {
+        order.push("producer-stop");
+        process.off(event, listener);
+      });
+      const exporterStop = vi.fn(() => {
+        order.push("exporter-stop");
+      });
+      let attempts = 0;
+      const blockedAttempt = phase === "initial" ? 1 : 2;
+      const registry = createRegistry([
+        {
+          id: "late-resource",
+          start: async () => {
+            if (++attempts === blockedAttempt) {
+              entered.resolve();
+              await release.promise;
+            }
+            process.on(event, listener);
+          },
+          stop,
+        },
+      ]);
+      registry.services.unshift(
+        ...createRegistry(
+          [{ id: "diagnostics-otel", start: () => {}, stop: exporterStop }],
+          "diagnostics-otel",
+          "bundled",
+        ).services,
+      );
+      let handle!: PluginServicesHandle;
+      const config = createServiceConfig();
+      const starting = startPluginServices({
+        registry,
+        config,
+        onHandle: (value) => {
+          handle = value;
+        },
+      });
+      let transition: Promise<unknown> = starting;
+      let stopping: Promise<unknown> | undefined;
+      try {
+        if (phase === "reload") {
+          await starting;
+          transition = handle.reload(config, new Set(["late-resource"]));
+        }
+        await entered.promise;
+        stopping = handle
+          .stop({ strict: true, deadlineAtMs: Date.now() + 100 })
+          .catch((error: unknown) => error);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(await stopping).toBeInstanceOf(AggregateError);
+        const earlyStops = stop.mock.calls.length;
+        const earlyExporterStops = exporterStop.mock.calls.length;
+        release.resolve();
+        await transition;
+        await handle.stop();
+        expect(process.listenerCount(event)).toBe(listenerCount);
+        expect(earlyStops).toBe(blockedAttempt - 1);
+        expect(earlyExporterStops).toBe(0);
+        expect(stop).toHaveBeenCalledTimes(blockedAttempt);
+        expect(exporterStop).toHaveBeenCalledOnce();
+        expect(order.slice(-2)).toEqual(["producer-stop", "exporter-stop"]);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([starting, transition, stopping]);
+        await handle.stop();
+        process.off(event, listener);
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("cleans a started sibling while another startup remains unsettled", async () => {
+    vi.useFakeTimers();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const event = "service-started-sibling";
+    const listener = () => {};
+    const before = process.listenerCount(event);
+    let handle!: PluginServicesHandle;
+    const starting = startPluginServices({
+      registry: createRegistry([
+        {
+          id: "started-sibling",
+          start: () => {
+            process.on(event, listener);
+          },
+          stop: () => {
+            process.off(event, listener);
+          },
+        },
+        {
+          id: "pending-start",
+          start: () => {
+            entered.resolve();
+            return release.promise;
+          },
+        },
+      ]),
+      config: createServiceConfig(),
+      onHandle: (value) => {
+        handle = value;
+      },
+    });
+    let stopping: Promise<unknown> | undefined;
+    try {
+      await entered.promise;
+      stopping = handle
+        .stop({ strict: true, deadlineAtMs: Date.now() + 100 })
+        .catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(await stopping).toBeInstanceOf(AggregateError);
+      expect(process.listenerCount(event)).toBe(before);
+    } finally {
+      release.resolve();
+      await starting;
+      await stopping;
+      await handle.stop();
+      process.off(event, listener);
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["ordinary", "strict-first", "strict-last"] as const)(
     "shares cleanup while preserving concurrent %s shutdown deadlines",
     async (mode) => {
@@ -543,7 +722,7 @@ describe("plugin service replacement", () => {
         await vi.advanceTimersByTimeAsync(0);
 
         expect(stop).toHaveBeenCalledOnce();
-        expect(order).toEqual(["start", "stop", "replacement-settled"]);
+        expect(order).toEqual(["start", "replacement-settled", "stop"]);
         cleanup.resolve();
         await starting;
         await expect(lifecycleHandle.stop()).resolves.toBeUndefined();

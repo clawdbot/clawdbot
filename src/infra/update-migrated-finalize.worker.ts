@@ -13,7 +13,7 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contra
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createManagedUpdateRequesterAuthority } from "./update-requester-authority.js";
-import { getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
+import { adoptUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
 
 async function finalizeMigratedUpdate(): Promise<void> {
   // Validation imports this whole candidate graph before activation. The helper
@@ -46,6 +46,8 @@ async function finalizeMigratedUpdate(): Promise<void> {
     throw new Error("Candidate finalization requires its migrated update run.");
   }
   const { requesterAuthority: descriptor, ...runIdentity } = transferredRun;
+  // The candidate can outlive its parent; record both lifetimes before any awaits.
+  adoptUpdateRun(runIdentity.runId, { env: runIdentity.env });
   // Parent closures cannot cross JSON. Only the fresh installed runtime rebinds
   // the captured requester to the same current installation policy.
   const run: NonNullable<UpdateCommandOptions["run"]> = {
@@ -85,6 +87,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
       : undefined;
   let result;
   let exitCode = 0;
+  let automaticTriage: MigratedUpdateFinalizationResult["automaticTriage"];
   try {
     result = await finishUpdate({
       ...input.params,
@@ -99,6 +102,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
     }
     result = error.result;
     exitCode = error.exitCode;
+    automaticTriage = error.automaticTriage;
   } finally {
     await windowsRecovery?.complete(result?.status === "ok");
   }
@@ -110,6 +114,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
     result,
     exitCode,
     terminalRunId: terminal.runId,
+    automaticTriage,
   };
   await fs.writeFile(input.resultPath, JSON.stringify(response), { mode: 0o600 });
 }

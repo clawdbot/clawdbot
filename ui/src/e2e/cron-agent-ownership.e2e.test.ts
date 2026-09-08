@@ -58,6 +58,8 @@ suite.define(() => {
         await page.getByRole("option", { name: "fixture/old", exact: true }).waitFor();
         await page.screenshot({ path: path.join(suite.artifactDir, "initial.png") });
         await page.keyboard.press("Escape");
+        // Finish the hide animation before a later click reopens the picker.
+        await picker.getByRole("listbox").waitFor({ state: "hidden" });
 
         await gateway.setMethodResponse("models.list", models("fixture/new"));
         await gateway.emitGatewayEvent("chat.metadata.changed", {});
@@ -67,6 +69,7 @@ suite.define(() => {
         await page.getByRole("option", { name: "fixture/new", exact: true }).waitFor();
         await page.screenshot({ path: path.join(suite.artifactDir, "refreshed.png") });
         await page.keyboard.press("Escape");
+        await picker.getByRole("listbox").waitFor({ state: "hidden" });
 
         await gateway.setMethodResponse("models.list", {
           __mockError: { code: "UNAVAILABLE", message: "Model suggestions unavailable" },

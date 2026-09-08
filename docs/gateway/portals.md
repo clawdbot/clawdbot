@@ -61,7 +61,7 @@ The Gateway never executes these commands automatically. The agent reads the fil
 
 The application must honor `PORT`. Use `PUBLIC_URL` when it needs to generate absolute URLs.
 
-The server can listen on IPv4 or IPv6 loopback (`127.0.0.1` or `::1`), both on the Gateway host and on a worker. Worker streams also preserve the node's configured Gateway context path when connecting through a reverse proxy.
+The server can listen on IPv4 or IPv6 loopback (`127.0.0.1` or `::1`), both on the Gateway host and on a worker, even when the machine's `localhost` records list only one address family. Worker streams also preserve the node's configured Gateway context path when connecting through a reverse proxy.
 
 The proxy rewrites `Host` to the local target, so typical development servers such as Vite and Next.js need no additional configuration. WebSockets and hot module replacement are proxied through the same portal.
 

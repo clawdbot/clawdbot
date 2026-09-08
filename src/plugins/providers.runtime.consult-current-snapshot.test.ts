@@ -7,9 +7,14 @@ import {
   setCurrentPluginMetadataSnapshot,
 } from "./current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import { createPluginRecord } from "./loader-records.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import {
+  bindPluginRuntimeArtifactSelection,
+  resolvePluginRuntimeArtifactSelection,
+} from "./plugin-runtime-artifact-selection.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 import { withPluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
@@ -157,6 +162,18 @@ describe("provider runtime consults the current plugin metadata snapshot", () =>
         source: `/plugins/${pluginId}/index.js`,
       }));
       const activeRegistry = createEmptyPluginRegistry();
+      activeRegistry.plugins = metadataSnapshot.plugins.map((plugin) => {
+        const record = createPluginRecord({ ...plugin, enabled: true, configSchema: true });
+        bindPluginRuntimeArtifactSelection(record, {
+          preferBuiltPluginArtifacts: false,
+          runtimeEntry: resolvePluginRuntimeArtifactSelection({
+            ...plugin,
+            entryKind: "runtime",
+            preferBuiltPluginArtifacts: false,
+          }),
+        });
+        return record;
+      });
       activeRegistry.providers = [
         { ...pluginRegistry.providers[0]!, provider: { id: "demo", label: "active", auth: [] } },
       ];

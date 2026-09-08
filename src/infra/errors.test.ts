@@ -96,6 +96,15 @@ describe("error helpers", () => {
       },
     };
     expect(() => readErrorCause(error)).toThrow(failure);
+    let caught: unknown;
+    try {
+      collectErrorGraphCandidates(error, function* (current) {
+        yield readErrorCause(current);
+      });
+    } catch (caughtError) {
+      caught = caughtError;
+    }
+    expect(caught).toBe(failure);
   });
 
   it("walks nested error graphs once in breadth-first order", () => {
@@ -108,13 +117,33 @@ describe("error helpers", () => {
     const root = { name: "root", cause: child, errors: [leaf, child] };
     child.cause = root;
 
-    expect(
-      collectErrorGraphCandidates(root, (current) => [
-        current.cause,
-        ...((current as { errors?: unknown[] }).errors ?? []),
-      ]),
-    ).toEqual([root, child, leaf]);
+    const events: string[] = [];
+    const candidates = collectErrorGraphCandidates(root, function* (current) {
+      events.push(`${String(current.name)}:start`);
+      yield current.cause;
+      yield* (current as { errors?: unknown[] }).errors ?? [];
+      events.push(`${String(current.name)}:end`);
+    });
+    expect(candidates).toEqual([root, child, leaf]);
+    expect(events).toEqual([
+      "root:start",
+      "root:end",
+      "child:start",
+      "child:end",
+      "leaf:start",
+      "leaf:end",
+    ]);
     expect(collectErrorGraphCandidates(null)).toStrictEqual([]);
+    expect(collectErrorGraphCandidates(undefined)).toStrictEqual([]);
+  });
+
+  it.each([-0, 0])("retains the first signed zero at the root and through links: %#", (first) => {
+    const root = {};
+    const candidates = collectErrorGraphCandidates(root, () => [first, -first]);
+    expect(candidates).toHaveLength(2);
+    expect(candidates[0]).toBe(root);
+    expect(Object.is(candidates[1], first)).toBe(true);
+    expect(Object.is(collectErrorGraphCandidates(first)[0], first)).toBe(true);
   });
 
   it("walks every canonical wrapper edge once despite duplicates and cycles", () => {

@@ -44,7 +44,7 @@ import {
   type AuthProfileDatabase,
 } from "../agents/auth-profiles/sqlite.js";
 import { coerceAuthProfileState } from "../agents/auth-profiles/state.js";
-import { saveAuthProfileStoreWithPreparedOwner } from "../agents/auth-profiles/store.js";
+import { saveAuthProfileStoreWithPreparedOwner } from "../agents/auth-profiles/store-runtime.js";
 import type {
   AuthProfileCredential,
   AuthProfileState,

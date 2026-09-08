@@ -5,7 +5,6 @@ import {
   downloadClawHubGitHubSkillArchive,
   downloadClawHubSkillArchive,
   downloadClawHubSkillArchiveUrl,
-  normalizeClawHubSha256Integrity,
   type ClawHubDownloadResult,
 } from "../../infra/clawhub-artifacts.js";
 import { isDefaultClawHubBaseUrl, resolveClawHubBaseUrl } from "../../infra/clawhub-client.js";
@@ -13,6 +12,7 @@ import {
   checkClawHubPackageTrust,
   type ClawHubTrustErrorCode,
 } from "../../infra/clawhub-install-trust.js";
+import { normalizeClawHubSha256Integrity } from "../../infra/clawhub-integrity.js";
 import {
   CLAWHUB_SKILLS_SH_TRUST_LABEL,
   CLAWHUB_SKILLS_SH_TRUST_STATE,

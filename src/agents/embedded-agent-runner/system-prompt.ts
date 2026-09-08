@@ -9,7 +9,7 @@ import type { SystemPromptRuntimeInfo } from "../system-prompt.js";
 
 type EmbeddedSystemPromptParams = Omit<
   Parameters<typeof buildConfiguredAgentSystemPrompt>[0],
-  "toolNames" | "toolSummaries" | "requireExplicitMessageTarget" | "fsWorkspaceOnly"
+  "toolNames" | "fsWorkspaceOnly"
 > & {
   reasoningTagHint: boolean;
   runtimeInfo: SystemPromptRuntimeInfo & {
@@ -20,8 +20,6 @@ type EmbeddedSystemPromptParams = Omit<
     model: string;
     provider?: string;
     chatType?: ChatType;
-    /** Supported message actions for the current channel (e.g., react, edit, unsend) */
-    channelActions?: string[];
   };
   tools: AgentTool[];
   userTimezone: string;

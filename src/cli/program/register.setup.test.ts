@@ -484,7 +484,7 @@ describe("registerSetupCommand", () => {
     },
   );
 
-  it.each(["not-a-port", "70000"])(
+  it.each(["", " \t ", "not-a-port", "70000"])(
     "rejects invalid --gateway-port %s before onboarding dispatch",
     async (gatewayPort) => {
       await runCli(["setup", "--gateway-port", gatewayPort]);

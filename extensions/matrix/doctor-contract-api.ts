@@ -8,10 +8,6 @@ import {
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  requiresExplicitMatrixDefaultAccount,
-  resolveMatrixDefaultOrOnlyAccountId,
-} from "./src/account-selection.js";
 import { matrixAccountStateSchemaMigration } from "./src/matrix/account-state-schema-doctor.js";
 import {
   hasMatrixStorageMetaStateInStore,
@@ -103,6 +99,12 @@ async function collectLegacyMatrixCredentialSources(params: {
       }
       return left.name.localeCompare(right.name);
     });
+  if (files.length === 0) {
+    return [];
+  }
+  // Empty-state Doctor scans do not need account topology.
+  const { requiresExplicitMatrixDefaultAccount, resolveMatrixDefaultOrOnlyAccountId } =
+    await import("./src/account-selection.js");
   return files.map((entry) => {
     const match = /^credentials(?:-([a-z0-9._-]+))?\.json$/iu.exec(entry.name);
     const namedAccount = match?.[1];

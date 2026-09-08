@@ -4236,6 +4236,14 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test @MainActor func `enabling Voice Wake during standalone PTT remains suppressed`() async {
+        let previousEnabled = UserDefaults.standard.object(forKey: VoiceWakePreferences.enabledKey)
+        defer {
+            if let previousEnabled {
+                UserDefaults.standard.set(previousEnabled, forKey: VoiceWakePreferences.enabledKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: VoiceWakePreferences.enabledKey)
+            }
+        }
         let appModel = NodeAppModel(talkMode: TalkModeManager(allowSimulatorCapture: true))
         appModel.acquirePttVoiceWakeLease(for: "standalone-ptt")
 
@@ -4244,11 +4252,46 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         #expect(appModel.voiceWake.statusText == "Paused")
         #expect(!appModel.voiceWake.isListening)
+        #expect(UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey))
 
         appModel.releasePttVoiceWakeLease(for: "standalone-ptt")
         await appModel.voiceWake._test_waitForScheduledStart()
         #expect(appModel.voiceWake.statusText == "Voice Wake isn’t supported on Simulator")
         appModel.voiceWake.stop()
+    }
+
+    @Test @MainActor func `Talk toggle preserves Voice Wake preference and enabled owner state`() async {
+        let keys = [VoiceWakePreferences.enabledKey, "talk.enabled"]
+        let previousValues = keys.map { ($0, UserDefaults.standard.object(forKey: $0)) }
+        for key in keys {
+            UserDefaults.standard.set(false, forKey: key)
+        }
+        let appModel = NodeAppModel(talkMode: TalkModeManager())
+        defer {
+            appModel.setVoiceWakeEnabled(false)
+            appModel.setTalkEnabled(false)
+            for (key, previous) in previousValues {
+                if let previous {
+                    UserDefaults.standard.set(previous, forKey: key)
+                } else {
+                    UserDefaults.standard.removeObject(forKey: key)
+                }
+            }
+        }
+
+        appModel.setVoiceWakeEnabled(true)
+        appModel.setTalkEnabled(true)
+        #expect(appModel.talkMode.isEnabled)
+        #expect(appModel.voiceWake.isEnabled)
+        #expect(appModel.voiceWake.statusText == "Paused")
+        #expect(UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey))
+
+        appModel.setTalkEnabled(false)
+        await appModel.voiceWake._test_waitForScheduledStart()
+        #expect(!appModel.talkMode.isEnabled)
+        #expect(appModel.voiceWake.isEnabled)
+        #expect(UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey))
+        #expect(!UserDefaults.standard.bool(forKey: "talk.enabled"))
     }
 
     @Test @MainActor func `voice note start cannot race an acquired PTT lease`() async {
@@ -7432,7 +7475,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(NodeAppModel.execApprovalEventID(from: AnyCodable(["other": "approval-1"])) == nil)
     }
 
-    @Test @MainActor func `operator gateway resolved event waits for canonical readback`() async throws {
+    @Test @MainActor func `resolved operator event after disconnect preserves approval state`() async throws {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let notificationCenter = MockBootstrapNotificationCenter()
@@ -7446,6 +7489,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 ],
             ])]
         let appModel = NodeAppModel(notificationCenter: notificationCenter)
+        let gatewayStableID = "test-gateway"
+        appModel.connectedGatewayID = gatewayStableID
         appModel._test_recordPendingWatchExecApprovalRecoveryID(
             "approval-event-resolved",
             gatewayDeviceId: "gateway-device-a")
@@ -7453,16 +7498,45 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             #require(
                 NodeAppModel._test_makeExecApprovalPrompt(
                     id: "approval-event-resolved",
+                    gatewayStableID: gatewayStableID,
                     commandText: "echo clear",
                     agentId: nil,
                     expiresAtMs: Int64(Date().timeIntervalSince1970 * 1000) + 60000)))
 
-        await appModel.handleOperatorGatewayServerEvent(EventFrame(
-            type: "event",
-            event: ExecApprovalNotificationBridge.resolvedKind,
-            payload: AnyCodable(["id": "approval-event-resolved"]),
-            seq: nil,
-            stateversion: nil))
+        var options = GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions
+        options.allowStoredDeviceAuth = false
+        options.deviceAuthGatewayID = gatewayStableID
+        let operatorSession = appModel.operatorSession
+        let eventRoute: GatewayNodeSessionRoute
+        do {
+            try await operatorSession.connect(
+                url: #require(URL(string: "ws://approval-event-test.invalid")),
+                credentials: .init(),
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession()),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+            eventRoute = try #require(await operatorSession.currentRoute())
+            await operatorSession.disconnect()
+        } catch {
+            await operatorSession.disconnect()
+            throw error
+        }
+        #expect(await operatorSession.currentRoute() == nil)
+        #expect(!appModel.isOperatorGatewayConnected)
+        #expect(appModel.pendingExecApprovalResolvedPushes.isEmpty)
+
+        // The event subscriber captures its route before delivery; a late event
+        // must retain approval state after that route disconnects, without reconnecting.
+        await appModel.handleOperatorGatewayServerEvent(
+            EventFrame(
+                type: "event",
+                event: ExecApprovalNotificationBridge.resolvedKind,
+                payload: AnyCodable(["id": "approval-event-resolved"]),
+                seq: nil,
+                stateversion: nil),
+            expectedOperatorRoute: eventRoute)
 
         #expect(appModel.pendingExecApprovalPrompt?.id == "approval-event-resolved")
         #expect(appModel._test_pendingWatchExecApprovalRecoveryIDs() == ["approval-event-resolved"])

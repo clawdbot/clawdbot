@@ -4,29 +4,40 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { installTemporaryCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
-  isSystemAgentSensitiveConfigPathEmbedding,
-  isSystemAgentSensitiveConfigValue,
-  redactSystemAgentConfigPath,
-  redactSystemAgentConfig,
+  isSystemAgentSensitiveConfigPathEmbedding as isSystemAgentSensitiveConfigPathEmbeddingImpl,
+  isSystemAgentSensitiveConfigValue as isSystemAgentSensitiveConfigValueImpl,
+  redactSystemAgentConfigPath as redactSystemAgentConfigPathImpl,
+  redactSystemAgentConfig as redactSystemAgentConfigImpl,
 } from "./config-redaction.js";
 import {
-  installSystemAgentPluginMetadataTestSnapshot,
+  createSystemAgentPluginMetadataTestSnapshot,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
 
 let pluginMetadata: SystemAgentPluginMetadataTestSnapshot | undefined;
 
+const isSystemAgentSensitiveConfigPathEmbedding: typeof isSystemAgentSensitiveConfigPathEmbeddingImpl =
+  (...args) => pluginMetadata!.run(() => isSystemAgentSensitiveConfigPathEmbeddingImpl(...args));
+
+const isSystemAgentSensitiveConfigValue: typeof isSystemAgentSensitiveConfigValueImpl = (...args) =>
+  pluginMetadata!.run(() => isSystemAgentSensitiveConfigValueImpl(...args));
+
+const redactSystemAgentConfigPath: typeof redactSystemAgentConfigPathImpl = (...args) =>
+  pluginMetadata!.run(() => redactSystemAgentConfigPathImpl(...args));
+
+const redactSystemAgentConfig: typeof redactSystemAgentConfigImpl = (...args) =>
+  pluginMetadata!.run(() => redactSystemAgentConfigImpl(...args));
+
 beforeEach(() => {
   const config = {};
   setRuntimeConfigSnapshot(config, config);
-  pluginMetadata = installSystemAgentPluginMetadataTestSnapshot(config);
+  pluginMetadata = createSystemAgentPluginMetadataTestSnapshot(config);
 });
 
 afterEach(() => {
-  pluginMetadata?.restore();
   pluginMetadata = undefined;
   clearRuntimeConfigSnapshot();
 });
@@ -165,7 +176,6 @@ describe("redactSystemAgentConfig", () => {
   it.each(["plus", "core"])(
     "redacts retained owner credentials with %s selected first",
     (first) => {
-      pluginMetadata?.restore();
       const snapshot = createPluginMetadataSnapshotFixture({
         plugins: ["core", "plus"].map((id) => ({
           id,
@@ -191,30 +201,28 @@ describe("redactSystemAgentConfig", () => {
         plugins: { entries: { plus: { enabled: false }, core: { enabled: true } } },
         channels: { proofchat: { plus: "synthetic-plus", core: "synthetic-core" } },
       };
-      const lease = installTemporaryCurrentPluginMetadataSnapshot(snapshot, {
-        config: preferred,
-        compatibleConfigs: [preferred, fallback],
-      });
-      try {
-        const configs =
-          first === "plus" ? ([preferred, fallback] as const) : ([fallback, preferred] as const);
-        for (const config of [...configs, configs[0]]) {
-          setRuntimeConfigSnapshot(config, config);
-          expect(redactSystemAgentConfig(config, { config })).toMatchObject({
-            channels: { proofchat: { plus: "<redacted>", core: "<redacted>" } },
-          });
-          for (const owner of ["core", "plus"]) {
-            expect(
-              isSystemAgentSensitiveConfigValue(`channels.proofchat.${owner}`, "synthetic"),
-            ).toBe(true);
-            expect(redactSystemAgentConfigPath(`channels.proofchat.${owner}.synthetic`)).toBe(
-              "<redacted path>",
-            );
+      withPluginMetadataSnapshotScope(
+        snapshot,
+        () => {
+          const configs =
+            first === "plus" ? ([preferred, fallback] as const) : ([fallback, preferred] as const);
+          for (const config of [...configs, configs[0]]) {
+            setRuntimeConfigSnapshot(config, config);
+            expect(redactSystemAgentConfigImpl(config, { config })).toMatchObject({
+              channels: { proofchat: { plus: "<redacted>", core: "<redacted>" } },
+            });
+            for (const owner of ["core", "plus"]) {
+              expect(
+                isSystemAgentSensitiveConfigValueImpl(`channels.proofchat.${owner}`, "synthetic"),
+              ).toBe(true);
+              expect(redactSystemAgentConfigPathImpl(`channels.proofchat.${owner}.synthetic`)).toBe(
+                "<redacted path>",
+              );
+            }
           }
-        }
-      } finally {
-        lease.release();
-      }
+        },
+        { config: preferred, compatibleConfigs: [preferred, fallback] },
+      );
     },
   );
 

@@ -84,3 +84,26 @@ describe("message tool queued gateway delivery", () => {
     ).rejects.toBe(error);
   });
 });
+
+describe("message tool prompt-cache contract", () => {
+  it.each([false, true])(
+    "preserves the serialized definition across delivery modes with sourceReplyOnly=%s",
+    (sourceReplyOnly) => {
+      const definitions = (["automatic", "message_tool_only", "automatic"] as const).map(
+        (sourceReplyDeliveryMode) => {
+          const tool = createMessageTool({
+            config: {},
+            preparedMessageToolCatalog: EMPTY_CATALOG,
+            currentChannelProvider: "telegram",
+            sourceReplyOnly,
+            sourceReplyDeliveryMode,
+          });
+          return JSON.stringify({ description: tool.description, parameters: tool.parameters });
+        },
+      );
+
+      expect(definitions[1]).toBe(definitions[0]);
+      expect(definitions[2]).toBe(definitions[0]);
+    },
+  );
+});

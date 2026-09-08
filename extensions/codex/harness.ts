@@ -9,12 +9,8 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { runHostPreparedIsolatedCompletion } from "openclaw/plugin-sdk/simple-completion-runtime";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
-import {
-  sessionBindingIdentity,
-  readCodexSessionOwnershipBinding,
-} from "./src/app-server/session-binding-record.js";
+import { sessionBindingIdentity } from "./src/app-server/session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
 import { codexBuildSymbol } from "./src/build-state.js";
 import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-types.js";
@@ -132,12 +128,15 @@ export function createCodexAppServerAgentHarness(
         }
       };
       assertCurrent();
-      const binding = readCodexSessionOwnershipBinding({
-        bindingStore: options.bindingStore,
-        identity: sessionBindingIdentity(params),
-        config: params.config,
-        storePath: params.storePath,
-      });
+      const identity = sessionBindingIdentity(params);
+      let binding = options.bindingStore.read(identity);
+      if (!binding) {
+        // Read host lineage only after a miss; a current binding must not trigger host I/O.
+        const previousSessionId = params.readPreviousSessionId?.();
+        binding = previousSessionId
+          ? options.bindingStore.read({ ...identity, sessionId: previousSessionId })
+          : undefined;
+      }
       assertCurrent();
       return binding?.preserveNativeModel === true
         ? {
@@ -287,6 +286,8 @@ export function createCodexAppServerAgentHarness(
     },
     runIsolatedCompletionV2: async (params) => {
       if (params.authorization.owner === "host") {
+        const { runHostPreparedIsolatedCompletion } =
+          await import("openclaw/plugin-sdk/simple-completion-runtime");
         return runHostPreparedIsolatedCompletion(params);
       }
       const { runCodexIsolatedCompletion } =
@@ -296,6 +297,8 @@ export function createCodexAppServerAgentHarness(
       });
     },
     runIsolatedCompletion: async (params) => {
+      const { runHostPreparedIsolatedCompletion } =
+        await import("openclaw/plugin-sdk/simple-completion-runtime");
       // Keep the deprecated V1 contract on its exact host-prepared transport.
       // V2 owns native Codex auth and zero-tool attestation above.
       return runHostPreparedIsolatedCompletion({

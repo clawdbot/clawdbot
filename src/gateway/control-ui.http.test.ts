@@ -212,7 +212,17 @@ describe("handleControlUiHttpRequest", () => {
   }) {
     const { res, end, setHeader } = makeMockHttpResponse();
     const handled = await handleControlUiHttpRequest(
-      { url: params.url, method: params.method, headers: params.headers ?? {} } as IncomingMessage,
+      {
+        url: params.url,
+        method: params.method,
+        headers: params.headers ?? {},
+        headersDistinct: Object.fromEntries(
+          Object.entries(params.headers ?? {}).map(([name, value]) => [
+            name,
+            Array.isArray(value) ? value : [String(value)],
+          ]),
+        ),
+      } as IncomingMessage,
       res,
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),

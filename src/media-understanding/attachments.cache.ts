@@ -450,6 +450,14 @@ export class MediaAttachmentCache {
     await Promise.all(cleanups);
   }
 
+  /** Drops this cache's bytes after terminal file processing; earlier borrowers keep ownership. */
+  releaseBuffer(attachmentIndex: number): void {
+    const entry = this.entries.get(attachmentIndex);
+    if (entry) {
+      entry.bufferResult = undefined;
+    }
+  }
+
   private async ensureEntry(attachmentIndex: number): Promise<AttachmentCacheEntry> {
     const existing = this.entries.get(attachmentIndex);
     if (existing) {

@@ -692,11 +692,6 @@ describe("terminal resolution", () => {
   });
 
   it("settles a heartbeat reasoning-only stop from the prepared silence contract", async () => {
-    // Reply preparation resolves this exact contract for heartbeat triggers
-    // (get-reply-run-context). The declared contract is what keeps the
-    // reasoning-only stop out of the visible-answer retry family; the legacy
-    // undeclared shape must keep retrying so the flip stays attributable to
-    // the contract and not to unrelated policy.
     const assistant = buildEmbeddedRunnerAssistant({
       content: [
         {
@@ -723,8 +718,6 @@ describe("terminal resolution", () => {
       },
     });
     const settled = await resolveEmbeddedRunTerminal(prepared);
-    // The settled producer normalizes the silence into the explicit silent
-    // reply token; downstream heartbeat delivery classifies it as silent.
     expect(settled).toMatchObject({
       action: "complete",
       result: { payloads: [{ text: SILENT_REPLY_TOKEN }] },

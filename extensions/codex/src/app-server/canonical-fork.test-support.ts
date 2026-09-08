@@ -21,7 +21,11 @@ import {
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { createCanonicalForkNativeFixture } from "./canonical-fork-native.test-support.js";
 import type { CodexAppServerClient } from "./client.js";
-import { resolveCodexComputerUseConfig, type CodexPluginConfig } from "./config.js";
+import {
+  resolveCodexComputerUseConfig,
+  resolveCodexSupervisionAppServerRuntimeOptions,
+  type CodexPluginConfig,
+} from "./config.js";
 import { createCodexDynamicToolBuildStageTracker } from "./dynamic-tool-build.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
@@ -97,6 +101,7 @@ export async function createCanonicalForkFixture(params: {
     },
   };
   const controls = createCodexSessionCatalogControl({
+    resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
     config,
     getRuntimeConfig: () => config,
     getPluginConfig: () => pluginConfig,
@@ -124,6 +129,7 @@ export async function createCanonicalForkFixture(params: {
   const captured = createCapturedPluginRegistration({ id: "codex", config });
   const api = { ...captured.api, runtime };
   codexSessionCatalogRuntime.register({
+    resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
     api,
     bindingStore,
     control: controls,

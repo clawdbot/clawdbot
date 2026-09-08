@@ -279,7 +279,7 @@ ssh-copy-id -i ~/.ssh/id_rsa <REMOTE_USER>@<REMOTE_IP>
 openclaw config set gateway.remote.token "<your-token>"
 ```
 
-Use `gateway.remote.password` instead if the remote Gateway uses password auth. `OPENCLAW_GATEWAY_TOKEN` is still valid as a shell-level override, but the durable remote-client setup is `gateway.remote.token` / `gateway.remote.password`.
+The Gateway accepts its configured secret in either field: `gateway.remote.token` or `gateway.remote.password` both work, including for password-mode Gateways. The server's `gateway.auth.mode` selects which configured secret to use. `OPENCLAW_GATEWAY_TOKEN` is still valid as a shell-level override, but the durable remote-client setup is `gateway.remote.token` / `gateway.remote.password`.
 
 #### Step 4: create the LaunchAgent
 

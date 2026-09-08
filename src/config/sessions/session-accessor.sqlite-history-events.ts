@@ -31,6 +31,11 @@ import {
   readTranscriptDisplaySource,
 } from "./session-accessor.sqlite-display-position.js";
 import {
+  parseStoredTranscriptEvent,
+  readHistoricalHistoryAnchorPage,
+  resolveHistoricalHistoryEventById,
+} from "./session-accessor.sqlite-history-interval.js";
+import {
   assertVisibleMessageRangeJson,
   hasUnindexedVisibleMessages,
   iterateVisibleMessageRange,
@@ -174,7 +179,7 @@ function readBoundaryEvents(
         .where("identity.event_type", "in", ["compaction", "reset"])
         .where("identity.seq", ">=", firstSeq)
         .where("identity.seq", "<=", lastSeq),
-    ).rows.map((row) => [row.seq, JSON.parse(row.event_json) as TranscriptEvent]),
+    ).rows.map((row) => [row.seq, parseStoredTranscriptEvent(row.event_json)]),
   );
 }
 
@@ -234,6 +239,7 @@ function resolveRecentHistoryStart(
   history: VisibleHistoryProjection,
   maxBytes: number,
   maxMessages: number,
+  allowOversizedFirst = true,
 ): number {
   const { boundedEnd, boundedStart, boundaries, messageEnd, messageStart } =
     resolveVisibleHistoryRange(history, start, endExclusive);
@@ -266,7 +272,7 @@ function resolveRecentHistoryStart(
     if (serializedBytes === undefined) {
       continue;
     }
-    if (selectedCount > 0 && bytes + serializedBytes > maxBytes) {
+    if ((!allowOversizedFirst || selectedCount > 0) && bytes + serializedBytes > maxBytes) {
       break;
     }
     selectedStart = displayPosition;
@@ -312,7 +318,7 @@ function readVisibleMessageById(
   return seq === undefined
     ? undefined
     : {
-        event: JSON.parse(row.event_json) as TranscriptEvent,
+        event: parseStoredTranscriptEvent(row.event_json),
         eventSeq: row.event_seq,
         seq,
       };
@@ -479,7 +485,7 @@ export function readRecentSessionTranscriptHistoryEvents(
 
 export function readSessionTranscriptHistoryEventPage(
   scope: SessionTranscriptReadScope,
-  options: { maxMessages: number; offset: number },
+  options: { maxMessages: number; offset: number; maxBytes?: number },
 ): SessionTranscriptMessageEventPage {
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const history = resolveVisibleHistoryProjection(projection);
@@ -492,12 +498,35 @@ export function readSessionTranscriptHistoryEventPage(
       Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0),
     );
     const endExclusive = Math.max(0, history.total - offset);
-    const start = Math.max(0, endExclusive - maxMessages);
+    const requestedStart = Math.max(0, endExclusive - maxMessages);
+    const boundedStart =
+      options.maxBytes === undefined
+        ? requestedStart
+        : resolveRecentHistoryStart(
+            projection,
+            requestedStart,
+            endExclusive,
+            history,
+            Math.max(
+              1024,
+              Math.floor(Number.isFinite(options.maxBytes) ? options.maxBytes : 1024 * 1024),
+            ),
+            maxMessages,
+            false,
+          );
+    // A single oversized event must not defeat the hard limit or trap pagination.
+    // Skip its source position explicitly; callers disclose the omission to readers.
+    const omittedOversized = maxMessages > 0 && endExclusive > 0 && boundedStart === endExclusive;
+    const consumedStart = omittedOversized ? endExclusive - 1 : boundedStart;
     return {
       activeLeafEntryId: projection.state.leafEventId,
-      events: readVisibleHistoryRange(projection, start, endExclusive, history),
+      events: readVisibleHistoryRange(projection, boundedStart, endExclusive, history),
       displaySource: history.displaySource,
       totalMessages: history.total,
+      ...(options.maxBytes !== undefined && maxMessages > 0 && consumedStart > 0
+        ? { olderOffset: history.total - consumedStart }
+        : {}),
+      ...(omittedOversized ? { omittedOversized: true } : {}),
     };
   });
 }
@@ -515,7 +544,9 @@ export function readSessionTranscriptHistoryEventById(
 ): SessionTranscriptMessageEvent | undefined {
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const history = resolveVisibleHistoryProjection(projection);
-    const event = resolveHistoryEventById(projection, eventId, history);
+    const event =
+      resolveHistoryEventById(projection, eventId, history) ??
+      resolveHistoricalHistoryEventById(projection, eventId);
     return event
       ? positionTranscriptDisplayEvents(projection, history.displaySource, [event])[0]
       : undefined;
@@ -580,14 +611,19 @@ export function readSessionTranscriptHistoryAnchorPage(
     const history = resolveVisibleHistoryProjection(projection);
     const anchor = resolveHistoryEventById(projection, options.messageId, history);
     if (!anchor) {
-      return {
-        events: [],
-        found: false,
-        hasOverreadContext: false,
-        offset: 0,
-        displaySource: history.displaySource,
-        totalMessages: history.total,
-      };
+      // Explicit anchors reopen the closed reset interval that still contains the
+      // active-path row. Unanchored history and current-display lookup stay
+      // latest-reset-relative; missing or off-path IDs stay not-found.
+      return (
+        readHistoricalHistoryAnchorPage(projection, history.displaySource, options) ?? {
+          events: [],
+          found: false,
+          hasOverreadContext: false,
+          offset: 0,
+          displaySource: history.displaySource,
+          totalMessages: history.total,
+        }
+      );
     }
     const pageSize = Math.max(
       1,

@@ -382,6 +382,7 @@ describe("application update campaign overlays", () => {
 
     expect(overlays.snapshot.updateStatusRefreshing).toBe(false);
     expect(overlays.snapshot.updateStatusBanner).toEqual({
+      source: "read",
       tone: "danger",
       text: expect.stringContaining("Gateway unavailable"),
     });

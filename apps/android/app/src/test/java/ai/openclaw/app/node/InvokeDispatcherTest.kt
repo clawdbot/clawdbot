@@ -13,6 +13,7 @@ import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawTalkCommand
 import android.content.Context
 import android.content.pm.PackageManager
+import android.location.Location
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -396,8 +397,7 @@ private class InvokeDispatcherFakeLocationDataSource : LocationDataSource {
     desiredProviders: List<String>,
     maxAgeMs: Long?,
     timeoutMs: Long,
-    isPrecise: Boolean,
-  ): LocationCaptureManager.Payload {
+  ): Location {
     error("unused in InvokeDispatcherTest")
   }
 }
@@ -499,14 +499,14 @@ private class InvokeDispatcherFakeMotionDataSource : MotionDataSource {
 
   override suspend fun activity(
     context: Context,
-    request: MotionActivityRequest,
+    request: MotionRangeRequest,
   ): MotionActivityRecord {
     error("unused in InvokeDispatcherTest")
   }
 
   override suspend fun pedometer(
     context: Context,
-    request: MotionPedometerRequest,
+    request: MotionRangeRequest,
   ): PedometerRecord {
     error("unused in InvokeDispatcherTest")
   }

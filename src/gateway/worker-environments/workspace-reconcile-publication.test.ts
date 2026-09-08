@@ -33,73 +33,93 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => workspaceWarning.mockReset());
+afterEach(() => {
+  workspaceWarning.mockReset();
+  vi.unstubAllEnvs();
+});
 
 async function manifestFor(root: string) {
   return (await readActualWorkspaceManifest({ root, baseCommit: null })).manifest;
 }
 
 describe("worker workspace reconciliation publication", () => {
-  it("keeps local bytes and the journal pending when accepted publication is indeterminate", async () => {
-    const local = tempDirs.make("openclaw-workspace-indeterminate-publication-");
-    const staged = tempDirs.make("openclaw-workspace-indeterminate-publication-staged-");
-    await fs.writeFile(path.join(local, "result.txt"), "base\n");
-    const base = await manifestFor(local);
-    await Promise.all([
-      fs.writeFile(path.join(staged, "result.txt"), "worker\n"),
-      fs.writeFile(path.join(staged, "added.txt"), "added\n"),
-    ]);
-    const current = await manifestFor(staged);
-    let pending: WorkerWorkspaceReconciliationJournal | undefined;
-    const abort = vi.fn(() => {
-      pending = undefined;
-    });
-    const commit = vi.fn(() => {
-      pending = undefined;
-    });
-    const journal = {
-      load: () => pending,
-      begin: (value: WorkerWorkspaceReconciliationJournal) => {
-        pending = value;
-      },
-      commit,
-      abort,
-    };
-    const publicationFailure = new AcceptedWorkspacePublicationIndeterminateError(
-      "apply",
-      new Error("apply transport lost"),
-      new Error("settlement timed out"),
-    );
-
-    await expect(
-      applyStagedWorkerWorkspace({
-        root: local,
-        stagingRoot: staged,
-        baseManifestRef: `sha256:${"a".repeat(64)}`,
-        currentManifestRef: `sha256:${"b".repeat(64)}`,
-        base,
-        current,
-        journal,
-        publishAcceptedManifest: async () => {
-          throw publicationFailure;
+  it.each([
+    ["true", "\n"],
+    ["true", "\r\n"],
+    ["input", "\n"],
+    ["input", "\r\n"],
+    ["false", "\n"],
+    ["false", "\r\n"],
+  ])(
+    "keeps raw bytes and the pending journal with autocrlf=%s and EOL=%j",
+    async (autocrlf, eol) => {
+      vi.stubEnv("GIT_CONFIG_COUNT", "3");
+      vi.stubEnv("GIT_CONFIG_KEY_0", "core.autocrlf");
+      vi.stubEnv("GIT_CONFIG_VALUE_0", autocrlf);
+      vi.stubEnv("GIT_CONFIG_KEY_1", "core.eol");
+      vi.stubEnv("GIT_CONFIG_VALUE_1", "crlf");
+      vi.stubEnv("GIT_CONFIG_KEY_2", "core.safecrlf");
+      vi.stubEnv("GIT_CONFIG_VALUE_2", "true");
+      const local = tempDirs.make("openclaw-workspace-indeterminate-publication-");
+      const staged = tempDirs.make("openclaw-workspace-indeterminate-publication-staged-");
+      const baseBytes = Buffer.from(`base${eol}`);
+      const workerBytes = Buffer.from(`worker${eol}`);
+      const addedBytes = Buffer.from(`added${eol}`);
+      await fs.writeFile(path.join(local, "result.txt"), baseBytes);
+      const base = await manifestFor(local);
+      await Promise.all([
+        fs.writeFile(path.join(staged, "result.txt"), workerBytes),
+        fs.writeFile(path.join(staged, "added.txt"), addedBytes),
+      ]);
+      const current = await manifestFor(staged);
+      let pending: WorkerWorkspaceReconciliationJournal | undefined;
+      const abort = vi.fn(() => {
+        pending = undefined;
+      });
+      const commit = vi.fn(() => {
+        pending = undefined;
+      });
+      const journal = {
+        load: () => pending,
+        begin: (value: WorkerWorkspaceReconciliationJournal) => {
+          pending = value;
         },
-      }),
-    ).rejects.toBe(publicationFailure);
+        commit,
+        abort,
+      };
+      const publicationFailure = new AcceptedWorkspacePublicationIndeterminateError(
+        "apply",
+        new Error("apply transport lost"),
+        new Error("settlement timed out"),
+      );
 
-    expect(pending).toBeDefined();
-    expect(commit).not.toHaveBeenCalled();
-    expect(abort).not.toHaveBeenCalled();
-    await expect(fs.readFile(path.join(local, "result.txt"), "utf8")).resolves.toBe("worker\n");
-    await expect(fs.readFile(path.join(local, "added.txt"), "utf8")).resolves.toBe("added\n");
+      await expect(
+        applyStagedWorkerWorkspace({
+          root: local,
+          stagingRoot: staged,
+          baseManifestRef: `sha256:${"a".repeat(64)}`,
+          currentManifestRef: `sha256:${"b".repeat(64)}`,
+          base,
+          current,
+          journal,
+          publishAcceptedManifest: async () => {
+            throw publicationFailure;
+          },
+        }),
+      ).rejects.toBe(publicationFailure);
 
-    await recoverWorkerWorkspaceReconciliation({ root: local, journal: pending! });
-    await expect(fs.readFile(path.join(local, "result.txt"), "utf8")).resolves.toBe("base\n");
-    await expect(fs.access(path.join(local, "added.txt"))).rejects.toThrow();
-    expect(pending).toBeDefined();
-    journal.abort();
-    expect(pending).toBeUndefined();
-    expect(abort).toHaveBeenCalledOnce();
-  });
+      expect(pending).toBeDefined();
+      expect(commit).not.toHaveBeenCalled();
+      expect(abort).not.toHaveBeenCalled();
+      await expect(fs.readFile(path.join(local, "result.txt"))).resolves.toEqual(workerBytes);
+      await expect(fs.readFile(path.join(local, "added.txt"))).resolves.toEqual(addedBytes);
+
+      await recoverWorkerWorkspaceReconciliation({ root: local, journal: pending! });
+      await expect(fs.readFile(path.join(local, "result.txt"))).resolves.toEqual(baseBytes);
+      await expect(fs.access(path.join(local, "added.txt"))).rejects.toThrow();
+      expect(pending).toBeDefined();
+    },
+  );
 
   it("rolls local bytes back immediately when accepted publication fails definitively", async () => {
     const local = tempDirs.make("openclaw-workspace-definitive-publication-failure-");

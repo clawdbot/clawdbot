@@ -18,10 +18,8 @@ import { readProviderJsonResponse } from "../provider-http-errors.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { notifyAuthProfileFailureHook, setAuthProfileFailureHook } from "./failure-hook.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
-import {
-  resolvePersistedAuthProfileOwnerAgentDir,
-  updateAuthProfileStoreWithLock,
-} from "./store.js";
+import { updateAuthProfileStoreWithLock } from "./store-runtime.js";
+import { resolvePersistedAuthProfileOwnerAgentDir } from "./store.js";
 import type {
   AuthProfileBlockedSource,
   AuthProfileCooldownClassification,
@@ -35,6 +33,7 @@ import {
   isAuthCooldownBypassedForProvider,
   isModelScopedCooldownReason,
   resetAuthProfileFailureState,
+  resolveInlineProviderApiKeyUsageId,
   resolveProfileUnusableUntil,
 } from "./usage-state.js";
 
@@ -43,6 +42,7 @@ export {
   clearExpiredCooldowns,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
+  resolveInlineProviderApiKeyUsageId,
 } from "./usage-state.js";
 
 const authProfileUsageDeps = {
@@ -104,12 +104,6 @@ async function updateOwnedAuthProfileUsage(
     store.usageStats = { ...store.usageStats, [profileId]: usage };
   }
   return updated;
-}
-
-const INLINE_API_KEY_USAGE_ID_PREFIX = "inline-api-key:";
-
-export function resolveInlineProviderApiKeyUsageId(provider: string): string {
-  return `${INLINE_API_KEY_USAGE_ID_PREFIX}${normalizeProviderId(provider)}`;
 }
 
 const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [

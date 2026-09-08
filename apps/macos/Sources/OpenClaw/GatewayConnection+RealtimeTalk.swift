@@ -167,7 +167,7 @@ extension GatewayConnection {
 
     #if DEBUG
     func _test_activeSocketGeneration() -> UInt64? {
-        self.activeSocketGeneration
+        self.socketGenerationState.activeGeneration
     }
     #endif
 }

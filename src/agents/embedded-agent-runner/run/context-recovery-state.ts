@@ -1,3 +1,4 @@
+import type { CompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
 import {
   restoreEmbeddedRunTimeoutAbandonment,
   type EmbeddedRunTimeoutRecoveryMarker,
@@ -9,6 +10,8 @@ export function createEmbeddedRunContextRecoveryState() {
   let timeoutRecoveryMarker: EmbeddedRunTimeoutRecoveryMarker | undefined;
   const state = {
     autoCompactionCount: 0,
+    // SAFETY: No budget exists until the active physical attempt supplies prepared foreground facts.
+    compactionRequestBudget: undefined as CompactionRequestBudget | undefined,
     lastCompactionTokensAfter: undefined as number | undefined,
     // SAFETY: The snapshot starts absent; typed accounting events supply its later values.
     currentContextSnapshot: undefined as { tokens: number | undefined } | undefined,

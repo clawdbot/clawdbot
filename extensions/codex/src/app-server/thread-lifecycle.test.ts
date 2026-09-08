@@ -732,7 +732,7 @@ describe("Codex delegation capability", () => {
           enabled: false,
         },
       });
-      expect(request.developerInstructions).toContain("`message(action=send)`");
+      expect(request.developerInstructions).not.toContain("`message(action=send)`");
       expect(request.developerInstructions).not.toContain("`spawn_agent`");
       expect(request.developerInstructions).not.toContain("`tool_search`");
     }
@@ -1183,61 +1183,30 @@ function expectSingleLogMessage(
 }
 
 describe("Codex app-server native code mode config", () => {
-  it("keeps credential collection out of transcript-bearing developer instructions", () => {
+  it("protects reusable secrets while allowing authorized sign-in in developer instructions", () => {
     const instructions = buildDeveloperInstructions({
       provider: "codex",
       modelId: "gpt-5.6-luna",
       disableTools: true,
       disableMessageTool: true,
     } as EmbeddedRunAttemptParams);
-    const credentialGuidance = instructions
-      .split("\n")
-      .filter((line) => /credentials?|secrets?|authentication|pairing codes?/iu.test(line));
-
-    expect(
-      credentialGuidance.some(
-        (line) =>
-          /(?:never|do not)/iu.test(line) &&
-          /(?:ask for|request)/iu.test(line) &&
-          /(?:chat|conversation|message|reply|transcript)/iu.test(line),
-      ),
-    ).toBe(true);
-    expect(
-      credentialGuidance.some(
-        (line) =>
-          /(?:never|do not)/iu.test(line) &&
-          /(?:echo|repeat)/iu.test(line) &&
-          /(?:chat|conversation|message|reply|transcript)/iu.test(line),
-      ),
-    ).toBe(true);
-    expect(
-      credentialGuidance.some(
-        (line) =>
-          /(?:never|do not)/iu.test(line) &&
-          /(?:place|put|include)/iu.test(line) &&
-          /(?:recommend|suggest)/iu.test(line) &&
-          /(?:command(?:-line)?|arguments?)/iu.test(line) &&
-          /urls?/iu.test(line) &&
-          /shell/iu.test(line) &&
-          /(?:variable|interpolat)/iu.test(line),
-      ),
-    ).toBe(true);
-    expect(
-      credentialGuidance.some(
-        (line) =>
-          /(?:never|do not)/iu.test(line) &&
-          /(?:ask|request)/iu.test(line) &&
-          /(?:report|share|provide)/iu.test(line) &&
-          /(?:authentication|pairing)/iu.test(line) &&
-          /codes?/iu.test(line) &&
-          /(?:chat|conversation|message|reply|transcript)/iu.test(line),
-      ),
-    ).toBe(true);
-    expect(
-      credentialGuidance.some(
-        (line) => /(?:masked|secure)/iu.test(line) && /(?:entry|input|setup|wizard)/iu.test(line),
-      ),
-    ).toBe(true);
+    expect(instructions).toContain("their request already authorizes the handoff");
+    expect(instructions).toContain(
+      "first select a private conversation with the requesting user from trusted conversation context",
+    );
+    expect(instructions).toContain("recovery/backup codes, and hidden device tokens");
+    expect(instructions).toContain(
+      "Keep these secrets out of chat, tool arguments, URLs, logs, and shell text",
+    );
+    expect(instructions).toContain("host-owned masked credential entry");
+    expect(instructions).toContain(
+      "trusted flow's short-lived user-facing code and verification URL only there",
+    );
+    expect(instructions).toContain("user-provided short-lived one-time codes or OAuth callbacks");
+    expect(instructions).toContain("same pending flow");
+    expect(instructions).toContain(
+      "Keep messages intact unless the user requests deletion. Confirm completion from the login result.",
+    );
   });
 
   it("keeps Codex-native subagents primary while limiting OpenClaw spawn to OpenClaw delegation", () => {
@@ -1483,8 +1452,7 @@ describe("Codex app-server native code mode config", () => {
       "Deferred searchable OpenClaw dynamic tools available: alpha_tool, skill_workshop, zeta_tool.",
     );
     expect(instructions).toContain("## Skill Workshop");
-    expect(instructions).toContain("Visible source replies are not automatically delivered");
-    expect(instructions).toContain("Use `message(action=send)`");
+    expect(instructions).not.toContain("Visible source replies are not automatically delivered");
     expect(instructions).not.toContain("`openclaw_direct.sessions_yield`");
   });
 
@@ -1533,25 +1501,6 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(instructions).not.toContain("Deferred searchable OpenClaw dynamic tools available");
-  });
-
-  it("instructs Codex to mark only completed message-tool-only source replies final", () => {
-    const params = createAttemptParams({ provider: "openai" });
-    params.sourceReplyDeliveryMode = "message_tool_only";
-
-    const instructions = buildDeveloperInstructions(params, {
-      dynamicTools: [
-        {
-          type: "function",
-          name: "message",
-          description: "Send a message",
-          inputSchema: { type: "object" },
-        },
-      ],
-    });
-
-    expect(instructions).toContain("For progress, set `final=false`.");
-    expect(instructions).toContain("Set `final=true`, or omit it,");
   });
 
   it("keeps durable dynamic tool fingerprints scoped to loading mode", () => {
@@ -1907,6 +1856,10 @@ describe("Codex app-server native code mode config", () => {
       expect(request).not.toHaveProperty("collaborationMode");
       expect(request).not.toHaveProperty("personality");
       expect(request.additionalContext).toEqual({
+        openclaw_source_delivery: {
+          kind: "application",
+          value: expect.stringContaining("reply normally in your final assistant message"),
+        },
         openclaw_temporal_context: {
           kind: "application",
           value: expect.stringContaining("## Temporal Context"),

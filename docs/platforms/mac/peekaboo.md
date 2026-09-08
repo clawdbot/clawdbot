@@ -82,11 +82,11 @@ Missing or unexpected architecture trees, escaping or cyclic worker symlinks, an
 libraries fail verification. Dependencies that violate this closure must be repaired in packaging, not excluded from
 validation. The portable installer needs neither a checkout nor a separate inventory helper.
 
-Elevation packaging constructs fresh workers from the complete installed package without changing that input.
+Both standard and elevation packaging construct fresh workers from the complete installed package without changing that input.
 It preserves JavaScript, WASM, other resources, modes, and contained relative symlinks, and omits only native images
 that cannot run on the selected Darwin architecture. Matching universal binaries remain intact. Windows-named source,
 scripts, and README files remain; directory names do not select files for omission. Unclassifiable native images and
-links that would escape, cycle, or become dangling stop packaging. Standard app packaging retains the full package.
+links that would escape, cycle, or become dangling stop packaging.
 Both paths use the same worker verification and publication flow; build metadata remains unchanged by materialization.
 
 The managed elevation workflow upgrades an already paired Mac. Its selected state and config must define an

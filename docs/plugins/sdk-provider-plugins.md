@@ -584,6 +584,17 @@ catalog, API-key auth, and dynamic model resolution.
     that discovery inside `catalog.run`, gated on usable auth, and keep
     `staticRun` network-free for offline catalog generation.
 
+    Official provider plugins that share credentials can use
+    `resolveFirstProviderCatalogAuth(ctx.resolveProviderApiKey, providerIds)` from
+    the private runtime `openclaw/plugin-sdk/provider-catalog-shared` subpath.
+    Keep provider precedence in the caller's ordered IDs. The helper stops at
+    the first result with an `apiKey` or `discoveryApiKey` and returns that whole
+    result, preserving its profile and auth mode. An unresolved SecretRef marker
+    takes precedence over another provider's live key; fields are never mixed
+    across accounts. It returns `undefined` when no provider has auth and
+    propagates lookup failures. Official plugin releases using this host export
+    must require a host version that provides it in their `compat.pluginApi`.
+
   </Step>
 
   <Step title="Add dynamic model resolution">
@@ -669,7 +680,8 @@ catalog, API-key auth, and dynamic model resolution.
 
       - `openclaw/plugin-sdk/provider-model-shared` - `ProviderReplayFamily`, `buildProviderReplayFamilyHooks(...)`, and the raw replay builders (`buildOpenAICompatibleReplayPolicy`, `buildAnthropicReplayPolicyForModel`, `buildGoogleGeminiReplayPolicy`, `buildHybridAnthropicOrOpenAIReplayPolicy`). Also exports Gemini replay helpers (`sanitizeGoogleGeminiReplayHistory`, `resolveTaggedReasoningOutputMode`) and endpoint/model helpers (`resolveProviderEndpoint`, `normalizeProviderId`, `normalizeGooglePreviewModelId`).
       - `openclaw/plugin-sdk/provider-stream` - `ProviderStreamFamily`, `buildProviderStreamFamilyHooks(...)`, `composeProviderStreamWrappers(...)`, plus the shared OpenAI/Codex wrappers (`createOpenAIAttributionHeadersWrapper`, `createOpenAIFastModeWrapper`, `createOpenAIServiceTierWrapper`, `createOpenAIResponsesContextManagementWrapper`, `createCodexNativeWebSearchWrapper`), DeepSeek V4 OpenAI-compatible wrapper (`createDeepSeekV4OpenAICompatibleThinkingWrapper`), Anthropic Messages thinking prefill cleanup (`createAnthropicThinkingPrefillPayloadWrapper`), plain-text tool-call compat (`createPlainTextToolCallCompatWrapper`), and shared proxy/provider wrappers (`createOpenRouterWrapper`, `createToolStreamWrapper`, `createMinimaxFastModeWrapper`).
-      - `openclaw/plugin-sdk/provider-stream-shared` - lightweight payload and event wrappers for hot provider paths, including `createOpenAICompatibleCompletionsThinkingOffWrapper`, `createPayloadPatchStreamWrapper`, `createPlainTextToolCallCompatWrapper`, `normalizeOpenAICompatibleReasoningPayload(...)`, and `setQwenChatTemplateThinking(...)`.
+      - `openclaw/plugin-sdk/provider-stream-shared` - lightweight payload and event wrappers for hot provider paths, including `applyCompletionsAnthropicCacheControl` (the shared Chat Completions cache-marker layout; native Anthropic Messages uses its own policy), `createOpenAICompatibleCompletionsThinkingOffWrapper`, `createPayloadPatchStreamWrapper`, `createPlainTextToolCallCompatWrapper`, `normalizeOpenAICompatibleReasoningPayload(...)`, and `setQwenChatTemplateThinking(...)`.
+      - Copilot transports can use `projectCopilotRequestFacts(messages, contentMode, hasImages?)` from `provider-stream-shared` to derive `{ initiator, hasImages }`. Use `"direct"` for normalized direct image blocks or `"nested"` for nested provider content, including user-carried `tool_result` continuations. An explicit `hasImages` reuses a caller's computed vision fact. Runtime identity, header casing, and caller overrides remain with the plugin.
       - `openclaw/plugin-sdk/provider-transport-runtime` - native Google wire helpers: `projectGoogleMessages(...)`, `convertGoogleTools(...)`, `requiresGoogleToolCallId(...)`, and `consumeGoogleGenerateContentStream(...)`. Prepare and normalize transcript routes before projection. Use `replay: "managed"` and stream `profile: "managed"` for managed SSE; the direct SDK uses `replay: "signed-parts"` and the default stream profile to preserve individual signed parts. Transport owners retain authentication, retries, HTTP cancellation, and trusted video admission; the reducer emits events and usage, and throws failures for the caller to finalize.
       - `openclaw/plugin-sdk/provider-tools` - `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks("deepseek" | "gemini" | "openai")`, and underlying provider schema helpers.
 
@@ -794,6 +806,23 @@ catalog, API-key auth, and dynamic model resolution.
         is not auto-discovered, because OpenClaw cannot resolve its usage credential.
       </Tab>
     </Tabs>
+
+    Set `supportsSystemPromptCacheBoundary: true` on a provider registration
+    only when its `createStreamFn` transport understands the stable/dynamic
+    system-prompt boundary. Use `splitSystemPromptCacheBoundary` from
+    `openclaw/plugin-sdk/provider-transport-runtime` to checkpoint the stable
+    prefix separately, and consume the marker before sending any payload.
+    Use `stripSystemPromptCacheBoundary` when caching is disabled. By default,
+    OpenClaw strips the marker before invoking a custom transport.
+
+    For custom `createStreamFn` transports that accumulate JSON tool arguments,
+    use `createToolArgumentPreviewSchedule()` from `openclaw/plugin-sdk/llm`.
+    Create one schedule per tool call and pass the accumulated raw string's
+    length to it before calling `parseStreamingJson`. The returned function
+    admits preview refreshes at geometric growth checkpoints, so intermediate
+    `arguments` snapshots can remain unchanged while raw fragments arrive.
+    Keep emitting every raw delta and validate the complete arguments at the
+    transport's terminal boundary, even when the last preview was not refreshed.
 
     <Accordion title="Common provider hooks">
       OpenClaw calls hooks in roughly this order for model/provider plugins.

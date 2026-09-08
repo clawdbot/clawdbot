@@ -45,6 +45,10 @@ export {
 export type { SessionTranscriptMessageEvent } from "./session-accessor.sqlite-active-projection.js";
 
 export type SessionTranscriptMessageEventPage = {
+  /** Source offset for the next older bounded page, independent of rendered message count. */
+  olderOffset?: number;
+  /** One source event exceeded a strict page byte limit and was skipped. */
+  omittedOversized?: boolean;
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
   displaySource?: string;

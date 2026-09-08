@@ -6,7 +6,7 @@ import {
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
-import { loadAuthProfileStoreForSecretsRuntime } from "../../../agents/auth-profiles/store.js";
+import { loadAuthProfileStoreForSecretsRuntime } from "../../../agents/auth-profiles/store-runtime.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { createModelAuthAvailabilityResolver } from "../../../agents/model-auth-availability.js";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";

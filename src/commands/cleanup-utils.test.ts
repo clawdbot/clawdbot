@@ -14,6 +14,7 @@ import { resolveGatewayLockDir } from "../config/paths.js";
 import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -113,6 +114,22 @@ function expectedTrashSourcePath(targetPath: string): string {
 }
 
 describe("moveToTrash", () => {
+  it("retains the target when ownership expires during asynchronous preparation", async () => {
+    const targetPath = path.join(tempDirs.make("openclaw-trash-expired-"), "target");
+    await fs.writeFile(targetPath, "retain me");
+    let owned = true;
+    const removal = moveToTrash(targetPath, createTestRuntime(), () => {
+      if (!owned) {
+        throw new Error("cleanup ownership expired");
+      }
+    });
+    owned = false;
+
+    await expect(removal).resolves.toBe(false);
+    expect(fsSafeMocks.movePathToTrash).not.toHaveBeenCalled();
+    expect(await fs.readFile(targetPath, "utf8")).toBe("retain me");
+  });
+
   it("uses fs-safe trash instead of resolving a PATH trash command", async () => {
     const testRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-helper-"));
     const targetPath = path.join(testRoot, "target");

@@ -16,7 +16,6 @@ import {
 } from "../agents/agent-scope.js";
 import {
   buildPortableAuthProfileStoreForAgentCopy,
-  ensureAuthProfileStore,
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { AuthProfileStoreUnreadableError } from "../agents/auth-profiles/legacy-source-diagnostic.js";
@@ -26,7 +25,7 @@ import {
   inspectPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
 } from "../agents/auth-profiles/sqlite.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store.js";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
@@ -48,7 +47,7 @@ import { applyAgentBindings, buildChannelBindings, describeBinding } from "./age
 import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { prepareAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
-import { requireValidConfigFileSnapshot } from "./config-validation.js";
+import { requireValidConfigForWrite } from "./config-validation.js";
 import {
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
@@ -112,12 +111,11 @@ export async function agentsAddCommand(
     );
   }
 
-  const configSnapshot = await requireValidConfigFileSnapshot(runtime);
-  if (!configSnapshot) {
+  const writeSnapshot = await requireValidConfigForWrite(runtime);
+  if (!writeSnapshot) {
     return;
   }
-  const cfg = configSnapshot.sourceConfig ?? configSnapshot.config;
-  const baseHash = configSnapshot.hash;
+  const cfg = writeSnapshot.snapshot.sourceConfig;
 
   const workspaceFlag = opts.workspace?.trim();
   const nameInput = opts.name?.trim();
@@ -384,15 +382,9 @@ export async function agentsAddCommand(
       initialValue: false,
     });
     if (wantsAuth) {
-      const authStore = ensureAuthProfileStore(agentDir, {
-        allowKeychainPrompt: false,
-        readOnly: true,
-        syncExternalCli: false,
-      });
       while (true) {
         const authChoice = await promptAuthChoiceGrouped({
           prompter,
-          store: authStore,
           includeSkip: true,
           config: nextConfig,
         });
@@ -514,8 +506,9 @@ export async function agentsAddCommand(
       try {
         nextConfig = await channelSetup.commit(nextConfig, async (configToCommit) => {
           const committed = await commitConfigWithPendingPluginInstalls({
-            nextConfig: configToCommit,
-            ...(baseHash !== undefined ? { baseHash } : {}),
+            sourceConfig: configToCommit,
+            writeOptions: writeSnapshot.writeOptions,
+            baseHash: writeSnapshot.snapshot.hash,
           });
           return committed.config;
         });
@@ -536,8 +529,7 @@ export async function agentsAddCommand(
       const created = await withPluginLifecycleLease({}, async () => {
         return await createAgent({
           entry: { ...stagedEntry, id: agentId },
-          expectedConfigHash: baseHash ?? null,
-          stagedConfig: nextConfig,
+          stagedConfig: { config: nextConfig, writeSnapshot },
           transformConfig: transformConfigWithPendingPluginInstalls,
           ...(stagedAuthBatch
             ? {

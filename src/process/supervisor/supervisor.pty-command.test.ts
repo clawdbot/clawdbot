@@ -46,8 +46,6 @@ describe("process supervisor PTY command contract", () => {
     const command = `printf '%s\\n' "a b" && printf '%s\\n' '$HOME'`;
 
     const run = await supervisor.spawn({
-      sessionId: "s1",
-      backendId: "test",
       mode: "pty",
       argv: ["/trusted/launcher", "--literal", command],
       timeoutMs: 1_000,
@@ -66,8 +64,6 @@ describe("process supervisor PTY command contract", () => {
 
     await expect(
       supervisor.spawn({
-        sessionId: "s1",
-        backendId: "test",
         mode: "pty",
         argv: [],
       }),

@@ -842,35 +842,6 @@ suite.define(() => {
     );
   });
 
-  it("retries the missing identity bootstrap and opens the profile editor", async () => {
-    await suite.withPage(undefined, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        basePath,
-        presenceUsers: testPresenceUsers,
-        methodResponses: {
-          "users.self": { sequence: [{}, { profile: testProfile }] },
-        },
-      });
-
-      const response = await page.goto(new URL(profilePath, suite.server.baseUrl).href);
-      expect(response?.status()).toBe(200);
-
-      const emptyState = page.locator(".profile-identity-empty");
-      await emptyState.waitFor({ timeout: 10_000 });
-      await expect(emptyState.textContent()).resolves.toContain("Identity is not set.");
-      await screenshot(page, "01-identity-not-set.png");
-
-      await page.getByRole("button", { name: "Set identity" }).click();
-
-      await page.locator('.identity-name-control input[type="text"]').waitFor({ timeout: 10_000 });
-      await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(2);
-      await expect(page.locator(".identity-name-control input").inputValue()).resolves.toBe(
-        testProfile.displayName,
-      );
-      await screenshot(page, "02-identity-editor.png");
-    });
-  });
-
   it("keeps identity refresh single-flight and retries after a failed request", async () => {
     await suite.withPage(
       {

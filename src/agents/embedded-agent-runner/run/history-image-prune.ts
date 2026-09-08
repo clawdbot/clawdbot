@@ -66,10 +66,8 @@ function resolvePruneBeforeIndex(messages: AgentMessage[]): number {
     }
   }
 
-  if (currentTurnStart >= 0 && currentTurnHasAssistantReply) {
-    completedTurnStarts.push(currentTurnStart);
-  }
-
+  // Only a later user message closes a turn; tool-loop replies must not move
+  // the cutoff and rewrite the warm prefix during the active turn.
   if (completedTurnStarts.length <= PRESERVE_RECENT_COMPLETED_TURNS) {
     return -1;
   }

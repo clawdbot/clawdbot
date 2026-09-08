@@ -131,6 +131,11 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease.mockResolvedValue({
       previous: null,
       revision: 1,
+      mutation: {
+        databasePath: "/tmp/openclaw.sqlite",
+        before: null,
+        after: { state_key: "plugins.installedIndex", value_json: "{}", updated_at_ms: 1 },
+      },
     });
   });
 
@@ -915,6 +920,11 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease.mockResolvedValue({
       previous: previousPersistedIndex,
       revision: 17,
+      mutation: {
+        databasePath: "/tmp/openclaw.sqlite",
+        before: null,
+        after: { state_key: "plugins.installedIndex", value_json: "{}", updated_at_ms: 17 },
+      },
     });
     mocks.replaceConfigFile.mockRejectedValue(new Error("config changed"));
 

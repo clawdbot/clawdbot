@@ -2,19 +2,17 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { AssistantMessage, Context, Model } from "@openclaw/ai";
 import { streamOpenAICompletions } from "@openclaw/ai/internal/openai";
-import { aroundEach, beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { classifyAssistantFailoverReason } from "../../src/agents/embedded-agent-helpers/assistant-message-failures.js";
 import { formatAssistantErrorText } from "../../src/agents/embedded-agent-helpers/error-text.js";
 import {
   resolveFailoverStatus,
   resolveModelFallbackError,
 } from "../../src/agents/failover-error.js";
-import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
-import { withPluginRuntimeRegistryScope } from "../../src/plugins/runtime/gateway-request-scope.js";
 import { loadBundledPluginFacade } from "../../src/test-utils/bundled-plugin-public-surface.js";
 import { registerSingleProviderPlugin } from "../../src/test-utils/plugin-registration.js";
 
-const pluginRegistry = createEmptyPluginRegistry();
+let providerOwner: Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
 
 beforeAll(async () => {
   const { default: openrouterPlugin } = await loadBundledPluginFacade<{
@@ -23,17 +21,8 @@ beforeAll(async () => {
     pluginId: "openrouter",
     artifactBasename: "index.js",
   });
-  const provider = await registerSingleProviderPlugin(openrouterPlugin);
-  pluginRegistry.providers.push({
-    pluginId: provider.id,
-    source: "test",
-    provider,
-  });
+  providerOwner = await registerSingleProviderPlugin(openrouterPlugin);
 });
-
-// Keep the real provider hooks in an owned scope, without cold discovery or
-// publishing a registry that can leak into another shared-worker test.
-aroundEach((runTest) => withPluginRuntimeRegistryScope(pluginRegistry, runTest));
 
 const model = {
   id: "example/model",
@@ -79,7 +68,7 @@ async function runAgainstOpenRouterError(params: {
     ).result();
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain(params.message);
-    return { reason: classifyAssistantFailoverReason(result), requestBody };
+    return { reason: classifyAssistantFailoverReason(result, { providerOwner }), requestBody };
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
@@ -130,7 +119,7 @@ function expectFallbackBoundary(
   result: AssistantMessage,
   expected: { reason: "server_error" | "timeout"; status: number },
 ): void {
-  const reason = classifyAssistantFailoverReason(result);
+  const reason = classifyAssistantFailoverReason(result, { providerOwner });
   expect(reason).toBe(expected.reason);
   if (!reason) {
     throw new Error("expected streamed provider error to be classified");
@@ -191,7 +180,7 @@ describe("OpenRouter runtime error classification", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain("Rate limit exceeded");
-    const reason = classifyAssistantFailoverReason(result);
+    const reason = classifyAssistantFailoverReason(result, { providerOwner });
     expect(reason).toBe("rate_limit");
     if (!reason) {
       throw new Error("expected structured rate-limit error to be classified");

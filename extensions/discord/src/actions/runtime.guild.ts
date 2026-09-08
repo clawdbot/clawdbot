@@ -321,6 +321,12 @@ export async function handleDiscordGuildAction(
   });
   const withOpts = (extra?: Record<string, unknown>) =>
     createDiscordActionOptions({ cfg, accountId, extra });
+  // Sender-scoped media policy must reach every guild action that reads a host-local source.
+  const mediaPolicyOptions = {
+    mediaAccess: options?.mediaAccess,
+    mediaLocalRoots: options?.mediaLocalRoots,
+    mediaReadFile: options?.mediaReadFile,
+  };
   const assertGuildMetadataReadAllowed = async (
     guildId: string,
     readOptions?: { filteredResults?: boolean },
@@ -415,7 +421,7 @@ export async function handleDiscordGuildAction(
           mediaUrl,
           roleIds: roleIds?.length ? roleIds : undefined,
         },
-        withOpts(),
+        createDiscordActionOptions({ cfg, accountId, extra: mediaPolicyOptions }),
       );
       return jsonResult({ ok: true, emoji });
     }
@@ -442,7 +448,7 @@ export async function handleDiscordGuildAction(
           tags,
           mediaUrl,
         },
-        withOpts(),
+        createDiscordActionOptions({ cfg, accountId, extra: mediaPolicyOptions }),
       );
       return jsonResult({ ok: true, sticker });
     }
@@ -550,9 +556,7 @@ export async function handleDiscordGuildAction(
       const entityTypeRaw = readStringParam(params, "entityType");
       const entityType = entityTypeRaw === "stage" ? 1 : entityTypeRaw === "external" ? 3 : 2;
       const image = imageUrl
-        ? await discordGuildActionRuntime.resolveEventCoverImage(imageUrl, {
-            localRoots: options?.mediaLocalRoots,
-          })
+        ? await discordGuildActionRuntime.resolveEventCoverImage(imageUrl, mediaPolicyOptions)
         : undefined;
       const payload = {
         name,

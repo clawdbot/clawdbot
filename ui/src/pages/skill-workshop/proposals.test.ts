@@ -20,6 +20,15 @@ import {
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
 
+vi.mock("../../lib/skill-workshop/diff-worker.ts", async () => {
+  const { computeSkillWorkshopDiff } = await import("../../lib/skill-workshop/diff.ts");
+  return {
+    compareSkillWorkshopInstructions: vi.fn(async (previous: string, current: string) =>
+      computeSkillWorkshopDiff(previous, current),
+    ),
+  };
+});
+
 const ISO_NOW = "2026-06-16T12:00:00.000Z";
 const DRAFT_HASH = "a".repeat(64);
 const REVISION_HASH = "b".repeat(64);
@@ -61,6 +70,7 @@ function createFixture(
       connection: { gatewayUrl: "", token: "", bootstrapToken: "", password: "" },
       connectionRevision: 0,
       eventLog: [],
+      eventLogRevision: 0,
       connect: vi.fn(),
       setSessionKey: vi.fn(),
       start: vi.fn(),
@@ -95,6 +105,7 @@ function manifest(status: SkillWorkshopProposal["status"] = "pending") {
         createdAt: ISO_NOW,
         updatedAt: ISO_NOW,
         scanState: "clean",
+        revisionHash: REVISION_HASH,
       },
     ],
   };
@@ -156,111 +167,184 @@ function clearNoticeTimer(state: SkillWorkshopState): void {
 }
 
 describe("Skill Workshop proposal RPCs", () => {
-  it("loads installed skills independently of proposal history and reads their current content", async () => {
+  it("reads current installed content and compares only its own applied proposals", async () => {
     const installed = {
       name: "inbox-cleaner",
       skillKey: "inbox-cleaner",
       description: "Current inbox procedure",
     };
     const { state, context, request } = createFixture({ skillWorkshopMode: "skills" });
-    request.mockImplementation(async (method) =>
-      method === "skills.proposals.list"
-        ? { ...manifest("applied"), installedSkills: [installed] }
-        : { ...installed, content: "# Current procedure\n\nChanged by collection review." },
-    );
+    request.mockImplementation(async (method, payload) => {
+      if (method === "skills.proposals.list") {
+        return {
+          ...manifest("applied"),
+          installedSkills: [installed],
+          proposals: [
+            { ...manifest("applied").proposals[0], id: "workshop" },
+            { ...manifest("applied").proposals[0], id: "workspace" },
+          ],
+        };
+      }
+      if (method === "skills.workshop.read") {
+        return { ...installed, content: "# Current procedure\n\nChanged by collection review." };
+      }
+      const { proposalId } = payload as { proposalId: string };
+      return {
+        ...inspectResult("applied"),
+        record: {
+          ...inspectResult("applied").record,
+          id: proposalId,
+          appliedAt: ISO_NOW,
+          target: {
+            skillName: "Inbox Cleaner",
+            skillKey: installed.skillKey,
+            source: proposalId === "workshop" ? "openclaw-workshop" : "openclaw-workspace",
+          },
+        },
+      };
+    });
 
     await loadSkillWorkshopProposals(state, context);
 
-    expect(state.skillWorkshopInstalledSkills).toEqual([installed]);
-    expect(state.skillWorkshopInstalledSelection).toEqual({
+    expect(state.skillWorkshopInstalledSkills.map((skill) => skill.name)).toEqual([installed.name]);
+    expect(state.skillWorkshopInstalledName).toBe(installed.name);
+    const read = state.skillWorkshopInstalledSkills[0]?.read;
+    expect(read).toMatchObject({
       status: "ready",
-      name: installed.name,
       content: "# Current procedure\n\nChanged by collection review.",
     });
+    expect(read?.status === "ready" && read.savedVersions.map((version) => version.key)).toEqual([
+      "workshop",
+    ]);
     expect(request).toHaveBeenCalledWith("skills.workshop.read", {
       agentId: "research",
       name: installed.name,
     });
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("skills.proposals.inspect");
   });
 
-  it("keeps the latest installed selection and rejects a late response after agent switching", async () => {
-    const first = createDeferred<{
-      name: string;
-      skillKey: string;
-      description: string;
-      content: string;
-    }>();
+  it("loads Suggestions without reading installed skill bodies", async () => {
+    const { state, context, request } = createFixture();
+    request.mockImplementation(async (method) =>
+      method === "skills.proposals.list"
+        ? {
+            ...manifest(),
+            installedSkills: [{ name: "inbox", skillKey: "inbox", description: "Inbox procedure" }],
+          }
+        : inspectResult(),
+    );
+
+    await loadSkillWorkshopProposals(state, context);
+
+    expect(state.skillWorkshopProposals[0]?.body).toBe(
+      "Review unread mail and archive low-priority threads.",
+    );
+    expect(request.mock.calls.filter(([method]) => method === "skills.workshop.read")).toEqual([]);
+  });
+
+  it("shares collection reads with clicks and keeps the latest selected skill", async () => {
+    const installed = ["first", "second"].map((name) => ({
+      name,
+      skillKey: name,
+      description: name,
+    }));
+    const first = createDeferred<unknown>();
+    const second = createDeferred<unknown>();
+    const { state, context, request } = createFixture({ skillWorkshopMode: "skills" });
+    request.mockImplementation(async (method, payload) => {
+      if (method === "skills.proposals.list") {
+        return { ...manifest(), proposals: [], installedSkills: installed };
+      }
+      return (payload as { name: string }).name === "first" ? first.promise : second.promise;
+    });
+
+    const loading = loadSkillWorkshopProposals(state, context);
+    await vi.waitFor(() =>
+      expect(
+        request.mock.calls.filter(([method]) => method === "skills.workshop.read"),
+      ).toHaveLength(2),
+    );
+    const selecting = selectSkillWorkshopInstalledSkill(state, context, "second");
+    second.resolve({ ...installed[1], content: "Second current body" });
+    await selecting;
+    first.resolve({ ...installed[0], content: "Late first body" });
+    await loading;
+
+    expect(state.skillWorkshopInstalledName).toBe("second");
+    expect(
+      state.skillWorkshopInstalledSkills.find((skill) => skill.name === "second")?.read,
+    ).toMatchObject({
+      status: "ready",
+      content: "Second current body",
+    });
+    expect(request.mock.calls.filter(([method]) => method === "skills.workshop.read")).toHaveLength(
+      2,
+    );
+  });
+
+  it.each(["agent", "client"])("ignores an installed read after its %s changes", async (source) => {
+    const installed = { name: "inbox-cleaner", skillKey: "inbox-cleaner", description: "Inbox" };
+    const previous = createDeferred<unknown>();
     const { state, context, request, snapshot } = createFixture({
       skillWorkshopAgentId: "research",
-      skillWorkshopMode: "skills",
+      skillWorkshopInstalledSkills: [installed],
     });
-    request.mockReturnValueOnce(first.promise).mockResolvedValue({
-      name: "second",
-      skillKey: "second",
-      description: "Second skill",
-      content: "Second current body",
+    request.mockReturnValueOnce(previous.promise);
+    const onProgress = vi.fn();
+    const loading = selectSkillWorkshopInstalledSkill(state, context, installed.name, {
+      onProgress,
     });
-    const loadingFirst = selectSkillWorkshopInstalledSkill(state, context, "first");
-    await selectSkillWorkshopInstalledSkill(state, context, "second");
-    first.resolve({
-      name: "first",
-      skillKey: "first",
-      description: "First skill",
-      content: "Late first body",
-    });
-    await loadingFirst;
-    expect(state.skillWorkshopInstalledSelection).toEqual({
-      status: "ready",
-      name: "second",
-      content: "Second current body",
-    });
+    if (source === "agent") {
+      snapshot.assistantAgentId = "writer";
+      state.skillWorkshopAgentId = "writer";
+    } else {
+      snapshot.client = createFixture().snapshot.client;
+    }
+    previous.resolve({ ...installed, content: "Stale source content" });
+    await loading;
 
-    const previousAgent = createDeferred<{
-      name: string;
-      skillKey: string;
-      description: string;
-      content: string;
-    }>();
-    request.mockReturnValueOnce(previousAgent.promise);
-    const oldRead = selectSkillWorkshopInstalledSkill(state, context, "first");
-    snapshot.assistantAgentId = "writer";
-    state.skillWorkshopAgentId = "writer";
-    state.skillWorkshopInstalledSelection = { status: "idle" };
-    previousAgent.resolve({
-      name: "first",
-      skillKey: "first",
-      description: "First skill",
-      content: "Old agent body",
+    expect(onProgress).not.toHaveBeenCalled();
+    expect(state.skillWorkshopInstalledSkills[0]?.read).not.toHaveProperty("content");
+    expect(state.skillWorkshopInstalledSkills[0]?.read).not.toMatchObject({
+      status: "ready",
+      content: "Stale source content",
     });
-    await oldRead;
-    expect(state.skillWorkshopInstalledSelection).toEqual({ status: "idle" });
   });
 
-  it("shows a failed installed read and retries it without loading proposal content", async () => {
+  it("keeps a failed collection read until the operator explicitly retries it", async () => {
+    const installed = { name: "inbox-cleaner", skillKey: "inbox-cleaner", description: "Inbox" };
     const { state, context, request } = createFixture({
       skillWorkshopAgentId: "research",
       skillWorkshopMode: "skills",
     });
-    request.mockRejectedValueOnce(new Error("Skill is temporarily unreadable"));
-    await selectSkillWorkshopInstalledSkill(state, context, "inbox-cleaner");
-    expect(state.skillWorkshopInstalledSelection).toEqual({
+    request.mockImplementation(async (method) => {
+      if (method === "skills.proposals.list") {
+        return { ...manifest(), proposals: [], installedSkills: [installed] };
+      }
+      throw new Error("Skill is temporarily unreadable");
+    });
+    await loadSkillWorkshopProposals(state, context);
+    await selectSkillWorkshopInstalledSkill(state, context, installed.name);
+    expect(state.skillWorkshopInstalledSkills[0]?.read).toMatchObject({
       status: "error",
-      name: "inbox-cleaner",
       error: "Skill is temporarily unreadable",
     });
+    expect(request.mock.calls.filter(([method]) => method === "skills.workshop.read")).toHaveLength(
+      1,
+    );
     request.mockResolvedValueOnce({
       name: "inbox-cleaner",
       skillKey: "inbox-cleaner",
       description: "Current inbox",
       content: "Recovered current body",
     });
-    await selectSkillWorkshopInstalledSkill(state, context, "inbox-cleaner");
-    expect(state.skillWorkshopInstalledSelection).toEqual({
+    await selectSkillWorkshopInstalledSkill(state, context, "inbox-cleaner", { force: true });
+    expect(state.skillWorkshopInstalledSkills[0]?.read).toMatchObject({
       status: "ready",
-      name: "inbox-cleaner",
       content: "Recovered current body",
     });
+    expect(request.mock.calls.filter(([method]) => method === "skills.workshop.read")).toHaveLength(
+      2,
+    );
   });
 
   it("does not dispatch proposal mutations with read-only operator access", async () => {
@@ -288,17 +372,22 @@ describe("Skill Workshop proposal RPCs", () => {
 
   it("lists proposals with the selected agent id and carries it into the initial inspect", async () => {
     const { state, context, request } = createFixture();
+    const inspected = createDeferred<ReturnType<typeof inspectResult>>();
     request.mockImplementation(async (method: string) => {
       if (method === "skills.proposals.list") {
         return manifest();
       }
       if (method === "skills.proposals.inspect") {
-        return inspectResult();
+        return inspected.promise;
       }
       return {};
     });
 
-    await loadSkillWorkshopProposals(state, context);
+    const loading = loadSkillWorkshopProposals(state, context);
+    await vi.waitFor(() => expect(state.skillWorkshopInspectingKey).toBe("proposal-1"));
+    expect(state.skillWorkshopProposals[0]?.revisionHash).toBeNull();
+    inspected.resolve(inspectResult());
+    await loading;
 
     expect(request).toHaveBeenNthCalledWith(1, "skills.proposals.list", {
       agentId: "research",
@@ -308,11 +397,12 @@ describe("Skill Workshop proposal RPCs", () => {
       proposalId: "proposal-1",
     });
     expect(state.skillWorkshopProposals[0]?.kind).toBe("create");
+    expect(state.skillWorkshopProposals[0]?.revisionHash).toBe(REVISION_HASH);
   });
 
   it("reports a failed inspect for a selection retained across refresh", async () => {
-    const appliedManifest = manifest("applied");
-    const latest = appliedManifest.proposals[0];
+    const pendingManifest = manifest();
+    const latest = pendingManifest.proposals[0];
     if (!latest) {
       throw new Error("Expected proposal fixture");
     }
@@ -324,11 +414,11 @@ describe("Skill Workshop proposal RPCs", () => {
     const { state, context, request } = createFixture({
       skillWorkshopAgentId: "research",
       skillWorkshopSelectedKey: "proposal-1",
-      skillWorkshopMode: "history",
+      skillWorkshopMode: "suggestions",
     });
     request.mockImplementation(async (method: string) => {
       if (method === "skills.proposals.list") {
-        return { ...appliedManifest, proposals: [latest, previous] };
+        return { ...pendingManifest, proposals: [latest, previous] };
       }
       throw new Error("inspect failed");
     });
@@ -341,6 +431,72 @@ describe("Skill Workshop proposal RPCs", () => {
       ["skills.proposals.inspect", { agentId: "research", proposalId: "proposal-1" }],
     ]);
   });
+
+  it.each(["create", "update"] as const)(
+    "keeps a missing %s draft dismissible beside a usable suggestion",
+    async (kind) => {
+      const missing = {
+        ...manifest().proposals[0],
+        kind,
+        degradedState: "draft-missing",
+      };
+      const valid = { ...manifest().proposals[0], id: "proposal-2" };
+      let status: SkillWorkshopProposal["status"] = "pending";
+      const { state, context, request } = createFixture(
+        {
+          skillWorkshopAgentId: "research",
+          skillWorkshopProposals: [proposal({ body: "Previously available draft." })],
+          skillWorkshopRevisionDraft: "Revise this suggestion.",
+        },
+        {},
+        ["list", "inspect", "apply", "evaluate", "requestRevision", "reject"].map(
+          (method) => `skills.proposals.${method}`,
+        ),
+      );
+      const validInspect = inspectResult();
+      validInspect.record.id = "proposal-2";
+      request.mockImplementation(async (method, payload) => {
+        if (method === "skills.proposals.list") {
+          return { ...manifest(), proposals: [{ ...missing, status }, valid] };
+        }
+        if (method === "skills.proposals.inspect") {
+          expect(payload).toEqual({ agentId: "research", proposalId: "proposal-2" });
+          return validInspect;
+        }
+        if (method === "skills.proposals.reject") {
+          expect(payload).toEqual({
+            agentId: "research",
+            proposalId: "proposal-1",
+            expectedRevisionHash: REVISION_HASH,
+          });
+          status = "rejected";
+          return {};
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+
+      await loadSkillWorkshopProposals(state, context);
+      expect(state.skillWorkshopProposals[0]).toMatchObject({
+        degradedState: "draft-missing",
+        revisionHash: REVISION_HASH,
+        body: "",
+      });
+      await runSkillWorkshopLifecycleAction(state, context, "apply", proposalDecision());
+      await expect(runSkillWorkshopEvaluation(state, context, "proposal-1")).resolves.toBe(false);
+      const sendRevision = vi.fn();
+      await requestSkillWorkshopRevision(state, context, "proposal-1", sendRevision);
+      expect(sendRevision).not.toHaveBeenCalled();
+      expect(request).toHaveBeenCalledTimes(1);
+
+      try {
+        await runSkillWorkshopLifecycleAction(state, context, "reject", proposalDecision());
+        expect(state.skillWorkshopError).toBeNull();
+        expect(state.skillWorkshopProposals[1]?.body).toBe(validInspect.content);
+      } finally {
+        clearNoticeTimer(state);
+      }
+    },
+  );
 
   it("preserves capped support-file size formatting through the shared helper", async () => {
     const { state, context, request } = createFixture();
@@ -426,10 +582,10 @@ describe("Skill Workshop proposal RPCs", () => {
       expect(request).toHaveBeenNthCalledWith(2, "skills.proposals.list", {
         agentId: "reviewer",
       });
-      expect(request).toHaveBeenNthCalledWith(3, "skills.proposals.inspect", {
-        agentId: "reviewer",
-        proposalId: "proposal-1",
-      });
+      expect(request.mock.calls.map(([calledMethod]) => calledMethod)).toEqual([
+        method,
+        "skills.proposals.list",
+      ]);
     },
   );
 

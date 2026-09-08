@@ -80,7 +80,7 @@ const presetState = {
   desiredRevisions: new Map<string, string>(),
   transition: Promise.resolve(),
 };
-const LLAMA_CPP_PRESET_RELOAD_TIMEOUT_MS = 15_000; // b10534 unload window: 10 seconds.
+const LLAMA_CPP_PRESET_RELOAD_TIMEOUT_MS = 15_000; // Allows five seconds beyond model shutdown.
 
 function parseHuggingFaceSource(source: string): {
   user: string;
@@ -348,7 +348,7 @@ async function updatePreset(
       await writePreset(presetPath, next);
     }
     if (params.reconcileOrigin) {
-      // A revision becomes applied only after b10534 acknowledges reload; failures stay dirty.
+      // A revision becomes applied only after llama.cpp acknowledges reload; failures stay dirty.
       presetState.desiredRevisions.set(params.reconcileOrigin, `${presetPath}\0${next}`);
     }
   });

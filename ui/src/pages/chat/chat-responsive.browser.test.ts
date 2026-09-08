@@ -1775,6 +1775,39 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("hides image avatars when the mobile transcript drops their grid column", async () => {
+    const page = await openBrowserPage(430, 720);
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-thread">
+            <div class="chat-group assistant chat-group--with-footer">
+              <img class="chat-avatar assistant" alt="Assistant" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36'/%3E" />
+              <div class="chat-group-messages">
+                <div class="chat-bubble"><div class="chat-text">Completed work remains readable.</div></div>
+              </div>
+              <div class="chat-group-footer"><span class="chat-sender-name">Assistant</span></div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+      const avatar = page.locator(".chat-avatar");
+      for (const width of [430, 400, 390, 320, 401, 768, 769, 1366]) {
+        await page.setViewportSize({ width, height: 720 });
+        if (width <= 768) {
+          await expectBrowser(avatar).toBeHidden();
+        } else {
+          await expectBrowser(avatar).toBeVisible();
+          const image = await avatar.boundingBox();
+          const text = await page.locator(".chat-text").boundingBox();
+          expect(image!.x + image!.width).toBeLessThanOrEqual(text!.x);
+        }
+      }
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it("applies configured chat width to tool rows and composer without changing defaults", async () => {
     const page = await openBrowserPage(1600, 900);
     const renderFixture = async (configured: boolean) => {
@@ -2043,9 +2076,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             const composer = document
               .querySelector<HTMLElement>(".agent-chat__composer-shell")!
               .getBoundingClientRect();
-            const thread = document
-              .querySelector<HTMLElement>(".chat-thread")!
-              .getBoundingClientRect();
+            const threadElement = document.querySelector<HTMLElement>(".chat-thread")!;
+            const thread = threadElement.getBoundingClientRect();
             const fade = getComputedStyle(
               document.querySelector<HTMLElement>(".agent-chat__composer-shell")!,
               "::before",
@@ -2055,9 +2087,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
               conversation: rect(".chat-main__conversation"),
               fadeInsetLeft: composer.left + Number.parseFloat(fade.left) - thread.left,
               fadeInsetRight: thread.right - (composer.right - Number.parseFloat(fade.right)),
-              scrollbarSize: Number.parseFloat(
-                getComputedStyle(document.documentElement).getPropertyValue("--scrollbar-size"),
-              ),
+              scrollbarSize: (thread.width - threadElement.clientWidth) / 2,
               thread: rect(".chat-thread"),
             };
           });
@@ -3202,13 +3232,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const page = await openFixture(width, height);
       try {
         const roles = await page.evaluate(() => {
-          const transcriptViewport = document.querySelector<HTMLElement>(".chat-thread")!;
-          const widthProbe = document.createElement("div");
-          widthProbe.style.width = "100%";
-          widthProbe.style.height = "0";
-          transcriptViewport.append(widthProbe);
-          const transcriptAvailableWidth = widthProbe.getBoundingClientRect().width;
-          widthProbe.remove();
           const rectFor = (selector: string) => {
             const node = document.querySelector(selector) as HTMLElement | null;
             if (!node) {
@@ -3227,7 +3250,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             assistantBubble: rectFor(".chat-group.assistant .chat-bubble:first-child"),
             transcript: rectFor(".chat-thread-inner"),
             transcriptViewport: rectFor(".chat-thread"),
-            transcriptAvailableWidth,
+            composer: rectFor(".agent-chat__composer-shell"),
             userLane: rectFor(".chat-group.user .chat-group-messages"),
             userBubble: rectFor(".chat-group.user .chat-bubble:first-child"),
           };
@@ -3251,7 +3274,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           ),
         ).toBeLessThanOrEqual(1);
         if (width <= 768) {
-          expect(roles.transcriptAvailableWidth - transcript.width).toBeCloseTo(32, 0);
+          const composer = expectControlRect(roles.composer, "composer");
+          expect(transcript.x).toBeCloseTo(composer.x, 0);
+          expect(transcript.width).toBeCloseTo(composer.width, 0);
         } else {
           expect(transcript.width).toBeCloseTo(768, 0);
         }
@@ -4626,55 +4651,71 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   });
 
   it.for(["dark", "light"])(
-    "keeps unconfirmed footers and Retry amber while failed sends stay red in %s mode",
+    "keeps send recovery visible before hover with unconfirmed amber and failed red in %s mode",
     async (theme, context) => {
       const page = await openBrowserPage(390, 844);
       try {
         await page.setContent(`<!doctype html><html data-theme-mode="${theme}"><head><style>${readUiCss()}</style></head><body>
         <span id="warning-color-probe" style="color: var(--warn)">Warning</span>
         <span id="danger-color-probe" style="color: var(--danger)">Failure</span>
+        <div class="chat-thread">
         ${[
           { state: "unconfirmed", label: "Delivery unconfirmed" },
           { state: "failed", label: "Not sent" },
         ]
-          .map(
-            ({ state, label }) => `<div class="chat-group user chat-group--with-footer">
+          .flatMap(({ state, label }) =>
+            ["own", "peer", "direct"].map(
+              (
+                sender,
+              ) => `<div class="chat-group user chat-group--with-footer${sender === "peer" ? " chat-group--peer" : ""}">
           <div class="chat-group-messages"><div class="chat-bubble">Attempted message</div></div>
-          <div class="chat-group-footer chat-group-footer--send-failure">
+          <div class="chat-group-footer chat-group-footer--send-failure${sender === "direct" ? "" : " chat-group-footer--persistent-identity"}">
             <div class="chat-group-footer__meta"><span class="chat-sender-name">You</span>
               <span class="chat-send-status" data-send-state="${state}">
                 <span>·</span><span>${label}</span><span>·</span>
                 <button class="chat-send-status__action chat-send-status__retry" type="button">Retry</button>
+                ${state === "unconfirmed" ? '<button class="chat-send-status__action chat-send-status__discard" type="button">Discard</button>' : ""}
               </span>
             </div>
           </div>
         </div>`,
+            ),
           )
           .join("")}
+        </div>
       </body></html>`);
 
         for (const [state, probe] of [
           ["unconfirmed", "warning"],
           ["failed", "danger"],
         ]) {
-          const status = page.locator(`.chat-send-status[data-send-state="${state}"]`);
+          const statuses = page.locator(`.chat-send-status[data-send-state="${state}"]`);
           const expectedColor = await page
             .locator(`#${probe}-color-probe`)
             .evaluate((element) => getComputedStyle(element).color);
-          expect(await status.evaluate((element) => getComputedStyle(element).color)).toBe(
-            expectedColor,
-          );
-          const retry = status.locator("button");
-          expect(await retry.evaluate((element) => getComputedStyle(element).borderStyle)).toBe(
-            "none",
-          );
-          expect(await retry.evaluate((element) => getComputedStyle(element).color)).toBe(
-            expectedColor,
-          );
-          await retry.hover();
-          await context.expect
-            .poll(() => retry.evaluate((element) => getComputedStyle(element).color))
-            .toBe(expectedColor);
+          for (const status of await statuses.all()) {
+            await page.mouse.move(0, 0);
+            // A child can report opacity 1 while its collapsed identity footer hides it.
+            const footer = status.locator("..").locator("..");
+            await expectBrowser(footer).toHaveCSS("opacity", "1");
+            expect(await status.evaluate((element) => getComputedStyle(element).color)).toBe(
+              expectedColor,
+            );
+            for (const action of await status.locator("button").all()) {
+              await expectBrowser(action).toHaveCSS("opacity", "1");
+              await expectBrowser(action).toHaveCSS("pointer-events", "auto");
+              expect(
+                await action.evaluate((element) => getComputedStyle(element).borderStyle),
+              ).toBe("none");
+              expect(await action.evaluate((element) => getComputedStyle(element).color)).toBe(
+                expectedColor,
+              );
+              await action.hover();
+              await context.expect
+                .poll(() => action.evaluate((element) => getComputedStyle(element).color))
+                .toBe(expectedColor);
+            }
+          }
         }
       } finally {
         await closeBrowserPage(page);

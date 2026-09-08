@@ -63,7 +63,7 @@ async function withRealtimeProvider(
       : new OpenAIQuicksilverVoiceBridge(
           {
             providerConfig: {},
-            model: "gpt-live-1-codex",
+            model: "gpt-live-test-canary",
             audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
             resolveAuth: async () => ({ type: "api-key", token: "fixture-local" }),
             webSocketFactory: (_url, options) => new WebSocket(endpoint, options),

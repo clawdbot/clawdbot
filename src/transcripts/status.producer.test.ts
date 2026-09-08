@@ -1,13 +1,6 @@
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createTranscriptsTool } from "../agents/tools/transcripts-tool.js";
-import {
-  getRuntimeConfigSnapshot,
-  resetConfigRuntimeState,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
+import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { diffGatewayReloadPaths } from "../gateway/config-diff.js";
 import {
@@ -16,87 +9,19 @@ import {
   listConfigReloadRefinementPrefixes,
 } from "../gateway/config-reload-plan.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  captureActivePluginRegistrySnapshot,
-  restoreActivePluginRegistrySnapshot,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTranscriptsAutoStartService } from "./auto-start.js";
 import { activeSessions, readTranscriptCaptureSnapshot, startTranscripts } from "./capture.js";
 import * as providerRegistry from "./provider-registry.js";
-import type {
-  TranscriptOccupancyWatchRequest,
-  TranscriptSourceProvider,
-  TranscriptStartRequest,
-} from "./provider-types.js";
+import type { TranscriptOccupancyWatchRequest, TranscriptStartRequest } from "./provider-types.js";
 import { readTranscriptLibraryStatus } from "./status.js";
+import {
+  transcriptStatusRoom as room,
+  useTranscriptStatusFixture,
+} from "./status.producer.test-harness.js";
 import { transcriptSessionSelector, TranscriptsStore } from "./store.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-let previousRegistry: ReturnType<typeof captureActivePluginRegistrySnapshot>;
-beforeEach(() => {
-  previousRegistry = captureActivePluginRegistrySnapshot();
-});
-afterEach(() => {
-  activeSessions.clear();
-  resetConfigRuntimeState();
-  closeOpenClawStateDatabaseForTest();
-  restoreActivePluginRegistrySnapshot(previousRegistry);
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-});
-
-const room = {
-  providerId: "fixture-voice",
-  accountId: "work",
-  guildId: "guild",
-  channelId: "room",
-};
-
-function fixture(config: OpenClawConfig = { transcripts: { autoStart: [room] } }) {
-  const stateDir = tempDirs.make("transcript-status-producer-");
-  const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  });
-  const provider: TranscriptSourceProvider = {
-    id: room.providerId,
-    aliases: ["voice-alias"],
-    name: "Fixture voice",
-    sourceKinds: ["live-audio"],
-    accessControl: {
-      channelId: "discord",
-      resolveAccountId: ({ source }) => ({ ok: true, value: source.accountId ?? "default" }),
-      authorize: async ({ caller }) =>
-        caller.kind === "operator"
-          ? { ok: true, value: undefined }
-          : { ok: false, error: "operator required" },
-    },
-    start: async ({ session }) => ({ ok: true, session }),
-    stop: async ({ sessionId }) => ({ ok: true, sessionId }),
-  };
-  vi.spyOn(providerRegistry, "getTranscriptSourceProvider").mockReturnValue(provider);
-  vi.spyOn(providerRegistry, "listTranscriptSourceProviders").mockReturnValue([provider]);
-  const registry = createEmptyPluginRegistry();
-  registry.transcriptSourceProviders.push({ pluginId: "fixture", source: "fixture", provider });
-  setActivePluginRegistry(registry);
-  const ctx = { config, stateDir, agentId: "main", logger: { warn: vi.fn() } };
-  const tool = createTranscriptsTool({ ...ctx, caller: { kind: "operator", source: "local" } });
-  return {
-    ctx,
-    store,
-    provider,
-    tool,
-    read: () => readTranscriptLibraryStatus(store, config),
-    start: (rawParams: Record<string, unknown>, configuredLifecycle?: true) =>
-      startTranscripts({
-        ctx: { ...ctx, caller: { kind: "operator", source: "local" } },
-        store,
-        rawParams,
-        configuredLifecycle,
-      }),
-  };
-}
+const fixture = useTranscriptStatusFixture();
 
 describe("configured transcript source provenance", () => {
   it.each([
@@ -705,6 +630,64 @@ describe("configured transcript source provenance", () => {
       await vi.advanceTimersByTimeAsync(65_000);
       expect(start).toHaveBeenCalledTimes(1);
       expect(await f.store.listSessionEntries()).toHaveLength(1);
+    } finally {
+      await service.stop();
+    }
+  });
+
+  it("rejects a duplicate fixed ID after its first capture ends without changing saved notes", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    // Crossing midnight lets an accidental second capture create a distinct archive row.
+    vi.setSystemTime(new Date("2026-09-05T23:59:58.000Z"));
+    const entry = { ...room, sessionId: "daily" };
+    const delayedId = "delayed-voice";
+    const f = fixture({
+      transcripts: { autoStart: [entry, { ...entry, providerId: delayedId }] },
+    });
+    const start = vi.fn(f.provider.start!);
+    const delayedStart = vi.fn(f.provider.start!);
+    f.provider.start = start;
+    const delayedProvider = { ...f.provider, id: delayedId, start: delayedStart };
+    vi.mocked(providerRegistry.getTranscriptSourceProvider).mockImplementation((id) =>
+      id === room.providerId ? f.provider : undefined,
+    );
+    const service = createTranscriptsAutoStartService(f.ctx);
+    try {
+      service.start();
+      await vi.waitFor(async () =>
+        expect((await f.read()).configuredSources).toMatchObject([
+          { state: "armed" },
+          { startDiagnostic: "retrying" },
+        ]),
+      );
+      const request = start.mock.calls[0]![0];
+      await request.onUtterance({ text: "Saved before the duplicate retry", final: true });
+      await request.onStatus!({ active: false });
+      expect((await f.read()).active).toEqual([]);
+      const session = (await f.store.readSession(entry.sessionId))!;
+      expect(session.stoppedAt).toEqual(expect.any(String));
+      const notes = await f.store.readSummary(session);
+      expect(notes.summary?.transcript).toEqual(["Saved before the duplicate retry"]);
+      const revision = f.store.readSummaryInputRevision(session);
+      vi.mocked(providerRegistry.getTranscriptSourceProvider).mockImplementation((id) =>
+        id === delayedId ? delayedProvider : f.provider,
+      );
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.waitFor(async () =>
+        expect((await f.read()).configuredSources[1]?.startDiagnostic).not.toBe("starting"),
+      );
+      expect.soft((await f.read()).configuredSources[1]).toMatchObject({
+        state: "not-active",
+        startDiagnostic: "id-conflict",
+        activeSelectors: [],
+      });
+      await vi.advanceTimersByTimeAsync(65_000);
+      expect(start).toHaveBeenCalledOnce();
+      expect(delayedStart).not.toHaveBeenCalled();
+      expect(await f.store.listSessionEntries()).toHaveLength(1);
+      expect(await f.store.readSession(entry.sessionId)).toEqual(session);
+      expect(await f.store.readSummary(session)).toEqual(notes);
+      expect(f.store.readSummaryInputRevision(session)).toBe(revision);
     } finally {
       await service.stop();
     }

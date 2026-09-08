@@ -471,21 +471,17 @@ describe("opencode-go provider plugin", () => {
   it("does not mix provider-specific runtime auth with shared discovery auth", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("blocked fetch"));
+    const resolveProviderApiKey = vi.fn((providerId: string) =>
+      providerId === "opencode-go"
+        ? { apiKey: NON_ENV_SECRETREF_MARKER, discoveryApiKey: undefined }
+        : { apiKey: "shared-opencode-key", discoveryApiKey: "shared-opencode-key" },
+    );
 
     try {
       const result = await provider.catalog?.run({
         config: {},
         env: {},
-        resolveProviderApiKey: (providerId: string) =>
-          providerId === "opencode-go"
-            ? {
-                apiKey: NON_ENV_SECRETREF_MARKER,
-                discoveryApiKey: undefined,
-              }
-            : {
-                apiKey: "shared-opencode-key",
-                discoveryApiKey: "shared-opencode-key",
-              },
+        resolveProviderApiKey,
         resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
       } as never);
 
@@ -494,10 +490,33 @@ describe("opencode-go provider plugin", () => {
       }
       expect(result.provider.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
       expect(result.provider.models.map((model) => model.id)).toContain("deepseek-v4-pro");
+      expect(resolveProviderApiKey).toHaveBeenCalledExactlyOnceWith("opencode-go");
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       fetchMock.mockRestore();
     }
+  });
+
+  it("uses Zen credentials for the Go catalog only when Go has no credentials", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const resolveProviderApiKey = vi.fn((providerId?: string) => ({
+      apiKey: providerId === "opencode" ? NON_ENV_SECRETREF_MARKER : undefined,
+    }));
+
+    await expect(
+      provider.catalog?.run({
+        config: {},
+        env: {},
+        resolveProviderApiKey,
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      }),
+    ).resolves.toMatchObject({
+      provider: {
+        baseUrl: "https://opencode.ai/zen/go/v1",
+        apiKey: NON_ENV_SECRETREF_MARKER,
+      },
+    });
+    expect(resolveProviderApiKey.mock.calls).toEqual([["opencode-go"], ["opencode"]]);
   });
 
   it("caches both catalog requests without concealing later acquisition failure", async () => {

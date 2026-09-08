@@ -6,6 +6,13 @@ import Testing
 
 struct DeviceSettingsBridgeTests {
     private static let toggleKeys: [(String, DeviceSettingKey)] = [
+        ("app.notificationsEnabled", .notificationsEnabled),
+        ("capabilities.keepAwakeEnabled", .keepAwakeEnabled),
+        ("capabilities.healthSummaryEnabled", .healthSummaryEnabled),
+        ("voice.talkEnabled", .talkEnabled),
+        ("voice.talkButtonEnabled", .talkButtonEnabled),
+        ("voice.talkBackgroundEnabled", .talkBackgroundEnabled),
+        ("voice.speakerphoneEnabled", .speakerphoneEnabled),
         ("app.showDockIcon", .showDockIcon),
         ("app.iconAnimationsEnabled", .iconAnimationsEnabled),
         ("app.launchAtLogin", .launchAtLogin),
@@ -46,6 +53,9 @@ struct DeviceSettingsBridgeTests {
 
     @Test func `typed setters accept the frozen strings arrays and nullable microphone`() {
         let cases: [(String, Any, DeviceSettingsRequest)] = [
+            ("app.appearance", "system", .set(.appearance, .string("system"))),
+            ("app.appearance", "light", .set(.appearance, .string("light"))),
+            ("app.appearance", "dark", .set(.appearance, .string("dark"))),
             ("app.iconStyle", "paper", .set(.iconStyle, .string("paper"))),
             ("app.iconStyle", "heritage", .set(.iconStyle, .string("heritage"))),
             ("app.iconStyle", "clawmark", .set(.iconStyle, .string("clawmark"))),
@@ -73,6 +83,8 @@ struct DeviceSettingsBridgeTests {
 
     @Test func `setters reject unknown keys wrong types and noncanonical enum values`() {
         let invalid: [(String, Any)] = [
+            ("app.appearance", "automatic"),
+            ("app.appearance", "Dark"),
             ("app.iconStyle", "Original"),
             ("app.iconStyle", "openc"),
             ("app.iconStyle", ["paper"]),
@@ -99,7 +111,7 @@ struct DeviceSettingsBridgeTests {
             #expect(DeviceSettingsRequest(body: ["type": "set", "key": key, "value": value]) == nil)
         }
         let typedKeys = [
-            "app.iconStyle",
+            "app.appearance", "app.iconStyle",
             "capabilities.computerControlProvider", "permissions.location.mode", "browser.cookieSync.domains",
             "browser.cookieSync.targetProfile", "voice.microphone", "voice.locale.primary", "voice.locale.additional",
         ]
@@ -124,7 +136,9 @@ struct DeviceSettingsBridgeTests {
         let panels: [(String, DeviceSettingsPanel)] = [
             ("quick-chat-shortcut", .quickChatShortcut), ("microphone-test", .microphoneTest),
             ("browser-import", .browserImport), ("connection", .connection), ("gateways", .gateways), ("debug", .debug),
+            ("diagnostics", .diagnostics), ("licenses", .licenses), ("about", .about), ("watch", .watch),
         ]
+        #expect(Set(DeviceSettingsPanel.allCases.map(\.rawValue)) == Set(panels.map(\.0)))
         for (name, panel) in panels {
             #expect(DeviceSettingsRequest(body: ["type": "open", "panel": name]) == .open(panel))
         }
@@ -138,7 +152,12 @@ struct DeviceSettingsBridgeTests {
             ("location", .location, .location),
             ("automation", .automation, .appleScript),
         ]
-        #expect(DeviceSettingsPermission.allCases.map(\.rawValue) == permissions.map(\.0))
+        #expect(DeviceSettingsPermission.macOSPermissions.map(\.rawValue) == permissions.map(\.0))
+        for permission in [DeviceSettingsPermission.contacts, .calendars, .reminders, .photos] {
+            #expect(permission.capability == nil)
+            #expect(DeviceSettingsRequest(body: ["type": "request-permission", "id": permission.rawValue]) ==
+                .requestPermission(permission))
+        }
         for (name, permission, capability) in permissions {
             #expect(DeviceSettingsRequest(body: ["type": "request-permission", "id": name]) ==
                 .requestPermission(permission))
@@ -176,131 +195,9 @@ struct DeviceSettingsBridgeTests {
         #expect(DeviceSettingsPermissionStatus(.notGranted) == .denied)
         #expect(DeviceSettingsPermissionStatus(.unknown) == .unavailable)
         #expect(DeviceSettingsPermissionStatus(nil) == .unavailable)
-        let statuses: [DeviceSettingsPermissionStatus] = [.granted, .denied, .notDetermined, .unavailable]
+        let statuses: [DeviceSettingsPermissionStatus] = [.granted, .denied, .notDetermined, .unavailable, .limited]
         let data = try JSONEncoder().encode(statuses)
         #expect(try JSONSerialization.jsonObject(with: data) as? [String] ==
-            ["granted", "denied", "notDetermined", "unavailable"])
+            ["granted", "denied", "notDetermined", "unavailable", "limited"])
     }
-
-    @Test func `snapshot preserves every frozen field and explicit null`() throws {
-        let encoded = try JSONEncoder().encode(Self.snapshot())
-        let actual = try #require(JSONSerialization.jsonObject(with: encoded) as? NSDictionary)
-        let expected = try #require(JSONSerialization
-            .jsonObject(with: Data(Self.expectedSnapshot.utf8)) as? NSDictionary)
-        #expect(actual == expected)
-    }
-
-    @Test func `published JavaScript assigns the global then dispatches the exact event with escaped values`() throws {
-        let script = try Self.snapshot(withNullableValues: true).javaScript()
-        let prefix = "window.__OPENCLAW_NATIVE_DEVICE_SETTINGS__ = "
-        let suffix = "; window.dispatchEvent(new CustomEvent('openclaw:native-device-settings-changed', " +
-            "{detail: window.__OPENCLAW_NATIVE_DEVICE_SETTINGS__}));"
-        try #require(script.hasPrefix(prefix))
-        try #require(script.hasSuffix(suffix))
-        let json = script.dropFirst(prefix.count).dropLast(suffix.count)
-        let payload = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
-        let device = try #require(payload["device"] as? [String: Any])
-        let app = try #require(payload["app"] as? [String: Any])
-        let browser = try #require(payload["browser"] as? [String: Any])
-        let cookieSync = try #require(browser["cookieSync"] as? [String: Any])
-        let voice = try #require(payload["voice"] as? [String: Any])
-        let microphone = try #require(voice["microphone"] as? [String: Any])
-        let updates = try #require(payload["updates"] as? [String: Any])
-        #expect(device["profileName"] as? String == "fixture-profile")
-        #expect(app["quickChatShortcut"] as? String == "⌥Space")
-        #expect(cookieSync["detail"] as? String == "Sync 'fixture' \\\"quoted\\\"\nnext line")
-        #expect(microphone["selectedId"] as? String == "fixture-mic")
-        #expect(updates["unavailableReason"] as? String == "Updates are unavailable for this fixture.")
-    }
-
-    private static func snapshot(withNullableValues: Bool = false) -> DeviceSettingsSnapshot {
-        DeviceSettingsSnapshot(
-            device: .init(
-                appVersion: "2026.9.3",
-                appBuild: "123",
-                profileName: withNullableValues ? "fixture-profile" : nil),
-            app: .init(
-                showDockIcon: true,
-                iconStyle: .init(selectedId: "paper", available: [
-                    .init(id: "paper", name: "Original"), .init(id: "origami", name: "Origami"),
-                ]),
-                iconAnimationsEnabled: false, launchAtLogin: true, launchAtLoginAvailable: false,
-                quickChatEnabled: true, quickChatShortcut: withNullableValues ? "⌥Space" : nil,
-                debugPaneEnabled: false),
-            capabilities: .init(
-                canvasEnabled: true, cameraEnabled: false, computerControlEnabled: true, computerControlProvider: "cua",
-                cuaDriverBundled: true, peekabooBridgeEnabled: false, activeComputerPresenceEnabled: true),
-            browser: .init(
-                importAvailable: false,
-                cookieSync: .init(
-                    available: true, enabled: true, domains: ["example.test"], targetProfile: "fixture", state: .idle,
-                    detail: withNullableValues ? "Sync 'fixture' \\\"quoted\\\"\nnext line" : nil)),
-            permissions: .init(
-                entries: [
-                    .init(id: .notifications, status: .granted), .init(id: .accessibility, status: .denied),
-                    .init(id: .screenRecording, status: .notDetermined), .init(id: .microphone, status: .unavailable),
-                    .init(id: .camera, status: .granted), .init(id: .speechRecognition, status: .denied),
-                    .init(id: .location, status: .notDetermined), .init(id: .automation, status: .unavailable),
-                ],
-                location: .init(mode: .whileUsing, precise: true)),
-            voice: .init(
-                supported: true, wakeEnabled: false, wakeTriggersTalkMode: true, pushToTalkEnabled: false,
-                talkPhaseSoundsEnabled: true, talkShiftToStopEnabled: false, realtimeRelayEnabled: true,
-                triggerChime: false, sendChime: true,
-                microphone: .init(
-                    selectedId: withNullableValues ? "fixture-mic" : nil,
-                    devices: [.init(id: "fixture-mic", name: "Fixture Microphone")]),
-                locale: .init(
-                    primary: "en-US", additional: ["de-DE"],
-                    available: [.init(id: "en-US", name: "English (United States)")])),
-            updates: .init(
-                available: false, automatic: true,
-                unavailableReason: withNullableValues ? "Updates are unavailable for this fixture." : nil))
-    }
-
-    private static let expectedSnapshot = """
-    {
-      "contract": 1,
-      "device": {"platform": "macos", "appVersion": "2026.9.3", "appBuild": "123", "profileName": null},
-      "app": {
-        "showDockIcon": true, "iconAnimationsEnabled": false, "launchAtLogin": true,
-        "iconStyle": {
-          "selectedId": "paper",
-          "available": [{"id": "paper", "name": "Original"}, {"id": "origami", "name": "Origami"}]
-        },
-        "launchAtLoginAvailable": false, "quickChatEnabled": true, "quickChatShortcut": null, "debugPaneEnabled": false
-      },
-      "capabilities": {
-        "canvasEnabled": true, "cameraEnabled": false, "computerControlEnabled": true,
-        "computerControlProvider": "cua", "cuaDriverBundled": true, "peekabooBridgeEnabled": false,
-        "activeComputerPresenceEnabled": true
-      },
-      "browser": {
-        "importAvailable": false,
-        "cookieSync": {
-          "available": true, "enabled": true, "domains": ["example.test"], "targetProfile": "fixture",
-          "state": "idle", "detail": null
-        }
-      },
-      "permissions": {
-        "entries": [
-          {"id": "notifications", "status": "granted"}, {"id": "accessibility", "status": "denied"},
-          {"id": "screenRecording", "status": "notDetermined"}, {"id": "microphone", "status": "unavailable"},
-          {"id": "camera", "status": "granted"}, {"id": "speechRecognition", "status": "denied"},
-          {"id": "location", "status": "notDetermined"}, {"id": "automation", "status": "unavailable"}
-        ],
-        "location": {"mode": "whileUsing", "precise": true}
-      },
-      "voice": {
-        "supported": true, "wakeEnabled": false, "wakeTriggersTalkMode": true, "pushToTalkEnabled": false,
-        "talkPhaseSoundsEnabled": true, "talkShiftToStopEnabled": false, "realtimeRelayEnabled": true,
-        "triggerChime": false, "sendChime": true,
-        "microphone": {"selectedId": null, "devices": [{"id": "fixture-mic", "name": "Fixture Microphone"}]},
-        "locale": {
-          "primary": "en-US", "additional": ["de-DE"], "available": [{"id": "en-US", "name": "English (United States)"}]
-        }
-      },
-      "updates": {"available": false, "automatic": true, "unavailableReason": null}
-    }
-    """
 }

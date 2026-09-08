@@ -741,7 +741,7 @@ describe("Codex supervision catalog", () => {
         },
         {
           id: "thread-fallback",
-          preview: "Investigate\nfailed Rosita run",
+          preview: "\x1b[31mInvestigate\x1b[0m\nfailed\x00 Rosita\x7f run",
           status: { type: "idle" },
           source: "cli",
         },

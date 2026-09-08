@@ -1,16 +1,110 @@
 // @vitest-environment node
+import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
 import { describe, expect, it } from "vitest";
 import {
   canArchiveSessionRow,
   canDeleteSessionRows,
   canonicalUiSessionKeyForPersistence,
   isUiSelectedGlobalSessionKey,
+  normalizeSessionKeyForUiComparison,
+  parseAgentSessionKey,
   parseSessionKeyParts,
+  resolveAgentIdFromSessionKey,
   resolveUiSessionNavigationParentKey,
   resolveUiConversationIdentity,
   uiSessionEventMatches,
   uiSessionRowMatchesSelectedChat,
 } from "./session-key.ts";
+
+describe("Dashboard fixture session keys", () => {
+  it.each([
+    ["agent:main:main", "main", "main"],
+    ["agent:ops:home", "ops", "home"],
+    ["agent:ops:current", "ops", "current"],
+    ["agent:research:main:thread", "research", "main:thread"],
+    ["agent:main:dashboard:uuid", "main", "dashboard:uuid"],
+    [
+      "agent:main:dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d",
+      "main",
+      "dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d",
+    ],
+    ["agent:main:node-proof-claude", "main", "node-proof-claude"],
+    ["agent:main:explicit:node-mcp-debug", "main", "explicit:node-mcp-debug"],
+    ["agent:main:telegram:direct:42", "main", "telegram:direct:42"],
+    ["agent:main:telegram:cards:dm:42", "main", "telegram:cards:dm:42"],
+    ["agent:main:telegram:cards:direct:42", "main", "telegram:cards:direct:42"],
+    ["agent:main:telegram:default:direct:42", "main", "telegram:default:direct:42"],
+    ["agent:main:telegram:direct:12345😀67890", "main", "telegram:direct:12345😀67890"],
+    ["agent:main:telegram:group:-1001234567890", "main", "telegram:group:-1001234567890"],
+    ["agent:main:slack:channel:C1", "main", "slack:channel:C1", "slack:channel:c1"],
+    ["agent:main:dm:+123", "main", "dm:+123"],
+    ["agent:main:direct:+123", "main", "direct:+123"],
+    ["agent:main:dm:account:group:room", "main", "dm:account:group:room"],
+    [
+      "agent:main:slack:acct-1:channel:C1",
+      "main",
+      "slack:acct-1:channel:C1",
+      "slack:acct-1:channel:c1",
+    ],
+    [
+      "agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN",
+      "data-expert",
+      "dingtalk:cidzg6sF43NZMy52Rnk8EN",
+      "dingtalk:cidzg6sf43nzmy52rnk8en",
+    ],
+    ["agent:main:telegram:user:12345:extra", "main", "telegram:user:12345:extra"],
+    ["agent:main:subagent:worker", "main", "subagent:worker"],
+    ["agent:main:cron:daily", "main", "cron:daily"],
+    [
+      "agent:ops:catalog:fixture:node%3ADevBox:Thread%3AA",
+      "ops",
+      "catalog:fixture:node%3ADevBox:Thread%3AA",
+      "catalog:fixture:node%3adevbox:thread%3aa",
+    ],
+    [
+      "agent:ops:matrix:channel:!Room:Example.Org:thread:$Event",
+      "ops",
+      "matrix:channel:!Room:Example.Org:thread:$Event",
+      "matrix:channel:!room:example.org:thread:$event",
+    ],
+    [
+      "agent:ops:signal:group:AbC123=:thread:xyz",
+      "ops",
+      "signal:group:AbC123=:thread:xyz",
+      "signal:group:abc123=:thread:xyz",
+    ],
+  ] as const)("retains ownership and tail for %s", (key, agentId, rest, uiRest?: string) => {
+    expect(parseAgentSessionKeyParts(key)).toEqual({ agentId, rest });
+    expect(parseAgentSessionKey(key)).toEqual({ agentId, rest: uiRest ?? rest });
+  });
+
+  it.each(["main", "global", "unknown", "catalog:claude:gateway%3Alocal:thread-1"])(
+    "keeps %s unscoped while retaining the UI owner fallback",
+    (key) => {
+      expect(parseAgentSessionKeyParts(key)).toBeNull();
+      expect(parseAgentSessionKey(key)).toBeNull();
+      expect(resolveAgentIdFromSessionKey(key)).toBe("main");
+    },
+  );
+
+  it.each([
+    ["agent:ops:room::part", { agentId: "ops", rest: "room::part" }, "ops", "room:part"],
+    ["agent:ops:main:", { agentId: "ops", rest: "main:" }, "ops", "main"],
+    ["agent:ops::cron:job", null, "ops", "cron:job"],
+    ["agent::cron:job", null, "cron", "job"],
+    [":agent:ops:main", null, "ops", "main"],
+    ["agent:ops: :", { agentId: "ops", rest: " :" }, "ops", " "],
+  ] as const)("preserves the display adapter's accepted shape %s", (key, raw, agentId, rest) => {
+    expect(parseAgentSessionKeyParts(key)).toEqual(raw);
+    expect(parseAgentSessionKey(key)).toEqual({ agentId, rest });
+    expect(resolveAgentIdFromSessionKey(key)).toBe(agentId);
+  });
+
+  it("retains the UI fallback for a malformed owner", () => {
+    expect(parseAgentSessionKey("agent::secret")).toBeNull();
+    expect(resolveAgentIdFromSessionKey("agent::secret")).toBe("main");
+  });
+});
 
 describe("session archive eligibility", () => {
   it.each([
@@ -74,6 +168,23 @@ describe("parseSessionKeyParts", () => {
 });
 
 describe("UI session identity", () => {
+  it.each([
+    [
+      "Agent:Ops:Catalog:Fixture:Node%3ADevBox:Thread%3AA",
+      "agent:ops:Catalog:Fixture:Node%3ADevBox:Thread%3AA",
+    ],
+    ["agent:ops:other:signal:group:AbC", "agent:ops:other:signal:group:abc"],
+    ["agent:ops:signal:group:AbC:signal:group:DeF", "agent:ops:signal:group:AbC:signal:group:def"],
+    [":Matrix:Channel:!Room:Org", ":matrix:channel:!Room:Org"],
+    ["agent:ops: :Matrix:Channel:!Room:Org", "agent:ops: :matrix:channel:!Room:Org"],
+    [
+      "agent:ops:matrix:channel: !Room:Org :thread:$Event",
+      "agent:ops:matrix:channel: !Room:Org :thread:$Event",
+    ],
+  ])("retains UI comparison normalization for %s", (key, expected) => {
+    expect(normalizeSessionKeyForUiComparison(key)).toBe(expected);
+  });
+
   it.each([
     {
       name: "native catalog source IDs",

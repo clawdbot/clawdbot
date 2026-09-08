@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isResponseModelEquivalent,
   normalizeModelCatalogId,
+  projectRealtimeVoicePublicProjection,
   resolveModelRoutes,
   resolveThinkingProfile,
 } from "./provider-policy-api.js";
@@ -14,6 +15,34 @@ describe("OpenAI provider policy artifact", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it("projects private realtime model routing without exposing the model", () => {
+    const config = { model: "gpt-live-test-canary", voice: "marin" };
+
+    expect(projectRealtimeVoicePublicProjection({ providerConfig: config, config })).toEqual({
+      config: { voice: "marin" },
+      clientHints: {
+        modelSource: "gateway",
+        gatewayRelaySupported: false,
+      },
+    });
+  });
+
+  it("does not add routing hints for public realtime models", () => {
+    const config = { model: "gpt-realtime", voice: "marin" };
+
+    expect(projectRealtimeVoicePublicProjection({ providerConfig: config, config })).toEqual({
+      config,
+    });
+  });
+
+  it("preserves the released realtime route without routing hints", () => {
+    const config = { model: "gpt-live-1-codex", voice: "spruce" };
+
+    expect(projectRealtimeVoicePublicProjection({ providerConfig: config, config })).toEqual({
+      config,
+    });
   });
 
   it.each([
@@ -92,6 +121,9 @@ describe("OpenAI provider policy artifact", () => {
   });
 
   it.each([
+    ["gpt-6-astra", "codex", "low"],
+    ["gpt-6-astra", "openclaw", "low"],
+    ["gpt-6-astra", "auto", "low"],
     ["gpt-5.6-sol", "codex", "medium"],
     ["gpt-5.6-sol", "openclaw", "medium"],
     ["gpt-5.6-terra", "codex", "medium"],

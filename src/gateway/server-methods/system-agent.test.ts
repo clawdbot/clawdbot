@@ -99,6 +99,38 @@ function stubEngineOverview() {
 }
 
 describe("openclaw.setup", () => {
+  it.each([undefined, false, true])(
+    "uses verified client locality for custom auth (%s)",
+    async (isLocalClient) => {
+      setupInferenceMocks.activateSetupInference.mockResolvedValue({
+        ok: false,
+        status: "unavailable",
+        error: "Synthetic end of setup",
+      });
+      const { wizardSessions, context } = makeWizardContext();
+      const { calls, respond } = makeRespond();
+      const sessionId = `custom-auth-${String(isLocalClient)}`;
+      await systemAgentHandler("openclaw.setup.auth.start")({
+        params: {
+          sessionId,
+          authChoice: "custom-api-key",
+        },
+        client: { internal: { isLocalClient } },
+        context,
+        respond,
+      } as never);
+      expect(calls).toMatchObject([{ ok: true, payload: { sessionId } }]);
+      const session = expectDefined(wizardSessions.get(sessionId), "admitted setup session");
+      await session.next();
+      expect(setupInferenceMocks.activateSetupInference).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          authChoice: "custom-api-key",
+          isRemoteProviderAuth: isLocalClient !== true,
+        }),
+      );
+    },
+  );
+
   it("returns a retryable busy error while another activation is running", async () => {
     const firstStarted = createDeferred();
     const releaseFirst = createDeferred();
@@ -229,6 +261,59 @@ describe("openclaw.chat", () => {
     expect(sessions.size).toBe(1);
     expect([firstCall.ok, secondCall.ok]).toEqual([true, true]);
   });
+
+  it.each(["none", "doctor"])(
+    "returns unchecked discovery through selected-agent detection after %s metadata",
+    async (metadataCommand) => {
+      const stateDir = systemAgentTempDirs.make("openclaw-native-catalog-consent-");
+      const configPath = path.join(stateDir, "openclaw.json");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+      const { createConfigIO } = await import("../../config/io.factory.js");
+      const io = createConfigIO({
+        env: { ...process.env, OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_STATE_DIR: stateDir },
+        homedir: () => stateDir,
+      });
+      const { applyWizardMetadata } = await import("../../commands/onboard-helpers.js");
+      const initialConfig = { agents: { entries: { main: { default: true }, research: {} } } };
+      await io.writeConfigFile(
+        metadataCommand === "doctor"
+          ? applyWizardMetadata(initialConfig, { command: "doctor", mode: "local" })
+          : initialConfig,
+      );
+      const before = fs.readFileSync(configPath, "utf8");
+      const { detectSetupInference } = await import("../../system-agent/setup-inference-detect.js");
+      setupInferenceDetectionMocks.detectSetupInferenceIsolated.mockImplementation(async (params) =>
+        detectSetupInference(
+          {
+            detectInferenceBackends: async () => [],
+            resolveManifestProviderAuthChoices: () => [],
+            probeLocalCommand: async (command) => ({ command, found: false }),
+          },
+          params?.agentId,
+        ),
+      );
+      const { calls, respond } = makeRespond();
+      await systemAgentHandler("openclaw.setup.detect")({
+        params: { agentId: "research" },
+        respond,
+      } as never);
+      expect(calls).toMatchObject([
+        {
+          ok: true,
+          payload: {
+            nativeSessionCatalogPreferenceRequired: true,
+            nativeSessionCatalogs: expect.arrayContaining([
+              expect.objectContaining({ pluginId: "anthropic" }),
+              expect.objectContaining({ pluginId: "codex" }),
+            ]),
+          },
+        },
+      ]);
+      expect(fs.readFileSync(configPath, "utf8")).toBe(before);
+      expect(setupInferenceMocks.activateSetupInference).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps read-only setup detection outside the serialized system-agent lane", async () => {
     const started = createDeferred();

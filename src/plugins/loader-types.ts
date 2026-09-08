@@ -45,6 +45,8 @@ export type PluginLoadOptions = {
   /** Built hosts prefer canonical checkout artifacts by default; false retains source execution. */
   preferBuiltPluginArtifacts?: boolean;
   toolDiscovery?: boolean;
+  /** Native host operations supplied by a runtime composition root. */
+  capabilityCatalogContext?: PluginCapabilityCatalogContext;
   /** Resolve declared descriptors for this family without full runtime registration. */
   capabilityCatalog?: {
     family: keyof PluginCapabilityCatalog;

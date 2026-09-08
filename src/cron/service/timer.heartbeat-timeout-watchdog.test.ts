@@ -69,7 +69,6 @@ describe("cron heartbeat watchdog", () => {
           resolveHeartbeatTimeoutMs: vi.fn(() => undefined),
           requestHeartbeatAndWait:
             vi.fn<NonNullable<CronServiceDeps["requestHeartbeatAndWait"]>>(runHeartbeat),
-          runHeartbeatOnce: vi.fn<NonNullable<CronServiceDeps["runHeartbeatOnce"]>>(runHeartbeat),
           runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         });
 
@@ -117,7 +116,7 @@ describe("cron heartbeat watchdog", () => {
         storePath: store.storePath,
         nowMs: () => Date.now(),
         defaultAgentId: "main",
-        runHeartbeatOnce: vi.fn(async () => ({ status: "ran" as const, durationMs: 1 })),
+        requestHeartbeatAndWait: vi.fn(async () => ({ status: "ran" as const, durationMs: 1 })),
         resolveHeartbeatTimeoutMs,
         evaluateCronTrigger: vi.fn(async () => {
           triggerStarted.resolve();
@@ -132,7 +131,7 @@ describe("cron heartbeat watchdog", () => {
       await timerPromise;
 
       expect(resolveHeartbeatTimeoutMs).not.toHaveBeenCalled();
-      expect(state.deps.runHeartbeatOnce).not.toHaveBeenCalled();
+      expect(state.deps.requestHeartbeatAndWait).not.toHaveBeenCalled();
       expect(requireJob(state, cronJob.id).state.lastError).toContain("job execution timed out");
     } finally {
       vi.useRealTimers();

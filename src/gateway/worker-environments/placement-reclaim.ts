@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import {
   isExactAttachedEnvironment,
-  type WorkerDispatchEnvironmentService,
   type WorkerDispatchPlacement,
-  type WorkerDispatchPlacementStore,
 } from "./placement-dispatch-failure.js";
-import { resolvePriorWorkspaceResultConflict } from "./placement-dispatch-pending-results.js";
+import {
+  type PlacementRecoveryDeps,
+  resolvePriorWorkspaceResultConflict,
+} from "./placement-dispatch-pending-results.js";
 import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
 import type {
   WorkerPlacementReclaimBarriers,
@@ -24,12 +25,10 @@ import {
   createWorkerWorkspaceReconcileRequest,
   sessionWorkspaceRoot,
 } from "./session-workspace.js";
-import type { WorkspaceResultConflictLookup } from "./workspace-conflicts.js";
 import {
   verifyReconciledWorkspaceFinal,
   WorkerWorkspaceFinalFenceError,
 } from "./workspace-finalize.js";
-import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
   finalizeWorkspaceResultConflicts,
@@ -44,28 +43,16 @@ import {
 export type WorkerPlacementReclaimOptions = Pick<
   WorkerPlacementReclaimBarriers,
   "runReclaimBarrier"
-> & {
-  placements: WorkerDispatchPlacementStore;
-  environments: WorkerDispatchEnvironmentService;
-  workspaceOperations: WorkerWorkspaceOperationCoordinator;
-  prepareGatewayMove?: (params: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-    assertCurrent: () => void;
-  }) => Promise<void>;
-  reportWorkspaceResultConflict: (
-    params: { sessionId: string; sessionKey: string; agentId: string } & (
-      | { paths: string[]; stagedResultRef: string; totalCount: number }
-      | { cleared: true }
-    ),
-  ) => Promise<void>;
-  resolveWorkspaceResultConflict: (params: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-  }) => Promise<WorkspaceResultConflictLookup>;
-};
+> &
+  Pick<
+    PlacementRecoveryDeps,
+    | "placements"
+    | "environments"
+    | "workspaceOperations"
+    | "prepareGatewayMove"
+    | "reportWorkspaceResultConflict"
+    | "resolveWorkspaceResultConflict"
+  >;
 
 export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOptions) {
   const { environments, placements } = options;

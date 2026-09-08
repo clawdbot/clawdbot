@@ -1,9 +1,14 @@
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { stripFrontmatterBlock } from "../../../../packages/markdown-core/src/frontmatter.js";
 import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { t } from "../../i18n/index.ts";
+import { formatDateTimeMs, formatRelativeTimestamp } from "../../lib/format.ts";
+import { changedSkillWorkshopVersion } from "../../lib/skill-workshop/index.ts";
+import { renderDiffBlock, renderDiffStatChips } from "../chat/components/chat-diff-render.ts";
+import "../../styles/chat/tool-cards.css";
 import type { SkillWorkshopProps } from "./view-types.ts";
 
 // Skills and drafts are untrusted preview material. Show complete instructions,
@@ -24,11 +29,16 @@ type InstalledSkill = SkillWorkshopProps["installedSkills"][number];
 
 export function renderSkillWorkshopCollection(props: SkillWorkshopProps) {
   const query = props.query.trim().toLowerCase();
+  const orderedSkills = props.installedSkills.toSorted(
+    (left, right) =>
+      Number(Boolean(changedSkillWorkshopVersion(right.read))) -
+      Number(Boolean(changedSkillWorkshopVersion(left.read))),
+  );
   const matches = query
-    ? props.installedSkills.filter((skill) =>
+    ? orderedSkills.filter((skill) =>
         `${skill.name} ${skill.description}`.toLowerCase().includes(query),
       )
-    : props.installedSkills;
+    : orderedSkills;
 
   return html`
     <div class="sw-collection">
@@ -124,6 +134,7 @@ function renderShelf(props: SkillWorkshopProps, matches: InstalledSkill[]) {
   const selectedName = selectedInstalledName(props);
   return matches.map((skill) => {
     const isSelected = skill.name === selectedName;
+    const changed = changedSkillWorkshopVersion(skill.read);
     return html`
       <button
         type="button"
@@ -132,6 +143,22 @@ function renderShelf(props: SkillWorkshopProps, matches: InstalledSkill[]) {
         @click=${() => props.onSelectInstalled(skill.name)}
       >
         <span class="sw-installed-skill__name">${skill.name}</span>
+        ${
+          changed
+            ? html`<span
+                class="sw-installed-skill__change"
+                title=${changed.appliedAt ? formatDateTimeMs(Date.parse(changed.appliedAt)) : nothing}
+              >
+                ${
+                  changed.appliedAt
+                    ? t("skillWorkshop.collection.changedSince", {
+                        date: formatRelativeTimestamp(Date.parse(changed.appliedAt)),
+                      })
+                    : t("skillWorkshop.collection.changes")
+                }
+              </span>`
+            : nothing
+        }
         <span class="sw-installed-skill__desc">${skill.description}</span>
       </button>
     `;
@@ -154,9 +181,16 @@ function renderReader(props: SkillWorkshopProps) {
     });
   }
   if (selection.status === "loading") {
-    return html`<p class="sw-collection__state sw-muted" aria-busy="true">
-      ${t("skillWorkshop.collection.loadingSkill", { name: selection.name })}
-    </p>`;
+    return html`<div class="sw-collection__reader-body">
+      ${selection.content === undefined ? nothing : renderSkillDocument(selection.content)}
+      <p class="sw-collection__state sw-muted" aria-busy="true">
+        ${
+          selection.content === undefined
+            ? t("skillWorkshop.collection.loadingSkill", { name: selection.name })
+            : t("skillWorkshop.collection.comparing")
+        }
+      </p>
+    </div>`;
   }
   if (selection.status === "error") {
     return html`
@@ -173,15 +207,8 @@ function renderReader(props: SkillWorkshopProps) {
   }
 
   const skill = props.installedSkills.find((entry) => entry.name === selection.name);
-  // Only offer the jump when decided records exist for this skill; history is a
-  // separate scope and never supplies the content shown above.
-  const historyKey =
-    skill &&
-    props.proposals.some(
-      (proposal) => proposal.status !== "pending" && proposal.slug === skill.skillKey,
-    )
-      ? skill.skillKey
-      : null;
+  const changed = changedSkillWorkshopVersion(selection);
+  const unchanged = !selection.savedVersionsError && selection.savedVersions.length > 0 && !changed;
   return html`
     <div class="sw-collection__reader-head">
       <div class="sw-collection__reader-identity">
@@ -192,19 +219,63 @@ function renderReader(props: SkillWorkshopProps) {
             : nothing
         }
       </div>
-      ${
-        historyKey
-          ? html`<button
-              type="button"
-              class="sw-btn sw-btn--ghost"
-              @click=${() => props.onShowHistory(historyKey)}
-            >
-              ${t("skillWorkshop.collection.viewHistory")}
-            </button>`
-          : nothing
-      }
     </div>
-    <div class="sw-collection__reader-body">${renderSkillDocument(selection.content)}</div>
+    <div class="sw-collection__reader-body">
+      ${keyed(
+        selection,
+        html`
+          ${!changed ? renderSkillDocument(selection.content) : nothing}
+          <div class="sw-skill-changes">
+            ${
+              selection.savedVersionsError
+                ? html`<p class="sw-muted" role="alert">
+                    ${t("skillWorkshop.collection.savedVersionError")}
+                  </p>`
+                : nothing
+            }
+            ${
+              selection.savedVersions.length === 0
+                ? !selection.savedVersionsError
+                  ? html`<p class="sw-muted">${t("skillWorkshop.collection.noSavedVersion")}</p>`
+                  : nothing
+                : html`
+                    ${selection.savedVersions.map((version) => {
+                      const diff = version.diff;
+                      return html`<details
+                        class="sw-skill-changes__version"
+                        ?open=${version === changed}
+                      >
+                        <summary
+                          title=${[version.appliedAt ? formatDateTimeMs(Date.parse(version.appliedAt)) : "", t("skillWorkshop.collection.savedNote")].filter(Boolean).join("\n")}
+                        >
+                          ${
+                            unchanged
+                              ? t("skillWorkshop.collection.noChanges")
+                              : version.appliedAt
+                                ? t("skillWorkshop.collection.savedOn", {
+                                    date: formatRelativeTimestamp(Date.parse(version.appliedAt)),
+                                  })
+                                : t("skillWorkshop.collection.savedVersion")
+                          }
+                          ${diff.stat.added > 0 || diff.stat.removed > 0 ? renderDiffStatChips(diff.stat) : nothing}
+                        </summary>
+                        ${
+                          diff.stat.added === 0 && diff.stat.removed === 0
+                            ? html`<p class="sw-muted">
+                                ${t("skillWorkshop.collection.unchanged")}
+                              </p>`
+                            : renderDiffBlock(diff.lines, "succeeded", undefined, {
+                                path: "SKILL.md",
+                              })
+                        }
+                      </details>`;
+                    })}
+                  `
+            }
+          </div>
+        `,
+      )}
+    </div>
   `;
 }
 

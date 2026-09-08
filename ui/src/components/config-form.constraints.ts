@@ -506,16 +506,10 @@ export function normalizeNumericValue(value: number, schema: JsonSchema): number
     normalized = Math.min(constraints.max, normalized);
   }
   if (constraints.exclusiveMin !== undefined && normalized <= constraints.exclusiveMin) {
-    normalized =
-      typeof constraints.step === "number"
-        ? nextRepresentable(constraints.exclusiveMin, 1)
-        : nextRepresentable(constraints.exclusiveMin, 1);
+    normalized = nextRepresentable(constraints.exclusiveMin, 1);
   }
   if (constraints.exclusiveMax !== undefined && normalized >= constraints.exclusiveMax) {
-    normalized =
-      typeof constraints.step === "number"
-        ? nextRepresentable(constraints.exclusiveMax, -1)
-        : nextRepresentable(constraints.exclusiveMax, -1);
+    normalized = nextRepresentable(constraints.exclusiveMax, -1);
   }
   return normalizePrecision(
     normalized,
@@ -632,32 +626,19 @@ export function defaultValue(schema?: JsonSchema, depth = 0): unknown {
       if (itemCount === 0) {
         return validatedDefaultCandidate(schema, []);
       }
-      if (Array.isArray(schema.items)) {
-        const value: unknown[] = [];
-        for (let index = 0; index < itemCount; index += 1) {
-          const itemSchema =
-            schema.items[index] ??
-            (schema.additionalItems && typeof schema.additionalItems === "object"
-              ? schema.additionalItems
-              : undefined);
-          if (!itemSchema) {
-            return NO_SAFE_DEFAULT;
-          }
-          const itemDefault = defaultValue(itemSchema, depth + 1);
-          if (itemDefault === NO_SAFE_DEFAULT) {
-            return NO_SAFE_DEFAULT;
-          }
-          value.push(itemDefault);
-        }
-        return validatedDefaultCandidate(schema, value);
-      }
       const itemsSchema = schema.items;
-      if (!itemsSchema) {
-        return NO_SAFE_DEFAULT;
-      }
       const value: unknown[] = [];
       for (let index = 0; index < itemCount; index += 1) {
-        const itemDefault = defaultValue(itemsSchema, depth + 1);
+        const itemSchema = Array.isArray(itemsSchema)
+          ? (itemsSchema[index] ??
+            (schema.additionalItems && typeof schema.additionalItems === "object"
+              ? schema.additionalItems
+              : undefined))
+          : itemsSchema;
+        if (!itemSchema) {
+          return NO_SAFE_DEFAULT;
+        }
+        const itemDefault = defaultValue(itemSchema, depth + 1);
         if (itemDefault === NO_SAFE_DEFAULT) {
           return NO_SAFE_DEFAULT;
         }

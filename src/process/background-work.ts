@@ -1,9 +1,10 @@
-import { getGroupRegistry, getLaneGroup } from "./command-queue.capacity-groups.js";
+import { getLaneGroup } from "./command-queue.capacity-groups.js";
 import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
   publishLaneConfiguration,
 } from "./command-queue.js";
+import { getQueueState } from "./command-queue.state.js";
 import type { CommandLaneSnapshot, CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import { getGatewayRestartDrainSignal } from "./gateway-work-admission.js";
 import { CommandLane } from "./lanes.js";
@@ -37,7 +38,7 @@ export function createBackgroundWorkOwner(params: { owner: string; maxConcurrent
         );
       }
     } else {
-      const group = getGroupRegistry().groups.get(BACKGROUND_WORK_GROUP);
+      const group = getQueueState().laneGroups.get(BACKGROUND_WORK_GROUP);
       publishLaneConfiguration({
         lanes: { [lane]: params.maxConcurrent },
         groups: {
@@ -79,7 +80,7 @@ export function isBackgroundWorkLane(lane: string): boolean {
 }
 
 export function getBackgroundWorkSnapshot(): CommandLaneSnapshot {
-  const group = getGroupRegistry().groups.get(BACKGROUND_WORK_GROUP);
+  const group = getQueueState().laneGroups.get(BACKGROUND_WORK_GROUP);
   const members = [...(group?.members ?? [])].map((lane) => getCommandLaneSnapshot(lane));
   const activeCount = members.reduce((sum, member) => sum + member.activeCount, 0);
   return {

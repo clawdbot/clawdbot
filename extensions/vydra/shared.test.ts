@@ -114,6 +114,32 @@ describe("downloadVydraAsset", () => {
     expect(elapsedMs).toBeLessThan(timeoutMs + 1_500);
   });
 
+  it.each([200, 500])(
+    "preserves the request timeout when wall-clock time trails its timer (HTTP %i)",
+    async (statusCode) => {
+      // The request timer can fire before Date reaches the absolute deadline.
+      // Keep real HTTP and timers while making that clock ordering deterministic.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const timeoutMs = 250;
+      const port = await listenDripServer({
+        statusCode,
+        contentType: statusCode === 200 ? "image/png" : "text/plain",
+        chunk: "e",
+      });
+
+      await expect(
+        downloadVydraAsset({
+          url: `http://127.0.0.1:${port}/generated/test.png`,
+          kind: "image",
+          timeoutMs,
+          fetchFn: fetch,
+          maxBytes: 1024 * 1024,
+          requestPolicy: requestPolicyFor(`http://127.0.0.1:${port}`, true),
+        }),
+      ).rejects.toThrow(`Vydra image download timed out after ${timeoutMs}ms`);
+    },
+  );
+
   // Completed-response semantics must not race host time; real drip tests above own deadlines.
   it("preserves normalized and redacted provider errors after the bounded read", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });

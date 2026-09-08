@@ -8,6 +8,7 @@ import { findChatChannelMeta } from "../channels/chat-meta.js";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.types.js";
+import { isNativeSessionCatalogOptOutOnly } from "../plugins/native-session-catalog-config.js";
 import { isOfficialExternalPluginId } from "../plugins/official-external-plugin-catalog.js";
 import { shouldSkipPreferredPluginAutoEnable } from "./plugin-auto-enable.prefer-over.js";
 import type {
@@ -225,6 +226,7 @@ function materializeConfiguredPluginEntryAllowlist(params: {
   )) {
     const entry = entries[pluginId];
     if (
+      isNativeSessionCatalogOptOutOnly(pluginId, entry) ||
       !hasMaterialPluginEntryConfig(entry) ||
       isPluginDenied(next, pluginId) ||
       isPluginExplicitlyDisabled(next, pluginId) ||

@@ -20,9 +20,11 @@ export const responsesLoopbackModel = {
 
 export async function createResponsesLoopbackServer(events: (turn: number) => unknown[]) {
   const requests: Array<Record<string, unknown>> = [];
+  const rawRequests: string[] = [];
   const authorization: Array<string | undefined> = [];
   let connections = 0;
   const eventsForRequest = (body: string) => {
+    rawRequests.push(body);
     requests.push(JSON.parse(body) as Record<string, unknown>);
     return events(requests.length);
   };
@@ -79,6 +81,7 @@ export async function createResponsesLoopbackServer(events: (turn: number) => un
     });
   return {
     requests,
+    rawRequests,
     authorization,
     get connections() {
       return connections;

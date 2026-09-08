@@ -265,6 +265,21 @@ struct ChatMarkdownBlockSegmenterTests {
         #expect(self.segments("`<details>`") == [.prose("`<details>`")])
     }
 
+    @Test func `details closing tags preserve escape parity and source`() {
+        for prefix in ["Body ", "\u{1F680}e\u{301} "] {
+            for (slashes, closes) in [("", true), (#"\"#, false), (#"\\"#, true), (#"\\\"#, false)] {
+                let body = prefix + slashes
+                let source = "<details><summary>More</summary>\(body)</details>tail"
+                let disclosure = ChatMarkdownBlock.disclosure(ChatMarkdownDisclosure(
+                    summary: "More",
+                    isExpanded: false,
+                    blocks: [.prose(closes ? body : body + "</details>tail")]))
+                let expected = closes ? [disclosure, .prose("tail")] : [disclosure]
+                #expect(self.segments(source) == expected)
+            }
+        }
+    }
+
     @Test func `details in raw HTML contexts stay literal`() {
         let commented = """
         <!--

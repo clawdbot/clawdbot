@@ -676,15 +676,35 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
 
   it("installs a missing provider plugin and retries setup resolution", async () => {
     const provider = buildProvider();
+    const method = expectDefined(provider.auth[0], "provider.auth[0] test invariant");
+    const run = method.run;
+    method.run = async (context) => ({
+      ...(await run(context)),
+      configPatch: {
+        plugins: {
+          installs: { "local-provider-plugin": { source: "npm", spec: "provider-authored" } },
+        },
+      },
+    });
+    const installRecord = { source: "npm" as const, spec: "@openclaw/local-provider" };
+    const installed = buildInstalledLocalProviderPluginResult();
     resolveProviderInstallCatalogEntry.mockReturnValue(buildLocalProviderInstallCatalogEntry());
-    ensureOnboardingPluginInstalled.mockResolvedValue(buildInstalledLocalProviderPluginResult());
+    ensureOnboardingPluginInstalled.mockResolvedValue({
+      ...installed,
+      cfg: {
+        ...installed.cfg,
+        plugins: { ...installed.cfg.plugins, installs: { "local-provider-plugin": installRecord } },
+      },
+    });
     resolvePluginProviders.mockReturnValue([provider]);
     resolveProviderPluginChoice.mockReturnValueOnce(null).mockReturnValueOnce({
       provider,
-      method: expectDefined(provider.auth[0], "provider.auth[0] test invariant"),
+      method,
     });
 
-    const result = await applyAuthChoiceLoadedPluginProvider(buildParams());
+    const result = await prepareAuthChoiceLoadedPluginProvider(buildParams());
+    expect(result?.pendingPluginInstalls).toEqual({ "local-provider-plugin": installRecord });
+    expect(persistAuthProfileBatch).not.toHaveBeenCalled();
 
     expect(ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
     const [installParams] = ensureOnboardingPluginInstalled.mock.calls[0] ?? [];
@@ -694,11 +714,50 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     expect(installParams.entry?.pluginId).toBe("local-provider-plugin");
     expect(installParams.entry?.label).toBe(LOCAL_PROVIDER_LABEL);
     expect(installParams.workspaceDir).toBe("/tmp/workspace");
+    expect(installParams.reviewOfficialArtifacts).toBe(true);
     expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
     expect(result?.config.agents?.defaults?.model).toEqual({
       primary: LOCAL_DEFAULT_MODEL,
     });
   });
+
+  it.each(["failed", "timed_out", "skipped"] as const)(
+    "retains %s installer diagnostics internally without changing the public retry result",
+    async (status) => {
+      const entryConfig = { gateway: { mode: "local" as const } };
+      const installError =
+        status === "failed"
+          ? "Synthetic package verification failed: registry token=***. Check the configured registry."
+          : undefined;
+      resolveProviderInstallCatalogEntry.mockReturnValue(buildLocalProviderInstallCatalogEntry());
+      resolveProviderPluginChoice.mockReturnValue(null);
+      ensureOnboardingPluginInstalled.mockResolvedValue({
+        cfg: entryConfig,
+        installed: false,
+        pluginId: "local-provider-plugin",
+        status,
+        ...(installError ? { error: installError } : {}),
+      });
+
+      const prepared = await prepareAuthChoiceLoadedPluginProvider(
+        buildParams({ config: entryConfig }),
+      );
+
+      expect(prepared?.config).toBe(entryConfig);
+      expect(prepared?.retrySelection).toBe(true);
+      expect(prepared?.installError).toBe(installError);
+      expect(prepared?.authProfiles).toEqual([]);
+      await prepared?.persistAuthProfiles();
+      expect(persistAuthProfileBatch).not.toHaveBeenCalled();
+      expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
+
+      const publicResult = await applyAuthChoiceLoadedPluginProvider(
+        buildParams({ config: entryConfig }),
+      );
+      expect(publicResult).toEqual({ config: entryConfig, retrySelection: true });
+      expect(persistAuthProfileBatch).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not persist plugin enablement when install is skipped", async () => {
     resolveProviderInstallCatalogEntry.mockReturnValue(buildLocalProviderInstallCatalogEntry());

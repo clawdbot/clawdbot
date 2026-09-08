@@ -5,8 +5,6 @@ import {
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
-import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
-import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
 import {
   buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
@@ -43,6 +41,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   setup: EmbeddedAttemptSetup;
   bootstrap: PreparedBootstrap;
   capabilityToolNames: Set<string>;
+  requireExplicitMessageTarget?: boolean;
   effectiveTools: PromptTools;
   isRawModelRun: boolean;
   modelToolsEnabled: boolean;
@@ -107,12 +106,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
 
   const toolSchemaDirectoryPrompt = resolveToolSchemaDirectoryPrompt();
 
-  const activeProcessSessions = listActiveProcessSessionReferences({
-    scopeKey: resolveProcessToolScopeKey({
-      sessionKey: params.setup.sandboxSessionKey,
-      agentId: params.setup.sessionAgentId,
-    }),
-  });
   const {
     runtimeChannel,
     runtimeCapabilities,
@@ -135,12 +128,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     channel: attempt.messageChannel ?? attempt.messageProvider,
     accountId: attempt.agentAccountId,
     chatType: attempt.chatType,
-    currentChannelId: attempt.currentChannelId,
-    currentThreadTs: attempt.currentThreadTs,
-    currentMessageId: attempt.currentMessageId,
-    senderId: attempt.senderId,
-    senderIsOwner: attempt.senderIsOwner,
-    activeProcessSessions,
   });
   const promptMode =
     attempt.promptMode ??
@@ -256,6 +243,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       reactionGuidance,
       promptMode: effectivePromptMode,
       sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
+      requireExplicitMessageTarget: params.requireExplicitMessageTarget,
       silentReplyPromptMode: attempt.silentReplyPromptMode,
       proactiveSubagentOrchestration: params.setup.proactiveSubagentOrchestration,
       acpEnabled: isAcpRuntimeSpawnAvailable({

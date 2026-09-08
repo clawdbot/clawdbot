@@ -57,5 +57,5 @@ export function resolveXaiForwardCompatModel(params: {
 export function normalizeXaiResolvedModel(model: ProviderRuntimeModel): ProviderRuntimeModel {
   const resolvedModelId = resolveXaiOAuthAutoModelId(model.id, model.params);
   const resolved = resolvedModelId === model.id ? model : { ...model, id: resolvedModelId };
-  return applyXaiRuntimeModelCompat(resolved);
+  return { ...applyXaiRuntimeModelCompat(resolved), id: model.id };
 }

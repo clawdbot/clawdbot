@@ -1,6 +1,7 @@
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractCanvasFromDetails, extractCanvasFromText } from "../chat/canvas-render.js";
+import { isToolCallContentType, isToolResultContentType } from "../chat/tool-content.js";
 import { truncateChatHistoryText } from "./chat-display-projection.helpers.js";
 
 const MAX_TOOL_APPROVAL_REVIEWS = 16;
@@ -52,23 +53,12 @@ export function isToolHistoryBlockType(type: unknown): boolean {
   if (typeof type !== "string") {
     return false;
   }
-  const normalized = type.trim().toLowerCase();
-  return (
-    normalized === "toolcall" ||
-    normalized === "tool_call" ||
-    normalized === "tooluse" ||
-    normalized === "tool_use" ||
-    normalized === "toolresult" ||
-    normalized === "tool_result"
-  );
+  const normalized = type.trim();
+  return isToolCallContentType(normalized) || isToolResultContentType(normalized);
 }
 
 export function isToolResultHistoryBlockType(type: unknown): boolean {
-  if (typeof type !== "string") {
-    return false;
-  }
-  const normalized = type.trim().toLowerCase();
-  return normalized === "toolresult" || normalized === "tool_result";
+  return typeof type === "string" && isToolResultContentType(type.trim());
 }
 
 export function projectToolResultDetails(

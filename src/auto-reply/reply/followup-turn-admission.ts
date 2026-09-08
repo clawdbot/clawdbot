@@ -9,6 +9,7 @@ import type { GatewayContextResolver } from "../../gateway/server-methods/types.
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -143,6 +144,7 @@ export async function admitFollowupTurn(params: {
       storePath: params.defaults.storePath,
     }) ?? source.sessionFile;
   const admission = await admitReplyTurn({
+    agentId: run.agentId,
     resolveGatewayContext: params.defaults.resolveGatewayContext,
     sessionId: params.queued.admissionSessionId ?? run.sessionId,
     sessionKey: replySessionKey ?? "",
@@ -382,6 +384,9 @@ export async function admitFollowupTurn(params: {
       activeEntry = await runSessionCompactionIfNeeded({
         cfg: config,
         followupRun: turn.queued,
+        pendingUserEntryId: readPendingUserTurnTranscriptAdmission(
+          turn.queued.userTurnTranscriptRecorder,
+        )?.entryId,
         promptForEstimate: turn.queued.prompt,
         defaultModel: params.defaults.defaultModel,
         sessionEntry: activeEntry,

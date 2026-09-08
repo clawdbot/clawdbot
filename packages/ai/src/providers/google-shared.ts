@@ -19,7 +19,6 @@ import {
   transportAbortError,
 } from "../transports/transport-stream-shared.js";
 import type {
-  Api,
   AssistantMessage,
   Context,
   Model,
@@ -93,29 +92,6 @@ function mapToolChoice(choice: string): FunctionCallingConfigMode {
     default:
       return FunctionCallingConfigMode.AUTO;
   }
-}
-
-export function createGoogleAssistantOutput<T extends GoogleApiType>(
-  model: Model<T>,
-  api: Api = model.api,
-): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [],
-    api,
-    provider: model.provider,
-    model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop",
-    timestamp: Date.now(),
-  };
 }
 
 export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>(params: {

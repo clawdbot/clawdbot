@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
+import { mergeProcessEnv } from "../infra/process-env.js";
 import {
   getWindowsCmdExePath,
   getWindowsPowerShellExePath,
@@ -135,7 +136,7 @@ export async function launchFallbackTaskScript(
       options: {
         cwd: command.workingDirectory || undefined,
         detached: true,
-        env: { ...process.env, ...command.environment },
+        env: mergeProcessEnv([process.env, command.environment]),
         stdio: "ignore",
         windowsHide: true,
       },
@@ -145,7 +146,6 @@ export async function launchFallbackTaskScript(
   }
   // Preserve native missing-script errors before testing the actual cmd.exe access contract.
   await (await fs.open(scriptPath, "r")).close();
-  const scriptEnv = { ...process.env, OPENCLAW_TASK_SCRIPT: scriptPath };
   // libuv uses backup semantics, so privileged Node opens can bypass the DACL that cmd enforces.
   const scriptProbe = spawnSync(
     getWindowsPowerShellExePath(),
@@ -175,7 +175,7 @@ export async function launchFallbackTaskScript(
     argv: [getWindowsCmdExePath(), "/d", "/s", "/v:off", "/c", '""%OPENCLAW_TASK_SCRIPT%""'],
     options: {
       detached: true,
-      env: scriptEnv,
+      env: { ...process.env, OPENCLAW_TASK_SCRIPT: scriptPath },
       stdio: "ignore",
       windowsHide: true,
       windowsVerbatimArguments: true,

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -74,6 +74,12 @@ it.each([
   [["scripts/e2e/lib/mcp-code-mode-probe-server.ts"], ["mcp-code-mode-gateway"]],
   [["scripts/e2e/lib/mcp-code-mode/scenario.sh"], ["mcp-code-mode-gateway"]],
   [["scripts/e2e/update-channel-switch-docker.sh"], ["update-channel-switch"]],
+  [["scripts/e2e/fleet-cache-docker.sh"], ["fleet-cache"]],
+  [["scripts/e2e/lib/fleet-cache/assert-cell.mjs"], ["fleet-cache"]],
+  [["scripts/e2e/lib/fleet-cache/podman-control.sh"], ["fleet-cache"]],
+  [["scripts/e2e/lib/fleet-cache/prepare-podman-storage.mjs"], ["fleet-cache"]],
+  [["scripts\\e2e\\lib\\fleet-cache\\probe-podman-cell.mjs"], ["fleet-cache"]],
+  [["scripts/e2e/lib/fleet-cache-unrelated/probe.mjs"], []],
   [["scripts/e2e/lib/update-channel-switch/assertions.mjs"], ["update-channel-switch"]],
   [
     [
@@ -93,13 +99,42 @@ it.each([
     ],
     allDockerSeedLanes,
   ],
-  [[".github/workflows/ci.yml"], allDockerSeedLanes],
-  [["scripts/lib/ci-changed-node-test-plan.mts"], allDockerSeedLanes],
+  [[".github/workflows/ci.yml"], [...allDockerSeedLanes, "published-upgrade-survivor"]],
+  [
+    ["scripts/lib/ci-changed-node-test-plan.mts"],
+    [...allDockerSeedLanes, "published-upgrade-survivor"],
+  ],
   [["scripts\\e2e\\lib\\mcp-code-mode-probe-server.ts"], ["mcp-code-mode-gateway"]],
   [["scripts\\e2e\\lib\\mcp-code-mode\\scenario.sh"], ["mcp-code-mode-gateway"]],
   [["scripts/e2e/install-e2e.ts", "docs/ci.md"], []],
+  ...[
+    "src/cli/update-cli/run-update.ts",
+    "src/infra/update-runner.ts",
+    "src/infra/package-update-global.ts",
+    "src/plugins/update.ts",
+    "src/plugins/update-internal.ts",
+    "src/commands/doctor.ts",
+    "src/commands/doctor-state.ts",
+    "src/commands/doctor/migrations/example.ts",
+    "src/state/new-state-migration.ts",
+    "scripts/e2e/upgrade-survivor-docker.sh",
+    "scripts/e2e/lib/upgrade-survivor/assertions.mjs",
+    "scripts/lib/docker-e2e-plan.mts",
+    "scripts/lib/docker-e2e-scenarios.mts",
+    "scripts/resolve-upgrade-survivor-baselines.mts",
+    "package.json",
+  ].map((owner) => [[owner], ["published-upgrade-survivor"]]),
 ])("resolves Docker seed lanes for %j", (changedPaths, expected) => {
   expect(resolveChangedDockerSeedLanes(changedPaths)).toEqual(expected);
+});
+
+it.each([
+  ["src/state/openclaw-state-db-contract.ts", "OPENCLAW_STATE_SCHEMA_VERSION"],
+  ["src/state/openclaw-agent-db-contract.ts", "OPENCLAW_AGENT_SCHEMA_VERSION"],
+])("always gates schema-version changes in %s with a published upgrade", (owner, constant) => {
+  // A moved constant must update this independent owner guarantee, not silently lose the gate.
+  expect(readFileSync(owner, "utf8")).toMatch(new RegExp(`export const ${constant} = \\d+;`));
+  expect(resolveChangedDockerSeedLanes([owner])).toEqual(["published-upgrade-survivor"]);
 });
 
 describe("CI changed Node test plan", () => {
@@ -496,6 +531,15 @@ describe("CI changed Node test plan", () => {
     expect(createChangedNodeTestShards(["package.json"])).toBeNull();
   });
 
+  it("fails safe for raw Git paths that resemble normalized script paths", () => {
+    for (const changedPath of [
+      " scripts/changed-lanes.mts",
+      String.raw`scripts\changed-lanes.mts`,
+    ]) {
+      expect(createChangedNodeTestShards([changedPath]), changedPath).toBeNull();
+    }
+  });
+
   it("keeps minimal-gateway boot coverage reachable from gateway startup changes", () => {
     // A gateway startup stall must fail in the gateway lane; the boot smoke is
     // selected purely through the import graph, so a rename or an import shape
@@ -890,6 +934,17 @@ describe("CI changed Node test plan", () => {
       targets: [target],
       pretestBuildMode: "runtime",
     });
+  });
+
+  it("retains compact metadata for the ordinary tooling delivery-cache smoke", () => {
+    const target = "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts";
+    expect(createChangedNodeTestShards([target])).toBeNull();
+    expect(buildVitestRunPlans([target])).toEqual([
+      expect.objectContaining({
+        config: "test/vitest/vitest.tooling.config.ts",
+        includePatterns: [target],
+      }),
+    ]);
   });
 
   it("prebuilds private QA dist before the QA Lab extension fallback", () => {

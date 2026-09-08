@@ -1,6 +1,7 @@
 // Verifies process-state persistence across fresh task registry module loads.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
 
 describe("task registry process state", () => {
   it("shares state across duplicate module instances", async () => {
@@ -44,8 +45,8 @@ describe("task registry process state", () => {
     const events = await import("../infra/agent-events.js");
     const firstStore = await import("./task-registry.store.js");
     const store = {
+      ...createInMemoryTaskRegistryStore(),
       loadSnapshot: () => ({ tasks: new Map(), deliveryStates: new Map() }),
-      saveSnapshot: () => {},
     };
     firstStore.configureTaskRegistryRuntime({ store });
     const firstRegistry = await import("./task-registry.js");

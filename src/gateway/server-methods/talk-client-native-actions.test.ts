@@ -84,6 +84,41 @@ function nativeBackgroundItems(session: {
   return JSON.parse(records!);
 }
 
+type NativeCallSession = {
+  instructions: string;
+  initial_items?: unknown;
+  delegation?: Record<string, unknown>;
+};
+
+function isNativeCallSession(value: unknown): value is NativeCallSession {
+  return (
+    isRecord(value) &&
+    typeof value.instructions === "string" &&
+    (value.delegation === undefined || isRecord(value.delegation))
+  );
+}
+
+async function nativeCallSession(): Promise<NativeCallSession> {
+  const init = upstream.fetch.mock.calls.at(-1)?.[1];
+  if (!init) {
+    throw new Error("Missing native call request");
+  }
+  const form = await new Request("https://example.test", {
+    method: "POST",
+    headers: init.headers,
+    body: init.body,
+  }).formData();
+  const sessionJson = form.get("session");
+  if (typeof sessionJson !== "string") {
+    throw new Error("Missing native call session");
+  }
+  const session: unknown = JSON.parse(sessionJson);
+  if (!isNativeCallSession(session)) {
+    throw new Error("Invalid native call session");
+  }
+  return session;
+}
+
 function spokenMessages(frames: string[]): string[] {
   return frames.flatMap((frame) => {
     const event: unknown = JSON.parse(frame);
@@ -275,12 +310,10 @@ describe("native Talk action ownership through public plugin registration", () =
           closeOpenClawAgentDatabaseByPath(resolveOpenClawAgentSqlitePath({ agentId: AGENT_ID })),
         ).toBe(true);
         await connectNativeSession(fixture);
-        const body = upstream.fetch.mock.calls.at(-1)?.[1]?.body;
-        expect(typeof body).toBe("string");
-        const request = JSON.parse(body as string);
-        expect.soft(request.session.instructions).not.toContain(delegated);
-        expect(nativeBackgroundItems(request.session)).toEqual(retained);
-        expect(request.session.delegation.ack_filler).toBe(false);
+        const session = await nativeCallSession();
+        expect.soft(session.instructions).not.toContain(delegated);
+        expect(nativeBackgroundItems(session)).toEqual(retained);
+        expect(session.delegation?.ack_filler).toBe(false);
         expect(rawTranscriptRows()).toEqual(rawCompleted);
       } finally {
         providerStream.push({ type: "done", reason: "stop", message: answer });
@@ -317,10 +350,7 @@ describe("native Talk action ownership through public plugin registration", () =
       const context = readSessionPreviewItemsFromTranscript(scope, 16, 800, "model-context");
       expect.soft(context.map((item) => item.text)).toEqual(["ordinary", "context only"]);
       await connectNativeSession(fixture);
-      const body = upstream.fetch.mock.calls.at(-1)?.[1]?.body;
-      expect(typeof body).toBe("string");
-      const request = JSON.parse(body as string);
-      expect(nativeBackgroundItems(request.session)).toEqual([
+      expect(nativeBackgroundItems(await nativeCallSession())).toEqual([
         { role: "user", text: "ordinary" },
         { role: "user", text: "context only" },
       ]);
@@ -337,8 +367,7 @@ describe("native Talk action ownership through public plugin registration", () =
       ).toEqual(["reset-kept"]);
       expect(readSessionPreviewItemsFromTranscript(scope, 16, 800)).toEqual([]);
       await connectNativeSession(fixture);
-      const resetRequest = JSON.parse(upstream.fetch.mock.calls.at(-1)![1]!.body as string);
-      expect(nativeBackgroundItems(resetRequest.session)).toEqual([
+      expect(nativeBackgroundItems(await nativeCallSession())).toEqual([
         { role: "user", text: "reset-kept" },
       ]);
       expect(rawTranscriptRows()).toEqual(resetRaw);

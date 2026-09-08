@@ -10,6 +10,7 @@ import { runWithToolExecutionValidation } from "./agent-tools.execution-validati
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { bindJoinedCollectorInvocation } from "./subagents/swarm/swarm-collector-capability.js";
+import { markToolContractFailure } from "./tool-contract-error.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import {
   isToolResultError,
@@ -23,7 +24,10 @@ import {
   resolveCatalog,
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
-import { renderToolSearchControlText } from "./tool-search-control-result.js";
+import {
+  renderToolSearchControlText,
+  serializeToolSearchControlResult,
+} from "./tool-search-control-result.js";
 import {
   buildLexicalIndex,
   readParameterText,
@@ -37,6 +41,7 @@ import {
   type ToolLookupErrorOptions,
 } from "./tool-search-recovery.js";
 import { readToolSearchLimit } from "./tool-search-request.js";
+import { runScheduledToolSearchCall } from "./tool-search-scheduling.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import type {
   CatalogVisibilityOptions,
@@ -49,7 +54,7 @@ import type {
   UnknownToolErrorOptions,
   UnknownToolRecoverySurface,
 } from "./tool-search-types.js";
-import { asToolParamsRecord, jsonResult, ToolInputError } from "./tools/common.js";
+import { asToolParamsRecord, textResult, ToolInputError } from "./tools/common.js";
 
 function describeEntry(entry: ToolSearchCatalogEntry) {
   return {
@@ -283,7 +288,10 @@ async function validateCatalogSchemaValue(
       value,
     });
   } catch (error) {
-    throw new Error(`Tool "${entry.id}" has an invalid ${schemaName}.`, { cause: error });
+    throw markToolContractFailure(
+      new Error(`Tool "${entry.id}" has an invalid ${schemaName}.`, { cause: error }),
+      "invalid_contract",
+    );
   }
 }
 
@@ -293,7 +301,10 @@ async function assertCatalogInputMatchesSchema(
 ): Promise<void> {
   const validation = await validateCatalogSchemaValue(entry, "inputSchema", value);
   if (validation && !validation.ok) {
-    throw new ToolInputError(formatCatalogInputError(entry, validation.errors, value));
+    throw markToolContractFailure(
+      new ToolInputError(formatCatalogInputError(entry, validation.errors, value)),
+      "input_contract",
+    );
   }
 }
 
@@ -325,8 +336,9 @@ async function assertCatalogOutputMatchesSchema(
   if (!validation || validation.ok) {
     return;
   }
-  throw new Error(
-    `Tool "${entry.id}" returned details that do not match its declared outputSchema.`,
+  throw markToolContractFailure(
+    new Error(`Tool "${entry.id}" returned details that do not match its declared outputSchema.`),
+    "output_contract",
   );
 }
 
@@ -436,7 +448,6 @@ export class ToolSearchRuntime {
   call = async (id: string, input?: unknown, options?: ToolSearchCallOptions) => {
     const catalog = resolveCatalog(this.ctx);
     return await this.callEntry(
-      catalog,
       findEntry(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }),
       input,
       options,
@@ -455,7 +466,6 @@ export class ToolSearchRuntime {
   ) => {
     const catalog = resolveCatalog(this.ctx);
     return await this.callEntry(
-      catalog,
       findEntryByExactId(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }),
       input,
       options,
@@ -503,7 +513,20 @@ export class ToolSearchRuntime {
     return isAgentToolReplaySafe(entry.tool);
   };
 
-  private readonly callEntry = async (
+  private readonly callEntry = (
+    entry: ToolSearchCatalogEntry,
+    input?: unknown,
+    options?: ToolSearchCallOptions,
+  ) =>
+    runScheduledToolSearchCall({
+      ctx: this.ctx,
+      entry,
+      signal: options?.signal,
+      execute: (currentEntry, signal) =>
+        this.executeEntry(resolveCatalog(this.ctx), currentEntry, input, { ...options, signal }),
+    });
+
+  private readonly executeEntry = async (
     catalog: ToolSearchCatalogSession,
     entry: ToolSearchCatalogEntry,
     input?: unknown,
@@ -635,18 +658,21 @@ export class ToolSearchRuntime {
 export function formatToolSearchControlResult<T>(
   payload: T,
   runtime: ToolSearchRuntime | undefined,
-  parentToolCallId?: string,
-  terminalBatchStatus?: "waiting" | "completed" | "failed",
+  options: {
+    parentToolCallId?: string;
+    terminalBatchStatus?: "waiting" | "completed" | "failed";
+    compact?: boolean;
+  } = {},
 ): AgentToolResult<T> {
-  let result: AgentToolResult<T> = jsonResult(payload);
-  const content = result.content[0];
-  if (runtime?.hasNetworkContent(parentToolCallId) && content?.type === "text") {
-    const { text } = renderToolSearchControlText(content.text, true);
-    result = { ...result, content: [{ ...content, text }] };
-  }
+  const serialized = serializeToolSearchControlResult(payload, options.compact);
+  const { text } = renderToolSearchControlText(
+    serialized,
+    runtime?.hasNetworkContent(options.parentToolCallId) ?? false,
+  );
+  const result = textResult(text, payload);
   const terminal =
-    terminalBatchStatus !== "waiting" &&
-    runtime?.takeTerminalTargetBatch(parentToolCallId) === true;
+    options.terminalBatchStatus !== "waiting" &&
+    runtime?.takeTerminalTargetBatch(options.parentToolCallId) === true;
   // A failed guest cannot revoke an already completed tool's explicit terminal outcome.
   return terminal ? { ...result, terminate: true } : result;
 }

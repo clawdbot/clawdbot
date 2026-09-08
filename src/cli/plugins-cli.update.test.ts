@@ -817,7 +817,7 @@ describe("plugins cli update", () => {
     expect(configWriteMock).not.toHaveBeenCalled();
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(refreshPluginRegistryMock).toHaveBeenCalledWith({
-      config: sourceCfg,
+      config: cfg,
       installRecords: nextRecords,
       reason: "source-changed",
     });

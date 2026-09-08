@@ -1,5 +1,4 @@
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
-import { GatewayRequestError, type GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
@@ -27,6 +26,10 @@ import {
   uiSessionEventMatches,
 } from "./session-key.ts";
 import { createSessionMutations } from "./session-mutations.ts";
+import { createSessionPermissionProjection } from "./session-permission-projection.ts";
+import { sessionRetryDelayMs } from "./session-retry.ts";
+import { createSessionRosterCacheLifecycle } from "./session-roster-cache-lifecycle.ts";
+import type { SessionRosterCacheOptions } from "./session-roster-cache.ts";
 import { createSessionRosterRefresh } from "./session-roster-refresh.ts";
 import { createSessionScopedOperations } from "./session-scoped-operations.ts";
 import { SwarmActivityTracker } from "./swarm-activity.ts";
@@ -63,25 +66,6 @@ export type {
   SessionScopeHostWithKey,
 } from "./navigation.ts";
 
-const SESSION_RETRY_DEFAULT_MS = 500;
-const SESSION_RETRY_MIN_MS = 100;
-const SESSION_RETRY_MAX_MS = 30_000;
-
-function sessionRetryDelayMs(error: unknown): number | null {
-  if (!(error instanceof GatewayRequestError) || !error.retryable) {
-    return null;
-  }
-  const requested =
-    typeof error.retryAfterMs === "number" && Number.isFinite(error.retryAfterMs)
-      ? error.retryAfterMs
-      : SESSION_RETRY_DEFAULT_MS;
-  return Math.min(Math.max(requested, SESSION_RETRY_MIN_MS), SESSION_RETRY_MAX_MS);
-}
-
-function isSessionStateEvent(event: GatewayEventFrame): boolean {
-  return event.event === "sessions.changed" || event.event === "session.message";
-}
-
 type SessionAgentSelection = {
   readonly state: { readonly selectedId: string | null };
   subscribe: (listener: () => void) => () => void;
@@ -90,6 +74,7 @@ type SessionAgentSelection = {
 export function createSessionCapability(
   gateway: SessionGateway,
   agentSelection: SessionAgentSelection,
+  cacheOptions: SessionRosterCacheOptions = {},
 ): SessionCapability {
   let state: SessionState = {
     result: null,
@@ -98,10 +83,17 @@ export function createSessionCapability(
     loading: false,
     error: null,
     deletedSessions: [],
-    groups: [],
-    groupSettings: [],
-    sectionOrder: [],
+    groups: cacheOptions.bootRecord?.groups.map((group) => group.name) ?? [],
+    groupSettings: cacheOptions.bootRecord?.groups ?? [],
+    sectionOrder: cacheOptions.bootRecord?.sectionOrder ?? [],
   };
+  const cacheLifecycle = createSessionRosterCacheLifecycle(gateway, agentSelection, cacheOptions, {
+    readState: () => state,
+    publish: (next) => publish(next),
+    connected: () => connection.capture() !== null,
+    query: () => roster.lastOptions(),
+  });
+
   const connection = createGatewayConnectionLifecycle(gateway.snapshot);
   const githubPublication = createSessionGitHubPublication({
     connection,
@@ -118,8 +110,6 @@ export function createSessionCapability(
     | readonly [value: string, updatedAt: number]
     | readonly [value: string, updatedAt: undefined, afterRevision: number]
   >();
-  const permissionProjectionRevisions = new Map<string, number>();
-  let permissionProjectionRevision = 0;
   let canonicalListRevision = 0;
   let hydratedClient: SessionGateway["snapshot"]["client"] = null;
   let hydratedSelfUserId: string | null = null;
@@ -134,12 +124,6 @@ export function createSessionCapability(
       agentId ??
       resolveUiSelectedGlobalAgentId(gateway.snapshot);
     return `${normalizeSessionKeyForUiComparison(key)}\0agent:${normalizeAgentId(ownerAgentId)}`;
-  };
-  const claimPermissionProjection = (key: string, agentId?: string | null) => {
-    const identity = sessionClaimKey(key, agentId);
-    const revision = ++permissionProjectionRevision;
-    permissionProjectionRevisions.set(identity, revision);
-    return () => permissionProjectionRevisions.get(identity) === revision;
   };
 
   const settleThinkingLevelClaim = (
@@ -166,6 +150,7 @@ export function createSessionCapability(
     }
     state = next;
     githubPublication.observeRows(next.result?.sessions ?? [], next.agentId);
+    cacheLifecycle.persist(next);
     for (const listener of listeners) {
       listener(state);
     }
@@ -212,6 +197,8 @@ export function createSessionCapability(
     },
   });
 
+  const permissions = createSessionPermissionProjection(gateway, () => roster);
+
   const roster = createSessionRosterRefresh({
     connection,
     snapshot: () => gateway.snapshot,
@@ -221,7 +208,11 @@ export function createSessionCapability(
     bootstrap: (scope, list) => sessionEventSubscription.ensure(scope, list),
     decorate: decorateRows,
     reconcileList: (result, revision, agentId) =>
-      deletions.reconcileList(result, revision, agentId),
+      permissions.reconcileList(
+        deletions.reconcileList(result, revision, agentId),
+        revision,
+        agentId,
+      ),
     onCanonicalList(result, requestRevision, agentId, observed) {
       githubPublication.observeRows(observed?.sessions ?? result?.sessions ?? [], agentId);
       mutations.settlePrepared(result);
@@ -257,13 +248,13 @@ export function createSessionCapability(
     connection,
     readState: () => state,
     publish,
-    refreshReplacement: (agentId) => roster.refreshReplacement(agentId),
-    refreshReplacementResult: (agentId) => roster.refreshReplacementResult(agentId),
+    refreshReplacement: roster.refreshReplacement,
+    refreshReplacementResult: roster.refreshReplacementResult,
     publishedRow: (key) => roster.publishedRow((row) => row.key === key),
     redecorateLists: () => roster.redecorateLists(),
     notifyCreated,
     clearThink: (key, agentId) => thinkingLevelClaims.delete(sessionClaimKey(key, agentId)),
-    claimPermissionProjection,
+    claimPermissionProjection: permissions.claim,
     retirePullRequestSummary,
   });
 
@@ -276,7 +267,7 @@ export function createSessionCapability(
     publishedRow: (matches) => roster.publishedRow(matches),
     redecorateLists: () => roster.redecorateLists(),
     invalidateLists: () => roster.scheduleEvent(),
-    refreshReplacement: (agentId) => roster.refreshReplacement(agentId),
+    refreshReplacement: roster.refreshReplacement,
     reconcilePreviousConnection: mutations.reconcileConfirmedPreviousConnection,
     retire: mutations.retireDeletedSession,
   });
@@ -284,7 +275,7 @@ export function createSessionCapability(
   const operations = createSessionScopedOperations({
     connection,
     agentId: () => state.agentId,
-    refreshReplacement: (agentId) => roster.refreshReplacement(agentId),
+    refreshReplacement: roster.refreshReplacement,
     notifyCreated,
     reportError: (error) => publish({ ...state, error: formatUiError(error) }, "operation"),
   });
@@ -403,14 +394,18 @@ export function createSessionCapability(
     const reconcileOptions = archivesSelectedSession
       ? { ...options, archivedFilter: "all" as const }
       : options;
-    const reconciled = reconcileSessionChanged(previous, payload, reconcileOptions);
+    let reconciled = reconcileSessionChanged(previous, payload, reconcileOptions);
+    if (eventInfo?.hasPermissionMode) {
+      reconciled = permissions.observeEvent(
+        reconciled,
+        previous,
+        payload,
+        eventInfo,
+        state.agentId,
+      );
+    }
     let claimChanged = false;
     if (reconciled.applied && reconciled.key && eventInfo) {
-      if (eventInfo.hasPermissionMode) {
-        claimPermissionProjection(reconciled.key, eventInfo.agentId ?? state.agentId);
-        // The pending replacement predates this applied event, including its error outcome.
-        roster.invalidateForegroundPublication();
-      }
       const claimKey = sessionClaimKey(reconciled.key, eventInfo.agentId);
       const claim = thinkingLevelClaims.get(claimKey);
       const thinkingLevel = eventInfo.thinkingLevel;
@@ -493,6 +488,8 @@ export function createSessionCapability(
     const connected = next.phase === "connected";
     const selfUserId = next.selfUser?.id.trim() || null;
     const connectionChanged = connection.transition(next);
+    roster.observeGateway(next, connectionChanged);
+    cacheLifecycle.synchronize(next);
     connectionClient = next.client;
     githubPublication.observeRows([]);
     if (connectionChanged) {
@@ -501,7 +498,7 @@ export function createSessionCapability(
       }
       const hadPullRequestSummaries = pullRequestSummaries.size > 0;
       thinkingLevelClaims.clear();
-      permissionProjectionRevisions.clear();
+      permissions.clear();
       roster.reset();
       sessionEventSubscription.reset();
       sessionEventSubscriptionError = null;
@@ -520,15 +517,12 @@ export function createSessionCapability(
       hydratedClient = null;
       hydratedSelfUserId = null;
       publish({
-        result: null,
-        agentId: null,
-        modelOverrides: state.modelOverrides,
+        ...state,
+        result: state.resultCached ? state.result : null,
+        agentId: state.resultCached ? state.agentId : null,
         loading: false,
         error: null,
         deletedSessions: [],
-        groups: state.groups,
-        groupSettings: state.groupSettings,
-        sectionOrder: state.sectionOrder,
       });
       return;
     }
@@ -578,7 +572,7 @@ export function createSessionCapability(
   });
 
   const stopEvents = gateway.subscribeEvents((event) => {
-    if (!isSessionStateEvent(event)) {
+    if (event.event !== "sessions.changed" && event.event !== "session.message") {
       return;
     }
     if (swarmActivity.observe(event.payload)) {
@@ -653,6 +647,7 @@ export function createSessionCapability(
       return canonicalListRevision;
     },
     githubPublication,
+    whenCachedRosterSettled: () => cacheLifecycle.settled,
     captureConnectionScope: () => connection.capture(),
     isConnectionScopeCurrent: (scope) => connection.isCurrent(scope),
     list: roster.list,
@@ -720,6 +715,7 @@ export function createSessionCapability(
       return () => listeners.delete(listener);
     },
     dispose() {
+      cacheLifecycle.dispose();
       githubPublication.clear();
       roster.dispose();
       operations.dispose();
@@ -728,6 +724,7 @@ export function createSessionCapability(
       hydratedClient = null;
       hydratedSelfUserId = null;
       mutations.dispose();
+      permissions.clear();
       deletions.clear();
       swarmActivity.clear();
       pullRequestSummaries.clear();

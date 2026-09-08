@@ -9,19 +9,25 @@ export function formatPluginBundleFormat(bundleFormat: PluginBundleFormat): stri
   return bundleFormat === "agent" ? "agent (Agent Plugins)" : bundleFormat;
 }
 
+/** Snapshot status describes enablement; only explicit runtime inspection reports loading. */
+export function formatPluginStatus(
+  plugin: Pick<PluginRecord, "enabled" | "status">,
+  runtimeInspection = false,
+): string {
+  if (plugin.status === "error") {
+    return theme.error("error");
+  }
+  const enabled = runtimeInspection ? plugin.status === "loaded" : plugin.enabled;
+  return enabled ? theme.success(runtimeInspection ? "loaded" : "enabled") : theme.warn("disabled");
+}
+
 export function formatPluginLine(plugin: PluginRecord): string {
-  const status =
-    plugin.status === "error"
-      ? theme.error("error")
-      : plugin.enabled
-        ? theme.success("enabled")
-        : theme.warn("disabled");
   const name = theme.command(plugin.name || plugin.id);
   const idSuffix = plugin.name && plugin.name !== plugin.id ? theme.muted(` (${plugin.id})`) : "";
   const format = plugin.format ?? "openclaw";
 
   const parts = [
-    `${name}${idSuffix} ${status}`,
+    `${name}${idSuffix} ${formatPluginStatus(plugin)}`,
     `  format: ${format}`,
     `  source: ${theme.muted(shortenHomeInString(plugin.source))}`,
     `  origin: ${plugin.origin}`,

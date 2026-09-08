@@ -119,8 +119,6 @@ async function createDescendantScope(
           stdinMode: "pipe-closed" as const,
         }
       : { mode: "anchored-shell" as const, command: "node root.cjs" }),
-    sessionId: "anchored-shell-real",
-    backendId: "anchored-shell-real",
     scopeKey,
     cwd,
     env:
@@ -188,8 +186,6 @@ describe("supervisor anchored shell real process ownership", () => {
         const run = await supervisor.spawn({
           mode: "anchored-shell",
           command: `"${process.execPath}" console.cjs`,
-          sessionId: "console-free-command",
-          backendId: "console-free-command",
           cwd,
         });
         const result = await run.wait();
@@ -265,8 +261,6 @@ describe("supervisor anchored shell real process ownership", () => {
           const run = await supervisor.spawn({
             mode: "anchored-shell",
             command: ${JSON.stringify(command)},
-            sessionId: "idle-host",
-            backendId: "idle-host",
             ...(environment === "inherited" ? {} : {
               env: environment === "empty" ? {} : { OPENCLAW_TEST_CHILD_ENV: "child" },
             }),
@@ -313,14 +307,12 @@ describe("supervisor anchored shell real process ownership", () => {
       const supervisor = createProcessSupervisor();
       const runs: ManagedRun[] = [];
       const oldOutput = createDeferred();
-      const spawn = async (backendId: string) => {
+      const spawn = async (scopeKey: string) => {
         const ready = createDeferred();
         const run = await supervisor.spawn({
           mode: "child",
           runId: "shared-correlation",
-          sessionId: "overlapping-children",
-          backendId,
-          scopeKey: backendId,
+          scopeKey,
           argv: [
             process.execPath,
             "-e",
@@ -355,30 +347,24 @@ describe("supervisor anchored shell real process ownership", () => {
       try {
         const older = await spawn("older-backend");
         const replacement = await spawn("replacement-backend");
-        const snapshot = supervisor.getRecord(replacement.runId);
+        const snapshot = { ...replacement.activity };
         older.stdin!.write("emit");
         await oldOutput.promise;
-        expect(supervisor.getRecord(replacement.runId)).toEqual(snapshot);
+        expect(replacement.activity).toEqual(snapshot);
 
         if (completion === "exit") {
           older.stdin!.write("23");
         } else {
           older.cancel();
         }
-        expect(supervisor.getRecord(replacement.runId)).toEqual(snapshot);
+        expect(replacement.activity).toEqual(snapshot);
         await older.wait();
         expect(isProcessAlive(replacement.pid!)).toBe(true);
-        expect(supervisor.getRecord(replacement.runId)).toEqual(snapshot);
+        expect(replacement.activity).toEqual(snapshot);
 
         replacement.stdin!.write("0");
         await expect(replacement.wait()).resolves.toMatchObject({ reason: "exit", exitCode: 0 });
-        expect(supervisor.getRecord(replacement.runId)).toMatchObject({
-          backendId: "replacement-backend",
-          state: "exited",
-          terminationReason: "exit",
-          exitCode: 0,
-          exitSignal: null,
-        });
+        expect(replacement.activity.resultSettled).toBe(true);
       } finally {
         for (const run of runs) {
           run.cancel();
@@ -401,8 +387,6 @@ describe("supervisor anchored shell real process ownership", () => {
       replacement = await first.supervisor.spawn({
         mode: "child",
         runId: first.run.runId,
-        sessionId: "fallback-real",
-        backendId: "fallback-real",
         scopeKey: "fallback-real",
         argv: [process.execPath, "-e", "process.stdout.write('ready');setInterval(() => {}, 1000)"],
         stdinMode: "pipe-closed",
@@ -413,11 +397,7 @@ describe("supervisor anchored shell real process ownership", () => {
       await ready.promise;
       await first.release();
       await first.run.waitForExtinction!();
-      expect(first.supervisor.getRecord(replacement.runId)).toMatchObject({
-        pid: replacementPid,
-        backendId: "fallback-real",
-        state: "running",
-      });
+      expect(replacement.activity.resultSettled).toBe(false);
       await first.supervisor.shutdown();
 
       expect(isProcessAlive(replacementPid)).toBe(false);
@@ -461,11 +441,7 @@ describe("supervisor anchored shell real process ownership", () => {
       await release();
     }
     await Promise.all([run.waitForExtinction!(), cleanup(), cleanup()]);
-    expect(supervisor.getRecord(run.runId)).toMatchObject({
-      state: "exited",
-      terminationReason: "exit",
-      exitCode: 0,
-    });
+    await expect(run.wait()).resolves.toMatchObject({ reason: "exit", exitCode: 0 });
     await waitForDead(descendantPid, 5_000);
   });
 });

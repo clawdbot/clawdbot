@@ -20,7 +20,6 @@ describe("analyzeAllowlistByToolType", () => {
     const input = { allow: ["lobster"] };
     const policy = analyzeAllowlistByToolType(input, pluginGroups, coreTools);
     expect(input).toEqual({ allow: ["lobster"] });
-    expect(policy.pluginOnlyAllowlist).toBe(true);
     expect(policy.unknownAllowlist).toStrictEqual([]);
   });
 
@@ -28,7 +27,6 @@ describe("analyzeAllowlistByToolType", () => {
     const input = { allow: ["group:plugins"] };
     const policy = analyzeAllowlistByToolType(input, pluginGroups, coreTools);
     expect(input).toEqual({ allow: ["group:plugins"] });
-    expect(policy.pluginOnlyAllowlist).toBe(true);
     expect(policy.unknownAllowlist).toStrictEqual([]);
   });
 
@@ -51,7 +49,6 @@ describe("analyzeAllowlistByToolType", () => {
     const input = { allow: ["lobster"] };
     const policy = analyzeAllowlistByToolType(input, emptyPlugins, coreTools);
     expect(input).toEqual({ allow: ["lobster"] });
-    expect(policy.pluginOnlyAllowlist).toBe(false);
     expect(policy.unknownAllowlist).toEqual(["lobster"]);
   });
 
@@ -63,9 +60,8 @@ describe("analyzeAllowlistByToolType", () => {
     expect(policy.unknownAllowlist).toEqual(["lobster"]);
   });
 
-  it("does not mark unavailable core entries as plugin-only", () => {
+  it("reports unavailable core entries as unknown", () => {
     const policy = analyzeAllowlistByToolType({ allow: ["apply_patch"] }, pluginGroups, coreTools);
-    expect(policy.pluginOnlyAllowlist).toBe(false);
     expect(policy.unknownAllowlist).toEqual(["apply_patch"]);
   });
 
@@ -76,7 +72,6 @@ describe("analyzeAllowlistByToolType", () => {
       pluginToolNames: ["llm-task"],
     });
     expect(input).toEqual({ allow: ["llm-task"] });
-    expect(policy.pluginOnlyAllowlist).toBe(true);
     expect(policy.unknownAllowlist).toStrictEqual([]);
   });
 
@@ -88,7 +83,6 @@ describe("analyzeAllowlistByToolType", () => {
       coreTools,
       { mcpServerNames: ["paperless", "Home Assistant"] },
     );
-    expect(policy.pluginOnlyAllowlist).toBe(true);
     expect(policy.unknownAllowlist).toStrictEqual([]);
   });
 
@@ -100,7 +94,6 @@ describe("analyzeAllowlistByToolType", () => {
       coreTools,
       { mcpServerNames: ["paperless"] },
     );
-    expect(policy.pluginOnlyAllowlist).toBe(false);
     expect(policy.unknownAllowlist).toStrictEqual(["papreless__*"]);
   });
 

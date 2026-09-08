@@ -61,12 +61,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     const candidateMaxResults = hasActiveProject
       ? Math.min(200, Math.max(maxResults, maxResults * 4))
       : maxResults;
-    const selectResults = (results: MemorySearchResult[]) =>
-      hasActiveProject
-        ? results.filter((entry) => entry.score >= minScore).slice(0, maxResults)
-        : results;
-    // Retrieval owners apply project scores before selection; use the final threshold
-    // so ineligible exact hits cannot fill the bounded candidate window.
+    // Retrieval owners apply project ranking and eligibility, including lexical recall.
+    // Only cap the expanded window here so partial and final recall survive together.
+    const selectResults = (results: MemorySearchResult[]) => results.slice(0, maxResults);
     const results = await this.searchCandidates(normalizedQuery, {
       ...opts,
       maxResults: candidateMaxResults,
@@ -219,7 +216,15 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       if (repairedIndexIdentity.status !== "valid") {
         return [];
       }
-      if (searchSyncEnabled && (this.dirty || this.sessionsDirty)) {
+      // No watcher can observe later edits after kernel capacity exhaustion.
+      // Record a fresh generation at the search boundary so detached maintenance
+      // receives the fact instead of starting from a clean transient manager.
+      if (this.memoryWatchCapacityDegraded) {
+        this.dirty = true;
+      }
+      const capacitySyncInFlight =
+        this.memoryWatchCapacityDegraded && this.activeBackgroundSearchSyncs.size > 0;
+      if (searchSyncEnabled && !capacitySyncInFlight && (this.dirty || this.sessionsDirty)) {
         const trackedSearchSync = this.syncPublishedIndexInBackground({ reason: "search" })
           .catch((err: unknown) => {
             log.warn(`memory sync failed (search): ${String(err)}`);

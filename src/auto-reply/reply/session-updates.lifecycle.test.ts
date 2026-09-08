@@ -58,6 +58,32 @@ async function withAccountingFixture(
 }
 
 describe("completed compaction accounting", () => {
+  it.each([80, undefined])(
+    "invalidates prior run accounting with tokensAfter=%s",
+    async (tokensAfter) => {
+      await withAccountingFixture(async (fixture) => {
+        await fixture.replace({
+          inputTokens: 18_420,
+          outputTokens: 840,
+          cacheRead: 76_500,
+          cacheWrite: 300,
+          estimatedCostUsd: 0.023,
+          totalTokens: 95_760,
+          totalTokensFresh: true,
+        });
+        expect(await incrementCompactionCount({ ...fixture.params, tokensAfter })).toBe(1);
+        for (const row of [fixture.read(), fixture.cached()]) {
+          expect(row?.inputTokens).toBeUndefined();
+          expect(row?.outputTokens).toBeUndefined();
+          expect(row?.cacheRead).toBeUndefined();
+          expect(row?.cacheWrite).toBeUndefined();
+          expect(row?.estimatedCostUsd).toBeUndefined();
+        }
+        expect(fixture.read()?.totalTokens).toBe(tokensAfter ?? 95_760);
+        expect(fixture.read()?.totalTokensFresh).toBe(tokensAfter !== undefined);
+      });
+    },
+  );
   it.each([true, false])(
     "increments the authoritative count with caller cache=%s",
     async (withCache) => {

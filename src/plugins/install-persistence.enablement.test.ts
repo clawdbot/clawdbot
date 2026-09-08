@@ -139,7 +139,9 @@ describe("persistPluginInstall enablement", () => {
     }) => {
       expect(params.selectedId).toBe("legacy-memory");
       expect(params.selectedKind).toBe("memory");
-      expect(params.registry?.plugins).toEqual([{ id: "legacy-memory", kind: "memory" }]);
+      expect(params.registry?.plugins.map(({ id, kind }) => ({ id, kind }))).toEqual([
+        { id: "legacy-memory", kind: "memory" },
+      ]);
       return {
         config: {
           ...params.config,
@@ -215,7 +217,9 @@ describe("persistPluginInstall enablement", () => {
     }) => {
       expect(params.selectedId).toBe("memory-b");
       expect(params.selectedKind).toBe("memory");
-      expect(params.registry?.plugins).toEqual([{ id: "memory-b", kind: "memory" }]);
+      expect(params.registry?.plugins.map(({ id, kind }) => ({ id, kind }))).toEqual([
+        { id: "memory-b", kind: "memory" },
+      ]);
       return {
         config: {
           ...params.config,

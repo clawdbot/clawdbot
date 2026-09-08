@@ -133,6 +133,12 @@ If a memory file changes or disappears during indexing, only that file's
 unfinished work is retried incrementally. Other files finish indexing, and
 the changed file's obsolete chunks are not published.
 
+If the host runs out of native file-watch capacity, Memory Core logs one warning
+and disables its watchers. Later searches trigger incremental synchronization
+to discover file changes. A search can return the previous index while that
+background work finishes; subsequent searches see the updated content. Restart
+the Gateway after restoring watch capacity to enable native watching again.
+
 Incremental indexing, stale-source cleanup, and cache pruning wait asynchronously when
 another SQLite writer is active. Cache pruning removes the oldest entries in
 bounded batches, yielding between batches while preserving the existing cache cap.

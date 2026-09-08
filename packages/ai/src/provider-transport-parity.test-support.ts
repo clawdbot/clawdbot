@@ -110,6 +110,7 @@ export async function captureAnthropicRequest(
     apiKey?: string;
     transportApi?: Model["api"];
     reasoning?: "low" | "off";
+    cacheRetention?: "short" | "long" | "none";
     events?: readonly Record<string, unknown>[];
     context?: Context;
     thinkingOverride?: { type: "disabled" } | { type: "enabled"; budget_tokens: number };
@@ -155,6 +156,7 @@ export async function captureAnthropicRequest(
   const streamOptions = {
     apiKey: options.apiKey ?? "sk-test",
     reasoning: options.reasoning ?? "low",
+    cacheRetention: options.cacheRetention,
     headers: options.headers,
     cacheTtlPruning: options.cacheTtlPruning,
     anthropicServerCompaction: options.anthropicServerCompaction,

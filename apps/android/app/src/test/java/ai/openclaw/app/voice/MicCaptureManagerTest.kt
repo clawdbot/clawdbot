@@ -175,7 +175,7 @@ class MicCaptureManagerTest {
 
       assertNull(privateField<String?>(manager, "pendingRunId"))
       assertEquals(false, manager.isSending.value)
-      assertEquals("Send failed: Chat failed before the run started; try again.", manager.statusText.value)
+      assertEquals("Voice request failed", manager.statusText.value)
 
       manager.handleGatewayEvent("chat", chatFinalPayload(runId = "run-terminal", text = "stale reply"))
       advanceUntilIdle()
@@ -211,7 +211,7 @@ class MicCaptureManagerTest {
 
       assertNull(privateField<String?>(manager, "pendingRunId"))
       assertEquals(false, manager.isSending.value)
-      assertEquals("Send failed: Chat failed before the run started; try again.", manager.statusText.value)
+      assertEquals("Voice request failed", manager.statusText.value)
     }
 
   @Test

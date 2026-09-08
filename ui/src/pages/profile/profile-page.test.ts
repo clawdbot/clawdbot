@@ -89,7 +89,7 @@ function createContext(
   } as unknown as ApplicationContext<RouteId>;
 }
 
-function stubProfileAvatarProcessing() {
+function stubProfileAvatarProcessing(decode = vi.fn<() => Promise<void>>(async () => undefined)) {
   class StubUrl extends URL {
     static override createObjectURL = vi.fn(() => "blob:avatar");
     static override revokeObjectURL = vi.fn();
@@ -99,7 +99,7 @@ function stubProfileAvatarProcessing() {
     src = "";
     naturalWidth = 512;
     naturalHeight = 256;
-    decode = vi.fn(async () => undefined);
+    decode = decode;
   }
   vi.stubGlobal("URL", StubUrl);
   vi.stubGlobal("Image", StubImage);
@@ -579,40 +579,6 @@ it("fetches a protected hero avatar with the current Control UI credential", asy
   expect(revokeObjectURL).toHaveBeenCalledWith("blob:hero-avatar");
 });
 
-it("retries the identity bootstrap when users.self returns no profile", async () => {
-  const profile = { ...modelAccountProfile };
-  let identityRequests = 0;
-  const request = vi.fn(async (method: string) => {
-    if (method === "users.self") {
-      identityRequests += 1;
-      return identityRequests === 1 ? {} : { profile };
-    }
-    throw new Error(`unexpected method: ${method}`);
-  });
-  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-    id: "profile-1",
-    email: "ada@example.test",
-    name: "Ada",
-  });
-  const page = mountProfilePage(harness.context);
-
-  await waitForFast(() => expect(page.querySelector(".profile-identity-empty")).not.toBeNull());
-  const emptyState = page.querySelector<HTMLElement>(".profile-identity-empty");
-  const setIdentityButton = emptyState?.querySelector<HTMLButtonElement>("button");
-  expect(emptyState?.textContent).toContain(t("profilePage.identity.notSet"));
-  expect(setIdentityButton?.textContent?.trim()).toBe(t("profilePage.identity.setIdentity"));
-  expect(page.textContent).not.toContain("Cannot read properties of undefined");
-
-  setIdentityButton?.click();
-
-  await waitForFast(() =>
-    expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(2),
-  );
-  await waitForFast(() =>
-    expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe("Ada"),
-  );
-});
-
 it("keeps identity refresh single-flight and allows retry after settlement", async () => {
   const profile = { ...modelAccountProfile };
   let rejectIdentity: ((reason: Error) => void) | undefined;
@@ -718,6 +684,91 @@ it("replaces an in-flight identity request after a same-client reconnect", async
   expect(selfCalls()).toHaveLength(2);
 });
 
+it.each([
+  { stage: "preprocessing", outcome: "success" },
+  { stage: "preprocessing", outcome: "failure" },
+  { stage: "mutation", outcome: "success" },
+  { stage: "mutation", outcome: "failure" },
+])("retires avatar $stage $outcome without disturbing a newer save", async ({ stage, outcome }) => {
+  let profile = { ...modelAccountProfile };
+  const staleDecode = createDeferred();
+  const staleMutation = createDeferred<{ profile: UserProfile; avatarRevision: string }>();
+  const currentMutation = createDeferred<{ profile: UserProfile; avatarRevision: string }>();
+  const decode = vi.fn<() => Promise<void>>(async () => undefined);
+  if (stage === "preprocessing") {
+    decode.mockImplementationOnce(() => staleDecode.promise);
+  }
+  stubProfileAvatarProcessing(decode);
+  let avatarRequests = 0;
+  const request = vi.fn(async (method: string) => {
+    if (method === "users.self") {
+      return { profile };
+    }
+    if (method === "users.listModelAccounts") {
+      return { profileId: profile.id, accounts: [], links: [] };
+    }
+    if (method === "users.setAvatar") {
+      avatarRequests += 1;
+      return stage === "mutation" && avatarRequests === 1
+        ? staleMutation.promise
+        : currentMutation.promise;
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+  const avatarBefore = "/api/users/profile-1/avatar?v=before";
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: profile.id,
+    name: profile.displayName ?? undefined,
+    avatarUrl: avatarBefore,
+  });
+  const page = mountProfilePage(harness.context);
+  const nameInput = () => page.querySelector<HTMLInputElement>(".identity-name-control input");
+  await waitForFast(() => expect(nameInput()?.disabled).toBe(false));
+  selectProfileAvatar(page);
+  await waitForFast(() =>
+    expect(stage === "preprocessing" ? decode.mock.calls.length : avatarRequests).toBe(1),
+  );
+
+  harness.emitConnected(false);
+  harness.emitConnected(true);
+  await waitForFast(() => expect(nameInput()?.disabled).toBe(false));
+  nameInput()!.value = "Current draft";
+  nameInput()!.dispatchEvent(new Event("input", { bubbles: true }));
+  selectProfileAvatar(page);
+  const expectedAvatarRequests = stage === "preprocessing" ? 1 : 2;
+  await waitForFast(() => expect(avatarRequests).toBe(expectedAvatarRequests));
+
+  if (outcome === "failure") {
+    (stage === "preprocessing" ? staleDecode : staleMutation).reject(new Error("Retired save"));
+  } else if (stage === "preprocessing") {
+    staleDecode.resolve();
+  } else {
+    staleMutation.resolve({
+      profile: { ...profile, displayName: "Retired identity" },
+      avatarRevision: "retired",
+    });
+  }
+  // Settle the retired promise chain while the replacement RPC remains pending.
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  await page.updateComplete;
+
+  expect(avatarRequests).toBe(expectedAvatarRequests);
+  expect(nameInput()?.disabled).toBe(true);
+  expect(nameInput()?.value).toBe("Current draft");
+  expect(page.querySelector('[role="alert"]')).toBeNull();
+  expect(harness.context.gateway.snapshot.selfUser?.avatarUrl).toBe(avatarBefore);
+  expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(2);
+
+  profile = { ...profile, hasAvatar: true, avatarMime: "image/png", updatedAt: 3 };
+  currentMutation.resolve({ profile, avatarRevision: "current" });
+  await waitForFast(() => expect(nameInput()?.disabled).toBe(false));
+  expect(nameInput()?.value).toBe("Current draft");
+  expect(harness.context.gateway.snapshot.selfUser?.avatarUrl).toContain("?v=current");
+  expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(3);
+});
+
 it("bootstraps and refreshes the connected user's profile through users.self", async () => {
   let avatarRevision = "avatar-content-hash-png";
   let publishAvatarPresence: (() => void) | undefined;
@@ -725,13 +776,8 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     ...modelAccountProfile,
     emails: ["ada@example.test", "ada@work.test"],
   };
-  let omitNextProfile = false;
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "users.self") {
-      if (omitNextProfile) {
-        omitNextProfile = false;
-        return {};
-      }
       return { profile };
     }
     if (method === "users.listModelAccounts") {
@@ -850,7 +896,6 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     ).toContain(`/api/users/profile-1/avatar?v=${avatarRevision}`),
   );
 
-  omitNextProfile = true;
   request.mockClear();
   page.querySelector<HTMLButtonElement>(".profile-refresh")?.click();
   await waitForFast(() =>
@@ -864,8 +909,6 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
     "Unsaved draft",
   );
-  expect(page.querySelector(".profile-identity-empty")).toBeNull();
-
   const pageWithState = page as ProfilePageElement & {
     identityBusy: "display-name" | "avatar" | null;
   };

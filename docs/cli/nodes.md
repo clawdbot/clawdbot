@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw nodes` (status, pairing, invoke, camera/sc
 read_when:
   - You're managing paired nodes (cameras, screen, or the macOS widget panel)
   - You need to approve requests or invoke node commands
-title: "Nodes"
+title: "Nodes CLI"
 ---
 
 # `openclaw nodes`
@@ -32,7 +32,7 @@ summary in its `Stats` row. Load is the 1-minute average followed by CPU count,
 memory is used/total, and byte values use binary scaling with GB/TB labels.
 Unavailable load or disk readings are omitted. Offline nodes show the saved
 snapshot with an age such as `(last known 27d ago)`, measured from the snapshot's
-original timestamp. See [Node host stats](/gateway/protocol#node-host-stats).
+original timestamp. See [Node host stats](/gateway/protocol/presence#node-host-stats).
 
 `--node` accepts an exact ID, IP address, display name, or ID prefix of at least six characters. Exact ID and IP matches take precedence over names and prefixes. Within the strongest match, connected nodes take precedence. If current clients share a name, use an exact ID to disambiguate; client type does not choose the target. The legacy migration exception prefers a unique OpenClaw client only when every other tied entry is a known Clawdbot or Moldbot client.
 

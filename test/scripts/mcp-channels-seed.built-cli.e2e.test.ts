@@ -106,4 +106,44 @@ describe("MCP channels Docker seed", () => {
       },
     );
   });
+
+  it("keeps the pre-SQLite session seed only for an authorized frozen target", async () => {
+    await withOpenClawTestState(
+      { label: "mcp-channels-seed-frozen", scenario: "empty" },
+      async (state) => {
+        const tsconfigPath = state.path("tsconfig.json");
+        await fs.writeFile(tsconfigPath, "{}");
+        await execFileAsync(
+          process.execPath,
+          ["--import", "tsx", "scripts/e2e/mcp-channels-seed.ts"],
+          {
+            cwd: process.cwd(),
+            env: {
+              PATH: process.env.PATH,
+              ...state.envVars,
+              OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT: "legacy",
+              TSX_TSCONFIG_PATH: tsconfigPath,
+              TSX_DISABLE_CACHE: "1",
+            },
+            timeout: 30_000,
+          },
+        );
+
+        const config = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+        expect(config.gateway.controlUi).toMatchObject({ allowInsecureAuth: true, enabled: false });
+        const sessionsPath = path.join(state.sessionsDir(), "sessions.json");
+        await expect(fs.readFile(sessionsPath, "utf8")).resolves.toContain(
+          '"sessionId":"sess-main"',
+        );
+        await expect(
+          fs.readFile(path.join(state.sessionsDir(), "sess-main.jsonl"), "utf8"),
+        ).resolves.toContain('"id":"msg-attachment"');
+        await expect(
+          fs.stat(path.join(state.agentDir(), "openclaw-agent.sqlite")),
+        ).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      },
+    );
+  });
 });

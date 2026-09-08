@@ -57,6 +57,12 @@ function createFakeSupervisor() {
         scopeKey: input.scopeKey,
       };
       const managed: ManagedRun = {
+        activity: {
+          get resultSettled() {
+            return record.settled;
+          },
+          lastOutputAtMs: 0,
+        },
         runId: `run-${runs.length}`,
         startedAtMs: 0,
         wait: async () => await wait,
@@ -80,9 +86,6 @@ function createFakeSupervisor() {
           run.managed.cancel();
         }
       }
-    },
-    getRecord() {
-      return undefined;
     },
   };
   return {

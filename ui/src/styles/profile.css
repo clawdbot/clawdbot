@@ -91,13 +91,6 @@
   padding: 2px 8px;
 }
 
-.profile-identity-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-3);
-}
-
 /* Personal connected accounts and sign-in steps. */
 
 .model-accounts__id {

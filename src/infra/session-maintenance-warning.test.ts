@@ -69,7 +69,7 @@ function createParams(
   };
 }
 
-function expectedMaintenanceWarning(reasonText: string, outcome = "removed"): string {
+function expectedMaintenanceWarning(reasonText: string, outcome = "archived"): string {
   return (
     `\u26A0\uFE0F Session maintenance warning: this active session would be ${outcome} (${reasonText}). ` +
     `Maintenance is set to warn-only, so nothing was changed. ` +
@@ -195,7 +195,7 @@ describe("deliverSessionMaintenanceWarning", () => {
     await deliverSessionMaintenanceWarning(params);
 
     expect(firstSystemEventCall()).toEqual([
-      expectedMaintenanceWarning("not in the most recent 10 sessions"),
+      expectedMaintenanceWarning("not in the most recent 10 sessions", "removed"),
       { sessionKey: params.sessionKey },
     ]);
   });

@@ -293,9 +293,8 @@ export async function downloadVydraAsset(params: {
         fileName: `${fileStem}-1.${extension}`,
       };
     } catch (error) {
-      // The guarded request signal remains active through body consumption and
-      // can win the same absolute-deadline race. Keep timeout precedence stable.
-      if (typeof deadline.deadlineAtMs === "number" && Date.now() >= deadline.deadlineAtMs) {
+      // The request timer can fire before wall-clock time reaches the operation deadline.
+      if (error instanceof Error && error.name === "TimeoutError") {
         throw createVydraTimeoutError(deadline);
       }
       throw error;

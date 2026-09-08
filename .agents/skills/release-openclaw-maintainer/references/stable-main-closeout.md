@@ -35,10 +35,14 @@ complete until `main` carries the actual shipped release state.
    evidence to the published tag. App assets may still be pending; record
    `appPlatforms` states for macOS, Windows, and Android, with aggregate
    `apps: attached` only when every canonical platform asset contract is
-   complete. Otherwise record `apps: pending`. Require `appcast: verified`
+   complete, including a lowercase `sha256:<64hex>` digest for every required
+   asset. Otherwise record `apps: pending`. Require `appcast: verified`
    only once the complete macOS zip/DMG/dSYM set is attached; record
    `appcast: pending` otherwise. Later canonical app attachments do not
-   invalidate the immutable closeout snapshot. Do not declare stable complete
-   until it writes the immutable closeout manifest to the GitHub release. The
-   drill must be within 90 days; manual dispatch is only for repair/replay, and
-   private rollback commands remain in the maintainer-only runbook.
+   invalidate the immutable closeout snapshot. Replay requires every recorded
+   asset name and digest to match exactly and preserves the recorded app,
+   recovery, and asset fields byte-for-byte while recomputing authoritative
+   release fields. Do not declare stable complete until it writes the immutable
+   closeout manifest to the GitHub release. The drill must be within 90 days;
+   manual dispatch is only for repair/replay, and private rollback commands
+   remain in the maintainer-only runbook.

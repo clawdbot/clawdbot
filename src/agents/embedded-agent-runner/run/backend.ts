@@ -37,6 +37,10 @@ export async function runEmbeddedAttemptWithBackend(
   nativeSessionRuntime?: Parameters<typeof runAgentHarnessAttempt>[1],
 ): Promise<EmbeddedRunAttemptResult> {
   const result = await runAgentHarnessAttempt(params, nativeSessionRuntime);
+  // Native harness fields cannot attest core registry settlement. The built-in
+  // runner has already settled at its own attempt boundary.
+  let requesterContinuationSettled =
+    result.agentHarnessId === "openclaw" && result.requesterContinuationSettled === true;
   if (
     result.agentHarnessId !== "openclaw" &&
     params.sessionKey &&
@@ -56,19 +60,26 @@ export async function runEmbeddedAttemptWithBackend(
         throw new Error("accepted continuation children were not durably registered");
       }
     } else {
-      settleRequesterAfterSessionSpawns({
+      const settled = settleRequesterAfterSessionSpawns({
         requesterSessionKey: params.sessionKey,
         requesterAgentId: params.agentId,
         requesterTurnRunId: params.runId,
         requesterYielded: result.yieldDetected === true,
         acceptedSessionSpawns: result.acceptedSessionSpawns,
       });
+      requesterContinuationSettled = result.yieldDetected === true && settled;
     }
   }
-  const { modelAttempt: _backendModelAttempt, runtimeModelSelection, ...attempt } = result;
+  const {
+    modelAttempt: _backendModelAttempt,
+    runtimeModelSelection,
+    requesterContinuationSettled: _backendContinuationSettled,
+    ...attempt
+  } = result;
   const modelAttempt = resolveRuntimeModelAttempt(params.runtimePlan);
   return copyCoreTtsAttemptResultProvenance(result, {
     ...attempt,
+    ...(requesterContinuationSettled ? { requesterContinuationSettled: true as const } : {}),
     ...(modelAttempt ? { modelAttempt } : {}),
     // Only private prepared ownership permits a runtime to select the session model.
     ...(nativeSessionRuntime && runtimeModelSelection

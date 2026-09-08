@@ -22,14 +22,12 @@ import {
   resolveUsableAgentCredentialModes,
 } from "./agent-auth-credentials.js";
 import { resolveAmbientAgentCredentialsForDiscovery } from "./agent-auth-discovery.js";
-import { overlayExternalAuthProfiles } from "./auth-profiles/external-auth.js";
+import { overlayExternalAuthProfiles } from "./auth-profiles/external-auth-runtime.js";
 import { listExternalCliSyncProviderIds } from "./auth-profiles/external-cli-sync.js";
 import { mergeRuntimeExternalProfileReferences } from "./auth-profiles/runtime-external-profile-references.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
-import {
-  loadAuthProfileStoreWithoutExternalProfiles,
-  preserveResolvedSecretBackedCredentials,
-} from "./auth-profiles/store.js";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
+import { preserveResolvedSecretBackedCredentials } from "./auth-profiles/store.js";
 import { resolveImplicitProviderDiscoveryScope } from "./models-config.providers.discovery-scope.js";
 import {
   fingerprintPreparedModelCatalogGeneration,
@@ -216,7 +214,8 @@ export async function runPreparedModelCatalogWorkerRequest(
         }),
       };
     }
-    const { prepareAgentCatalogSource } = await import("./prepared-model-runtime.facts.js");
+    const { prepareAgentCatalogSource } =
+      await import("./prepared-model-runtime.scoped-catalog.js");
     const { prepareFullCatalogFacts } = await import("./prepared-model-runtime.full-catalog.js");
     // Full discovery is one point-in-time operation: refresh first, then let every provider hook
     // and the returned availability projection consume the same exact store.

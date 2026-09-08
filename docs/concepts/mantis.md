@@ -312,14 +312,46 @@ validates that the resolved SHA is either an
 ancestor of `origin/main`, a release tag (`v*`), or the head of an open PR
 before running with secret-bearing credentials.
 
-The scenario workflows remain available through manual Actions dispatch.
+The legacy scenario workflows above remain available through manual Actions dispatch.
 
 Do not rely on the former `@clawsweeper mantis ...` example as a dedicated
 dispatch command. ClawSweeper's current command parser routes an unrecognized
-mention to general assistance, not a typed Mantis dispatch. Use the manual
-Actions entrypoints above; a future command integration must reuse the command
-authorization and dispatch owners rather than infer execution authority from
-review prose.
+mention to general assistance, not a typed Mantis dispatch.
+
+The separate request-bound integration in
+[ClawSweeper #1425](https://github.com/openclaw/clawsweeper/pull/1425) and
+[OpenClaw #138953](https://github.com/openclaw/openclaw/pull/138953) lets the
+reviewer select relevant proof before completing its original review. It does
+not restore automatic post-review recording or require every check on every PR.
+Hosted execution requires the trusted producer workflows on `main` and the
+matching ClawSweeper Worker/runtime deployment; merging documentation does not
+activate it. The existing Convex credential service is still required, but its
+APIs are reused without a Convex schema change or deployment.
+
+Once that integration is deployed, a human maintainer can request a review with
+proof available, without supplying a SHA:
+
+```text
+@clawsweeper proof
+@clawsweeper proof web-ui-chat-proof
+@clawsweeper proof telegram-bot-e2e-proof
+@clawsweeper proof web-ui-chat-proof,telegram-bot-e2e-proof
+```
+
+The bare command lets the reviewer select useful checks; explicit selections
+request each named check. The review resolves the current PR head. Control UI
+supports the fixed chat smoke against a mocked Gateway; Telegram supports a
+bounded, data-only Test Server plan. The legacy Crabline recipe is not a third
+inline tool. Missing, late, or incomplete observations remain inconclusive.
+The reviewer assesses results in the same review; successful execution alone
+does not clear proof, other readiness blockers, or merge requirements.
+
+Selected checks share a 20-minute proof ceiling, further bounded by the original
+review's remaining time minus its final-decision reserve. With the default
+20-minute review timeout and 90-second reserve, that is at most 18m30s if invoked
+immediately, less after analysis. This is a ceiling, not a fixed wait or a fresh
+budget per check. A consumer timeout does not itself cancel a dispatched producer;
+producer cleanup and credential/lease limits remain separate.
 
 ### Telegram proof is a separate QA entrypoint
 
@@ -348,6 +380,55 @@ The credential lease is not a scenario sandbox: custom command actions can use
 the leased test identity. Keep credential handling and execution in an explicitly
 authorized, isolated worker, never an ordinary read-only review.
 
+### Selected proof inside a ClawSweeper review
+
+The request-bound proof integration lets ClawSweeper choose a relevant check
+before finishing its current review. It does not run every check on every PR.
+The exact PR head is resolved by the review, not typed by the maintainer.
+`@clawsweeper proof` requests one review with proof available as a manual override;
+the result is evaluated in that review rather than generating a second review.
+
+The automatic surfaces are:
+
+- Telegram Test Server: a bounded, data-only plan of tester messages and button
+  clicks, deterministic model replies, streaming/native-command settings, and
+  the behavior the reviewer needs to observe. This can cover more than a generic
+  greeting, including selected formatting or command behavior.
+- Control UI: the existing fixed chat smoke recipe against a mocked Gateway.
+  This is not an arbitrary browser-task runner or proof of all UI behavior.
+
+The separate fixed Crabline recipe remains a producer entrypoint; it is not a
+third automatic tool or a mandatory three-check batch.
+
+A trusted external controller owns the Telegram userbot and real bot token.
+The candidate receives a disposable token alias and a restricted DM API proxy,
+not the QA lease, Telegram session, GitHub token, or deployment credentials.
+The candidate runs in a disposable Crabbox local-container on an internal
+network without a Docker socket. Deployment requires a Linux/Podman environment
+where this isolated Crabbox SSH lifecycle has been verified; a generic Docker
+smoke run does not establish that compatibility.
+
+The controller reuses the existing Convex acquire, heartbeat, payload, and
+release APIs. No Convex schema update, quarantine endpoint, or broker deployment
+is required. Review ownership and one-run authorization are checked by the
+ClawSweeper service using the trusted workflow's GitHub Actions OIDC identity.
+Expired or revoked authority stops privileged sends and proxy forwarding.
+A recorder parent-death guard stops the recorder if its controller exits.
+These safeguards do not claim that native TDLib background traffic is zero.
+
+The Telegram artifact contains the bounded complete timeline, provider requests,
+formatting entities, and button labels with known private values redacted.
+Oversized or incomplete observations fail closed. Its assertion outcome stays
+`inconclusive`: the original reviewer must assess the observations against the
+claim. A green process exit, canned reply, or video does not automatically clear
+proof or other readiness blockers. Bot registration/webhook operations are
+simulated; live production Telegram, groups, media, and unrestricted agent
+commands are outside this bounded plan.
+Transport profile display names are synthetic, while routing IDs and the selected
+bot username are retained where required. Message text is not rewritten by this
+projection. Tests of real profile names or username-based tester routing are
+outside this proof surface.
+
 ## Machines and secrets
 
 Local CLI Crabbox defaults are `--provider hetzner --class beast`; override
@@ -359,7 +440,7 @@ slow or unavailable, add it behind the same Crabbox interface rather than
 hardcoding a fallback.
 
 VM baseline: Linux with a desktop-capable Chrome/Chromium, CDP access, VNC/
-noVNC, Node 22.22.3+, 24.15+, or 25.9+ and pnpm, an OpenClaw checkout, and
+noVNC, Node 24.16+ or 26.1+ and pnpm, an OpenClaw checkout, and
 outbound access to the target transport, GitHub, model providers, and the
 credential broker.
 
@@ -428,6 +509,4 @@ thread/reply relations, restart resume); neither is implemented yet.
 - Which Discord bot should be the driver vs. the SUT when the existing Mantis
   bot is reused?
 - How long should GitHub retain Mantis artifacts for PRs?
-- When should ClawSweeper automatically recommend a Mantis scenario instead of
-  waiting for a maintainer command?
 - Should screenshots be redacted or cropped before upload for public PRs?

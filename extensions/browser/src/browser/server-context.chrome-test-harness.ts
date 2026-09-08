@@ -37,6 +37,7 @@ vi.mock("./chrome.js", () => ({
   isChromeCdpOwnedByPid: vi.fn(async () => true),
   isChromeCdpReady: vi.fn(async () => true),
   isChromeReachable: vi.fn(async () => true),
+  inspectLocalChromeHeadlessMode: vi.fn(async () => undefined),
   launchOpenClawChrome: vi.fn(async () => {
     throw new Error("unexpected launch");
   }),

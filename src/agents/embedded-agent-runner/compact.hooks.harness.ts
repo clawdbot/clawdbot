@@ -197,12 +197,12 @@ function createMockCompactionSession() {
     },
     compact: vi.fn(async () => {
       sessionManualCompactionMock();
-      return await completeCompaction();
+      return (await completeCompaction()).result;
     }),
     [agentSessionAutomaticCompaction]: vi.fn(
       async (customInstructions, requestState, summaryOutputPolicy) => {
         sessionAutomaticCompactionMock(customInstructions, requestState, summaryOutputPolicy);
-        return await completeCompaction();
+        return { status: "completed" as const, ...(await completeCompaction()) };
       },
     ),
     [agentSessionSetContextReplacementHook]: (
@@ -220,10 +220,12 @@ function createMockCompactionSession() {
   async function completeCompaction() {
     const result = await sessionCompactImpl();
     session.messages.splice(1);
-    onContextReplaced?.(
-      session.messages.reduce<number>((tokens, message) => tokens + estimateTokensMock(message), 0),
+    const tokensAfter = session.messages.reduce<number>(
+      (tokens, message) => tokens + estimateTokensMock(message),
+      0,
     );
-    return result;
+    onContextReplaced?.(tokensAfter);
+    return { result, tokensAfter };
   }
   return session;
 }
@@ -434,6 +436,7 @@ const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
   diagnostics: [],
   byPluginId: new Map(),
   normalizePluginId: (pluginId: string) => pluginId,
+  declaredProviderOwners: new Map(),
   owners: {
     channels: new Map(),
     channelConfigs: new Map(),

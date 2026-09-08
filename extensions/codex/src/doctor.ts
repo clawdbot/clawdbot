@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { listAgentIds, resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { resolveEffectiveAgentRuntime } from "openclaw/plugin-sdk/command-auth-native";
@@ -17,6 +18,7 @@ import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
 export const CODEX_MANAGED_APP_SERVER_CHECK_ID = "codex/managed-app-server";
 const CODEX_VERSION_TIMEOUT_MS = 5_000;
 const CODEX_VERSION_MAX_BUFFER_BYTES = 64 * 1024;
+const execFileAsync = promisify(execFile);
 
 type VersionCommandResult = {
   stdout: string;
@@ -65,24 +67,13 @@ function parseCodexVersion(output: string): string | undefined {
 }
 
 function runVersionCommand(command: string): Promise<VersionCommandResult> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      command,
-      ["--version"],
-      {
-        encoding: "utf8",
-        maxBuffer: CODEX_VERSION_MAX_BUFFER_BYTES,
-        timeout: CODEX_VERSION_TIMEOUT_MS,
-        windowsHide: true,
-      },
-      (error, stdout, stderr) => {
-        if (error) {
-          reject(new Error(readErrorMessage(error), { cause: error }));
-          return;
-        }
-        resolve({ stdout, stderr });
-      },
-    );
+  return execFileAsync(command, ["--version"], {
+    encoding: "utf8",
+    maxBuffer: CODEX_VERSION_MAX_BUFFER_BYTES,
+    timeout: CODEX_VERSION_TIMEOUT_MS,
+    // A version-only child has nothing to drain; ignored TERM would keep execFile pending.
+    killSignal: "SIGKILL",
+    windowsHide: true,
   });
 }
 

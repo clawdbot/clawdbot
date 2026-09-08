@@ -389,7 +389,7 @@ describe("bootstrapWorker", () => {
         { ssh: SSH, artifact: BUNDLE },
         { resolveIdentity, runCommand: runner.runCommand },
       ),
-    ).rejects.toThrow("Node 22.22.3+, 24.15.0+, or 25.9.0+ with WAL-reset-safe SQLite");
+    ).rejects.toThrow("Node 24.16.0+ or 26.1.0+ with WAL-reset-safe SQLite");
     expect(runner.calls).toHaveLength(2);
     expect(runner.calls[0]?.options.input).toContain(
       `const nodeSafe = ${PROCESS_NODE_VERSION_CHECK};`,

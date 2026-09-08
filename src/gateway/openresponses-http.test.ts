@@ -1399,7 +1399,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
             strict: true,
           },
         ],
-        tool_choice: { type: "function", function: { name: "get_time" } },
+        tool_choice: { type: "function", function: { name: " get_time " } },
       });
       expect(resWrappedToolChoice.status).toBe(200);
       const wrappedClientTools =
@@ -1413,6 +1413,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(wrappedClientTools).toHaveLength(1);
       expect(wrappedClientTools[0]?.function?.name).toBe("get_time");
       expect(wrappedClientTools[0]?.function?.strict).toBe(true);
+      expect(firstAgentOpts().extraSystemPrompt).toContain(
+        "You must call the get_time tool before responding.",
+      );
       await ensureResponseConsumed(resWrappedToolChoice);
 
       const resUnknownTool = await postResponses(port, {
@@ -1422,7 +1425,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
         tool_choice: { type: "function", name: "unknown_tool" },
       });
       expect(resUnknownTool.status).toBe(400);
-      await ensureResponseConsumed(resUnknownTool);
+      expect(await resUnknownTool.json()).toEqual({
+        error: { type: "invalid_request_error", message: "invalid tool configuration" },
+      });
 
       mockAgentOnce([{ text: "ok" }]);
       const resMaxTokens = await postResponses(port, {

@@ -2,6 +2,7 @@ package ai.openclaw.app
 
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
+import ai.openclaw.app.gateway.GatewayBootstrapHandoff
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
@@ -334,7 +335,7 @@ class NodeForegroundServiceTest {
   }
 
   @Test
-  @Config(shadows = [ServiceRuntimePrefsShadow::class])
+  @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
   fun stopRetiresQueuedActivityConnect() = assertStopRetiresQueuedGatewayAction(QueuedGatewayAction.Connect)
 
   @Test
@@ -354,11 +355,11 @@ class NodeForegroundServiceTest {
   fun stopRetiresQueuedForgetGateway() = assertStopRetiresQueuedGatewayAction(QueuedGatewayAction.Forget)
 
   @Test
-  @Config(shadows = [ServiceRuntimePrefsShadow::class, ConnectAdmissionShadow::class])
+  @Config(shadows = [ServiceRuntimePrefsShadow::class, ConnectAdmissionShadow::class, SessionDisconnectShadow::class])
   fun stopRetiresConnectAfterViewModelAdmissionCheck() = assertStopRetiresQueuedGatewayAction(QueuedGatewayAction.Connect, gateAtConnectEntry = true)
 
   @Test
-  @Config(shadows = [ServiceRuntimePrefsShadow::class, ConnectAdmissionShadow::class])
+  @Config(shadows = [ServiceRuntimePrefsShadow::class, ConnectAdmissionShadow::class, SessionDisconnectShadow::class])
   fun anotherActivityResumeDoesNotReviveStoppedConnect() = assertStopRetiresQueuedGatewayAction(QueuedGatewayAction.Connect, gateAtConnectEntry = true, resumeFromAnotherActivity = true)
 
   @Test
@@ -470,6 +471,14 @@ class NodeForegroundServiceTest {
           runtime.gatewayConnectionDisplay.first { it.isConnected && runtime.nodeConnected.value }
         }
       }
+      if (action == QueuedGatewayAction.Connect) {
+        val initialRoles =
+          appFixture.sessionConnections
+            .filter { it.endpoint.port == initialGateway.port }
+            .map { it.role }
+            .toSet()
+        assertEquals(setOf("node", "operator"), initialRoles)
+      }
       while (initialGateway.takeRequest(0, TimeUnit.MILLISECONDS) != null) {
         // The initial ready sockets are not requests issued by the queued action.
       }
@@ -514,6 +523,13 @@ class NodeForegroundServiceTest {
         }
       }
       assertTrue("Queued action did not reach runtime adoption", gate.entered.await(10, TimeUnit.SECONDS))
+      if (action == QueuedGatewayAction.Connect) {
+        assertTrue(
+          "Queued Connect target must remain unknown to background gateway selection",
+          app.prefs.gatewayRegistry.entries.value
+            .none { it.stableId == nextEndpoint.stableId },
+        )
+      }
       val operation =
         viewModel.viewModelScope.coroutineContext.job.children
           .single { it !in existingOperations }
@@ -545,7 +561,7 @@ class NodeForegroundServiceTest {
       }
       gate.release.countDown()
       drainWithMainLooper { withTimeout(10_000) { operation.join() } }
-      if (gateAtConnectEntry) assertFalse("Call-through probe must not crash the gateway operation", operation.isCancelled)
+      if (action == QueuedGatewayAction.Connect) assertFalse("Call-through probe must not crash the gateway operation", operation.isCancelled)
 
       if (action == QueuedGatewayAction.Forget) {
         val savedId = GatewayEndpoint.manual("127.0.0.1", initialGateway.port).stableId
@@ -553,6 +569,13 @@ class NodeForegroundServiceTest {
           "Stop must retire queued Forget before deleting the saved gateway",
           app.prefs.gatewayRegistry.entries.value
             .any { it.stableId == savedId },
+        )
+      } else if (action == QueuedGatewayAction.Connect) {
+        // This unsaved cleartext target reaches session admission before the direct operation returns.
+        // Observe admission rather than delayed HTTP arrival; newer activity sockets remain valid.
+        assertTrue(
+          "Stopped activity work must not admit another Gateway connection",
+          appFixture.sessionConnections.none { it.endpoint.stableId == nextEndpoint.stableId },
         )
       } else {
         val target = if (action == QueuedGatewayAction.Refresh) initialGateway else nextGateway
@@ -640,6 +663,15 @@ class NodeForegroundServiceTest {
       fixture.operatorTokenReadGate = authRead
       runtime.setGatewayConnectionEnabled(endpoint.stableId, true)
       assertTrue("Secondary connection did not reach its credential read", authRead.entered.await(10, TimeUnit.SECONDS))
+      // Capture the held admission's completion before Stop can retire it; the queue below owns the verdict.
+      val stoppedAdmission =
+        if (reenable) {
+          null
+        } else {
+          ReflectionHelpers.getField<CompletableDeferred<Unit>>(runtime, "gatewayConnectOperationsDrained").also {
+            assertFalse("Held secondary admission must remain unfinished", it.isCompleted)
+          }
+        }
       if (reenable) {
         runtime.disconnect()
         runtime.setGatewayConnectionEnabled(endpoint.stableId, true)
@@ -651,13 +683,14 @@ class NodeForegroundServiceTest {
 
       authRead.release.countDown()
 
-      val connection = fixture.sessionConnections.poll(10, TimeUnit.SECONDS)
       if (reenable) {
+        val connection = fixture.sessionConnections.poll(10, TimeUnit.SECONDS)
         assertNotNull("Reenabled admission must reach the session owner", connection)
         assertEquals("operator", connection!!.role)
         assertNotNull("Reenabled admission must reach the Gateway", gateway.takeRequest(10, TimeUnit.SECONDS))
       } else {
-        assertNull("Stopped fleet work must not start an authenticated secondary connection", connection)
+        drainWithMainLooper { withTimeout(10_000) { checkNotNull(stoppedAdmission).await() } }
+        assertNull("Stopped fleet work must not start an authenticated secondary connection", fixture.sessionConnections.poll())
       }
     } finally {
       authRead.release.countDown()
@@ -1078,7 +1111,7 @@ class NodeForegroundServiceTest {
                   return this
                 }
 
-                override fun apply() {
+                override fun commit(): Boolean {
                   if (savesOperatorToken) {
                     operatorTokenWriteGate?.let { gate ->
                       if (gate.claimed.compareAndSet(false, true)) {
@@ -1087,8 +1120,9 @@ class NodeForegroundServiceTest {
                       }
                     }
                   }
-                  editor.apply()
-                  operatorToken?.let { operatorTokenWrites.trySend(it) }
+                  val committed = editor.commit()
+                  if (committed) operatorToken?.let { operatorTokenWrites.trySend(it) }
+                  return committed
                 }
               }
             }
@@ -1218,6 +1252,7 @@ class NodeForegroundServiceTest {
       password: String?,
       options: GatewayConnectOptions,
       tls: GatewayTlsParams?,
+      bootstrapHandoff: GatewayBootstrapHandoff?,
     ) {
       connectStarted?.complete(Unit)
       Shadow
@@ -1234,6 +1269,7 @@ class NodeForegroundServiceTest {
         ReflectionHelpers.ClassParameter.from(String::class.java, password),
         ReflectionHelpers.ClassParameter.from(GatewayConnectOptions::class.java, options),
         ReflectionHelpers.ClassParameter.from(GatewayTlsParams::class.java, tls),
+        ReflectionHelpers.ClassParameter.from(GatewayBootstrapHandoff::class.java, bootstrapHandoff),
       )
     }
 

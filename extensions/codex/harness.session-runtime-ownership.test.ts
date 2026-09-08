@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  getSessionEntry,
+  patchSessionEntry,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import { clearCodexBindingAfterInvalidImagePayload } from "./src/app-server/run-attempt-state.js";
@@ -95,7 +99,9 @@ describe("Codex session runtime ownership", () => {
       await fixture.bindingStore.mutate(identity, { kind: "set", binding });
     }
 
-    expect(fixture.resolveOwnership()).toEqual(expected);
+    const readPreviousSessionId = vi.fn(() => undefined);
+    expect(fixture.resolveOwnership({ readPreviousSessionId })).toEqual(expected);
+    expect(readPreviousSessionId).toHaveBeenCalledTimes(binding ? 0 : 1);
     expect(fixture.bindingStore.read(identity)).toEqual(binding);
   });
 
@@ -143,10 +149,19 @@ describe("Codex session runtime ownership", () => {
         });
         await fixture.bindingStore.mutate(identity, { kind: "set", binding });
         await patchSessionEntry({ ...scope, update: () => ({ sessionId: successor.sessionId }) });
+        const readPreviousSessionId = () => {
+          const entry = getSessionEntry({
+            ...scope,
+            hydrateSkillPromptRefs: false,
+            readConsistency: "latest",
+          });
+          return entry?.sessionId === successor.sessionId ? entry.previousSessionId : undefined;
+        };
 
         expect(
           fixture.resolveOwnership({
             sessionId: successor.sessionId,
+            readPreviousSessionId,
             storePath,
             config: { session: { store: path.join(root, "other", "sessions.json") } },
           }),

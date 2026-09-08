@@ -773,55 +773,60 @@ describe("node host invoke", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "rejects blocked forwarded env overrides in system.run.prepare",
-    async () => {
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prepare-env-"));
-      const toolPath = path.join(tempDir, "tool");
-      fs.writeFileSync(toolPath, "#!/bin/sh\nexit 0\n");
-      fs.chmodSync(toolPath, 0o755);
+  it.runIf(process.platform !== "win32").each([
+    { env: { PATH: "/tmp/mismatch" }, blocked: "PATH" },
+    { env: { GIT_PAGER: "cat", PAGER: "cat" }, blocked: undefined },
+    { env: { GIT_PAGER: "cat; id" }, blocked: "GIT_PAGER" },
+  ])("validates forwarded env overrides in system.run.prepare: $env", async ({ env, blocked }) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prepare-env-"));
+    const toolPath = path.join(tempDir, "tool");
+    fs.writeFileSync(toolPath, "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(toolPath, 0o755);
 
-      try {
-        await withEnvAsync(
-          { PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}` },
-          async () => {
-            const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-            const skillBins: SkillBinsProvider = { current: async () => [] };
+    try {
+      await withEnvAsync(
+        { PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}` },
+        async () => {
+          const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+          const skillBins: SkillBinsProvider = { current: async () => [] };
 
-            await handleInvoke(
-              {
-                id: "invoke-prepare-env",
-                nodeId: "node-1",
-                command: "system.run.prepare",
-                paramsJSON: JSON.stringify({
-                  command: ["tool", "--version"],
-                  rawCommand: "tool --version",
-                  env: { PATH: "/tmp/mismatch" },
-                }),
-              },
-              { request } as unknown as GatewayClient,
-              skillBins,
-            );
-
-            expect(request).toHaveBeenCalledWith(
-              "node.invoke.result",
-              expect.objectContaining({
-                id: "invoke-prepare-env",
-                nodeId: "node-1",
-                ok: false,
-                error: expect.objectContaining({
-                  code: "INVALID_REQUEST",
-                  message: expect.stringContaining("blocked override keys: PATH"),
-                }),
+          await handleInvoke(
+            {
+              id: "invoke-prepare-env",
+              nodeId: "node-1",
+              command: "system.run.prepare",
+              paramsJSON: JSON.stringify({
+                command: ["tool", "--version"],
+                rawCommand: "tool --version",
+                env,
               }),
-            );
-          },
-        );
-      } finally {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      }
-    },
-  );
+            },
+            { request } as unknown as GatewayClient,
+            skillBins,
+          );
+
+          expect(request).toHaveBeenCalledWith(
+            "node.invoke.result",
+            expect.objectContaining({
+              id: "invoke-prepare-env",
+              nodeId: "node-1",
+              ok: !blocked,
+              ...(blocked
+                ? {
+                    error: expect.objectContaining({
+                      code: "INVALID_REQUEST",
+                      message: expect.stringContaining(`blocked override keys: ${blocked}`),
+                    }),
+                  }
+                : {}),
+            }),
+          );
+        },
+      );
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 
   it("wraps malformed paramsJSON for built-in commands", async () => {
     const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);

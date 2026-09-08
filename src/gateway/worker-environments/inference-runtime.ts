@@ -11,7 +11,6 @@ import {
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import { applyExtraParamsToAgent } from "../../agents/embedded-agent-runner/extra-params.js";
@@ -317,16 +316,7 @@ function emitWorkerInferenceUsage(params: WorkerInferenceUsageParams): void {
 
 const DEFAULT_DEPENDENCIES: WorkerInferenceRuntimeDependencies = {
   now: Date.now,
-  resolveSessionTarget: (config, sessionId) => {
-    const target = resolveWorkerSessionTarget(config, sessionId);
-    if (!target) {
-      return undefined;
-    }
-    return {
-      ...target,
-      agentId: target.agentId ?? resolveDefaultAgentId(config),
-    };
-  },
+  resolveSessionTarget: resolveWorkerSessionTarget,
   acquireRuntimeLease: acquireAgentRunPreparedModelRuntime,
   resolveDefaultModel: resolveDefaultModelForAgent,
   resolveSessionAuthSelection,

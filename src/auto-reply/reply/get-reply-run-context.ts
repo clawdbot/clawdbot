@@ -32,7 +32,6 @@ import {
   hasInboundHistoryBody,
   hasReplyTargetContext,
   resolvePromptSilentReplyConversationType,
-  resolveTerminalReplySilenceContract,
 } from "./get-reply-run-helpers.js";
 import { resolvePromptSourceReplyMode } from "./get-reply-run-source-mode.js";
 import type { RunPreparedReplyParams } from "./get-reply-run.types.js";
@@ -222,14 +221,12 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     : "";
   const isDirectedTurn = isDirectedSourceReplyTurn(ctx, cfg, isDirectChat, inboundEventKind);
   const isAmbientRoomEvent = inboundEventKind === "room_event" && !isDirectedTurn;
-  const { allowEmptyAssistantReplyAsSilent, terminalReplyExpectation } =
-    resolveTerminalReplySilenceContract({
-      isHeartbeat,
-      isGroupChat,
-      isDirectedTurn,
-      isAmbientRoomEvent,
-      silentReplyPolicy: silentReplySettings.policy,
-    });
+  const allowEmptyAssistantReplyAsSilent =
+    isHeartbeat ||
+    (isGroupChat &&
+      !isDirectedTurn &&
+      (isAmbientRoomEvent || silentReplySettings.policy === "allow"));
+  const terminalReplyExpectation = isHeartbeat || isAmbientRoomEvent ? "optional" : "required";
   const groupSystemPrompt = normalizeOptionalString(promptSessionCtx.GroupSystemPrompt) ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? promptSessionCtx : { ...promptSessionCtx, ThreadStarterBody: undefined },

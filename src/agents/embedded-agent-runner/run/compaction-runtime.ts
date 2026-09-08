@@ -14,6 +14,7 @@ import {
   type ContextEngineSessionTarget,
 } from "../../../context-engine/types.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-manager-api.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
 import { SessionManager } from "../../sessions/session-manager.js";
@@ -159,7 +160,7 @@ export async function compactEmbeddedRunForRecovery(
       ownerNumbers: runParams.ownerNumbers,
       activeProcessSessions: listActiveProcessSessionReferences({
         scopeKey: resolveProcessToolScopeKey({
-          sessionKey: runParams.sandboxSessionKey?.trim() || runParams.sessionKey,
+          sessionKey: runParams.sessionKey,
           sessionId: activeSession.id,
           agentId: input.sessionAgentId,
         }),
@@ -224,6 +225,7 @@ export async function compactEmbeddedRunForRecovery(
             // Attach private facts to the object the delegate actually receives.
             if (backendParams.runtimeContext) {
               attachCompactionAccountingRecorder(backendParams.runtimeContext, {
+                requestBudget: input.state.compactionRequestBudget,
                 memoryTranscript: owner.sessionManager
                   ? {
                       sessionManager: owner.sessionManager,
@@ -459,10 +461,23 @@ export function createEmbeddedRunCompactionRuntime(input: {
       });
       assertAdmittedActive();
       sessionPromptState.capturePreparedCompactionTarget(successor);
-      onAccepted?.();
-      sessionPromptState.notifyCompactionSessionAdopted(currentTarget.sessionId);
-      assertAdmittedActive();
-      return successor.sessionId !== currentTarget.sessionId ? currentTarget.sessionId : undefined;
+      try {
+        onAccepted?.();
+        sessionPromptState.notifyCompactionSessionAdopted(currentTarget.sessionId);
+        assertAdmittedActive();
+        return successor.sessionId !== currentTarget.sessionId
+          ? currentTarget.sessionId
+          : undefined;
+      } finally {
+        if (successor.sessionId !== currentTarget.sessionId) {
+          await retireSessionMcpRuntime({
+            sessionId: currentTarget.sessionId,
+            reason: "compaction-session-end",
+            retainAcrossReuse: true,
+            preserveActiveLeases: true,
+          });
+        }
+      }
     }
     const writerFence = sessionPromptState.sessionWriterFence;
     const recordAccepted = (accepted: AcceptedCompactionSuccessor) => {
@@ -537,7 +552,6 @@ export function createEmbeddedRunCompactionRuntime(input: {
     if (
       contextEngine.info.ownsCompaction !== true ||
       !compactResult.ok ||
-      !compactResult.compacted ||
       !hookRunner?.hasHooks("after_compaction")
     ) {
       return;
@@ -546,7 +560,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
       await hookRunner.runAfterCompaction(
         {
           messageCount: -1,
-          compactedCount: -1,
+          compactedCount: compactResult.compacted ? -1 : 0,
           tokenCount: compactResult.result?.tokensAfter,
           sessionFile:
             resolveCompactionSuccessorTranscript(compactResult).sessionFile ??

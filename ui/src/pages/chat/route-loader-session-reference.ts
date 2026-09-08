@@ -10,6 +10,7 @@ import {
   normalizeAgentId,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
+import { subscribeToSharedRequest } from "../../lib/shared-request-subscription.ts";
 import type { SessionRouteContext as ApplicationContext } from "./route-loader-context.ts";
 import {
   sessionReferenceResolution,
@@ -126,32 +127,10 @@ export async function querySessionReference(
     };
     cache.set(cacheKey, pending);
   }
-  pending.subscribers.add(signal);
   const shared = pending;
-  let rejectAbort: (reason: unknown) => void = () => undefined;
-  const aborted = new Promise<never>((_resolve, reject) => {
-    rejectAbort = reject;
-  });
-  const onAbort = () => {
-    shared.subscribers.delete(signal);
-    // A cancelled route cannot cancel another consumer's lookup; only the last
-    // subscriber abandons the producer and prevents a not-yet-started request.
-    if (shared.subscribers.size === 0) {
-      shared.controller.abort(signal.reason);
-    }
-    rejectAbort(signal.reason);
-  };
-  signal.addEventListener("abort", onAbort, { once: true });
-  if (signal.aborted) {
-    onAbort();
-  }
-  try {
-    return await Promise.race([shared.promise, aborted]);
-  } finally {
-    signal.removeEventListener("abort", onAbort);
-    shared.subscribers.delete(signal);
+  return await subscribeToSharedRequest(shared, signal, signal, () => {
     if (shared.subscribers.size === 0 && cache.get(cacheKey) === shared) {
       cache.delete(cacheKey);
     }
-  }
+  });
 }

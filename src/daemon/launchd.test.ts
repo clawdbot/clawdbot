@@ -79,9 +79,6 @@ const launchdRestartHandoffState = vi.hoisted(() => ({
     (_params: unknown) => { ok: true; value: Promise<boolean> } | { ok: false; error: string }
   >(() => ({ ok: true, value: Promise.resolve(true) })),
 }));
-const launchdConstantsState = vi.hoisted(() => ({
-  legacyGatewayLabels: [] as string[],
-}));
 const launchdSystemState = vi.hoisted(() => ({
   assertNoSystemLaunchDaemonOwnership: vi.fn<(label: string) => Promise<void>>(async () => {}),
   inspectSystemLaunchDaemonOwnership: vi.fn<
@@ -523,14 +520,6 @@ vi.mock("./launchd-restart-handoff.js", () => ({
     launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff(params),
 }));
 
-vi.mock("./constants.js", async () => {
-  const actual = await vi.importActual<typeof import("./constants.js")>("./constants.js");
-  return {
-    ...actual,
-    resolveLegacyGatewayLaunchAgentLabels: () => [...launchdConstantsState.legacyGatewayLabels],
-  };
-});
-
 vi.mock("./launchd-system.js", () => ({
   assertNoSystemLaunchDaemonOwnership: (label: string) =>
     launchdSystemState.assertNoSystemLaunchDaemonOwnership(label),
@@ -699,7 +688,6 @@ beforeEach(() => {
   state.cleanupProtectedPids.length = 0;
   state.realExecFile = false;
   state.serviceStates.clear();
-  launchdConstantsState.legacyGatewayLabels.length = 0;
   launchctlSpawnSync.mockReset();
   launchctlSpawnSync.mockImplementation((file: string, args: string[]) => {
     const result = executeLaunchctlMock(file, args);
@@ -999,20 +987,28 @@ describe("launchd runtime parsing", () => {
 });
 
 describe("launchd runtime state", () => {
-  it.runIf(process.platform === "darwin")(
-    "fails soft within the supplied deadline when launchctl blocks",
-    async () => {
+  it.runIf(process.platform === "darwin").each(["runtime", "enabled"] as const)(
+    "bounds the %s read by the supplied deadline when launchctl blocks",
+    async (read) => {
       const realFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
       const tempDir = await realFs.mkdtemp(`${process.env.TMPDIR ?? "/tmp"}/openclaw-launchd-`);
-      await realFs.writeFile(`${tempDir}/launchctl`, "#!/bin/sh\nsleep 2\n", { mode: 0o755 });
+      await realFs.writeFile(`${tempDir}/launchctl`, "#!/bin/sh\nexec /bin/sleep 2\n", {
+        mode: 0o755,
+      });
       state.realExecFile = true;
 
       try {
         await withEnvAsync({ PATH: `${tempDir}:${process.env.PATH ?? ""}` }, async () => {
           const startedAt = Date.now();
-          const runtime = await readLaunchAgentRuntime({ HOME: tempDir }, { timeoutMs: 100 });
+          if (read === "enabled") {
+            await expect(
+              isLaunchAgentEnabled({ env: { HOME: tempDir }, timeoutMs: 100 }),
+            ).rejects.toThrow("launchctl print-disabled failed");
+          } else {
+            const runtime = await readLaunchAgentRuntime({ HOME: tempDir }, { timeoutMs: 100 });
+            expect(runtime.status).toBe("unknown");
+          }
           expect(Date.now() - startedAt).toBeLessThan(1_000);
-          expect(runtime.status).toBe("unknown");
         });
       } finally {
         state.realExecFile = false;
@@ -1939,48 +1935,6 @@ describe("launchd install", () => {
     expect(state.launchctlCalls).toEqual([["print", `${domain}/ai.openclaw.gateway`]]);
   });
 
-  it("restores an external legacy-label owner when canonical bootstrap fails", async () => {
-    const env = createDefaultLaunchdEnv();
-    const legacyLabel = "ai.openclaw.legacy-gateway";
-    const legacyPlistPath = `${env.HOME}/Library/LaunchAgents/${legacyLabel}.plist`;
-    const targetPlistPath = resolveLaunchAgentPlistPath(env);
-    const previousLegacy = createTestLaunchAgentPlist({
-      label: legacyLabel,
-      programArguments: ["/legacy/node", "/legacy/openclaw.mjs", "gateway"],
-    });
-    launchdConstantsState.legacyGatewayLabels.push(legacyLabel);
-    state.files.set(legacyPlistPath, previousLegacy);
-    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-    state.serviceStates.set(`${domain}/${legacyLabel}`, "running");
-    state.bootstrapError = "Operation not permitted";
-    state.bootstrapTransient = true;
-
-    await expect(
-      installLaunchAgent({
-        env,
-        stdout: new PassThrough(),
-        programArguments: defaultProgramArguments,
-      }),
-    ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
-
-    expect(state.files.get(legacyPlistPath)).toBe(previousLegacy);
-    expect(state.files.has(targetPlistPath)).toBe(false);
-    expect(state.serviceLoaded).toBe(true);
-    expect(state.serviceRunning).toBe(true);
-    expect(launchctlCommandNames()).toEqual([
-      "print",
-      "print",
-      "print",
-      "bootout",
-      "unload",
-      "enable",
-      "bootstrap",
-      "print",
-      "enable",
-      "bootstrap",
-    ]);
-  });
-
   it("stages a canonical plist without retiring a legacy LaunchAgent", async () => {
     const env = createDefaultLaunchdEnv();
     const legacyLabel = "ai.openclaw.legacy-gateway";
@@ -1989,7 +1943,6 @@ describe("launchd install", () => {
       label: legacyLabel,
       programArguments: ["/legacy/node", "/legacy/openclaw.mjs", "gateway"],
     });
-    launchdConstantsState.legacyGatewayLabels.push(legacyLabel);
     state.files.set(legacyPlistPath, previousLegacy);
 
     await stageLaunchAgent(defaultLaunchAgentFixture(env));

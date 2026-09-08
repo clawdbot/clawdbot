@@ -32,6 +32,18 @@ validated publication and verification; do not ask again unless identity,
 channel, scope, or material risk changes. Ship authority for ordinary code is
 not release authority.
 
+An operator's explicit approval to do whatever is needed to prepare a named
+release is standing authority for the necessary preparation decisions and
+repairs. Carry it through candidate and tooling fixes, upgrade/migration design,
+reviewed test or security-inventory alignments, isolated proof, commits, pushes,
+and validation recovery. Record the decision, its evidence, and the selected
+support contract; do not ask again merely because an already-approved class of
+work reaches an implementation or verification step. Continue independent work
+while resolving a blocker. This authority does not permit hiding defects,
+lowering a gate to manufacture success, destructive changes to operator state,
+unrelated work, or publication. A prepare-only request still requires a separate
+publication instruction before releasing artifacts or a bridge version.
+
 Keep one compact state record using
 [the handoff template](references/release-handoff-template.md): effective goal,
 version/tag/branch, cut/Code/Tooling/Release SHAs, active parent run and attempt,
@@ -39,11 +51,14 @@ successful child artifacts, approved changes, phase and next action. Latest
 operator steering replaces superseded scope. Completed evidence stays complete
 until a named change invalidates it.
 
-For regular releases, freeze product-complete **Code SHA** before generating
-the changelog. Require its Full Release Validation decision, then create
-**Release SHA** with a complete delta of exactly `CHANGELOG.md`. The
-`changelog-only-release-v1` policy reuses product proof while qualifying fresh
-publication bytes. Any other source delta returns to the Code SHA loop.
+For regular releases, prepare complete notes before freezing **Code SHA** when
+possible. If those notes are final, **Code SHA and Release SHA are the same
+commit**: one successful fresh full qualification can supply both roles and
+their exact publication bytes. Do not create another commit or run solely to
+separate the labels. If notes change after qualification, a descendant whose
+complete delta is exactly `CHANGELOG.md` may use `changelog-only-release-v1`
+to reuse product proof while qualifying new publication bytes. Any other
+source delta returns to the Code SHA loop.
 Keep trusted **Tooling SHA** separate; tooling or infrastructure failures do
 not justify changing the candidate.
 

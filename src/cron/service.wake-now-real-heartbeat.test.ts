@@ -1,17 +1,25 @@
 // Exercise the scheduler's active marker against the real heartbeat busy guard.
 // Stubbing runHeartbeatOnce hides this cross-owner interaction.
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentMainSessionKey } from "../config/sessions.js";
-import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import {
-  seedMainSessionStore,
-  setupTelegramHeartbeatPluginRuntimeForTests,
-} from "../infra/heartbeat-runner.test-utils.js";
-import { setHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
+  resolveSqliteScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { runHeartbeatOnce, startHeartbeatRunner } from "../infra/heartbeat-runner.js";
+import { installHeartbeatRunnerTestRuntime } from "../infra/heartbeat-runner.test-harness.js";
+import { seedMainSessionStore } from "../infra/heartbeat-runner.test-utils.js";
+import {
+  getHeartbeatWakeAbortSignal,
+  requestHeartbeat as queueHeartbeat,
+  requestHeartbeatAndWait,
+  setHeartbeatsEnabled,
+} from "../infra/heartbeat-wake.js";
 import {
   enqueueSystemEventWithReceipt,
   peekSystemEventEntries,
@@ -19,18 +27,27 @@ import {
 } from "../infra/system-events.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { resetCronActiveJobs, waitForActiveCronJobs } from "./active-jobs.js";
 import { CronService, type CronEvent } from "./service.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { loadCronJobsStoreSync } from "./store.js";
 
-setupTelegramHeartbeatPluginRuntimeForTests();
+installHeartbeatRunnerTestRuntime();
+beforeAll(async () => {
+  // Load the real dispatch graph before this real-time scheduler fixture starts its watchdog.
+  await import("../auto-reply/dispatch.js");
+});
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   setHeartbeatsEnabled(true);
   resetSystemEventsForTest();
   resetCronActiveJobs();
+  closeOpenClawAgentDatabasesForTest();
   vi.restoreAllMocks();
 });
 
@@ -56,10 +73,29 @@ async function runMainCronCase(
     heartbeatPaused?: boolean;
     disableBeforeRun?: boolean;
     scheduleKind?: "at" | "every";
+    isolatedHeartbeat?: boolean;
+    mainSessionKey?: string;
+    seedMainSession?: boolean;
+    heartbeatResponse?: ReturnType<typeof createHeartbeatToolResponsePayload>;
+    mixedExec?: boolean;
   } = {},
 ) {
   const sandbox = makeSandbox();
-  const getReplySpy = vi.fn().mockResolvedValue({ text: "Handled the reminder" });
+  const wakeSignals: Array<AbortSignal | undefined> = [];
+  const getReplySpy = vi.fn().mockImplementation(async (ctx: MsgContext) => {
+    wakeSignals.push(getHeartbeatWakeAbortSignal());
+    if (options.mixedExec && ctx.InternalTurnSource === "cron") {
+      enqueueSystemEventWithReceipt("Reminder: Late arrival", {
+        sessionKey: expectedMainSessionKey,
+        contextKey: "cron:late-arrival",
+      });
+    }
+    return (
+      options.heartbeatResponse ?? {
+        text: ctx.InternalTurnSource === "exec" ? "Command completed" : "Handled the reminder",
+      }
+    );
+  });
   const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "155462274" });
   const requestHeartbeat = vi.fn();
   let resolveFinished: ((event: CronEvent) => void) | undefined;
@@ -71,26 +107,37 @@ async function runMainCronCase(
     agents: {
       defaults: {
         workspace: sandbox.dir,
-        heartbeat: { every: options.heartbeatEvery ?? "5m", target: "telegram" },
+        heartbeat: {
+          every: options.heartbeatEvery ?? "5m",
+          target: "telegram",
+          ...(options.isolatedHeartbeat ? { isolatedSession: true } : {}),
+          ...(options.mixedExec ? { to: "999999" } : {}),
+        },
       },
     },
     channels: { telegram: { allowFrom: ["*"] } },
-    session: { store: sandbox.sessionStorePath },
+    session: {
+      store: sandbox.sessionStorePath,
+      ...(options.mainSessionKey ? { mainKey: options.mainSessionKey } : {}),
+    },
   };
   const expectedMainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: "main" });
-  await seedMainSessionStore(sandbox.sessionStorePath, cfg, {
-    lastChannel: "telegram",
-    lastProvider: "telegram",
-    lastTo: "-100155462274",
-  });
+  if (options.seedMainSession !== false) {
+    await seedMainSessionStore(sandbox.sessionStorePath, cfg, {
+      lastChannel: "telegram",
+      lastProvider: "telegram",
+      lastTo: "-100155462274",
+    });
+  }
 
-  const runHeartbeatOnceReal: NonNullable<CronServiceDeps["runHeartbeatOnce"]> = (opts) =>
+  const runHeartbeatOnceReal: typeof runHeartbeatOnce = (opts) =>
     runHeartbeatOnce({
       ...opts,
       cfg,
       deps: { getReplyFromConfig: getReplySpy, telegram: sendTelegram },
     });
 
+  const heartbeatRunner = startHeartbeatRunner({ cfg, runOnce: runHeartbeatOnceReal });
   const cron = new CronService({
     storePath: sandbox.cronStorePath,
     cronEnabled: true,
@@ -106,7 +153,21 @@ async function runMainCronCase(
       return remove ? { accepted: true, remove } : { accepted: false };
     },
     requestHeartbeat,
-    runHeartbeatOnce: runHeartbeatOnceReal,
+    requestHeartbeatAndWait: (opts, lifecycle) => {
+      const sessionKey = opts.sessionKey ?? expectedMainSessionKey;
+      if (options.mixedExec) {
+        enqueueSystemEventWithReceipt("Exec completed (report, code 0) :: ready", { sessionKey });
+        queueHeartbeat({
+          source: "exec-event",
+          intent: "event",
+          reason: "exec-event",
+          agentId: "main",
+          sessionKey,
+          coalesceMs: 0,
+        });
+      }
+      return requestHeartbeatAndWait({ ...opts, sessionKey, coalesceMs: 0 }, lifecycle);
+    },
     runIsolatedAgentJob: vi.fn(async () => ({
       status: "ok",
     })) as unknown as CronServiceDeps["runIsolatedAgentJob"],
@@ -186,7 +247,7 @@ async function runMainCronCase(
         expect(completed?.state.nextRunAtMs).toBe(expectedNextRunAtMs);
       }
       expect(terminal.nextRunAtMs).toBe(expectedNextRunAtMs);
-      return;
+      return { expectedMainSessionKey, sandbox, terminal };
     }
     expect(terminal.status).toBe("ok");
     if (wakeMode === "next-heartbeat") {
@@ -205,6 +266,27 @@ async function runMainCronCase(
       ).resolves.toMatchObject({ status: "ran" });
     } else {
       expect(requestHeartbeat).not.toHaveBeenCalled();
+      expect(wakeSignals[0]).toBeInstanceOf(AbortSignal);
+    }
+    if (options.mixedExec) {
+      await vi.waitFor(() => expect(getReplySpy).toHaveBeenCalledTimes(2));
+      expect(getReplySpy.mock.calls[0]?.[0].InternalTurnSource).toBe("exec");
+      expect(getReplySpy.mock.calls[0]?.[0].Body).not.toContain(
+        "Reminder: Send the nightly report",
+      );
+      expect(getReplySpy.mock.calls[1]?.[0]).toMatchObject({
+        InternalTurnSource: "cron",
+        SessionKey: expectedMainSessionKey,
+      });
+      expect(getReplySpy.mock.calls[1]?.[0].Body).toContain("Reminder: Send the nightly report");
+      expect(getReplySpy.mock.calls[1]?.[0].Body).not.toContain("Exec completed");
+      await vi.waitFor(() => expect(sendTelegram).toHaveBeenCalledTimes(2));
+      expect(sendTelegram.mock.calls.map(([to]) => to)).toEqual(["-100155462274", "-100155462274"]);
+      expect(peekSystemEventEntries(expectedMainSessionKey).map((event) => event.text)).toEqual([
+        "Reminder: Late arrival",
+      ]);
+      expect(cron.getJob(job.id)).toBeUndefined();
+      return undefined;
     }
     expect(getReplySpy).toHaveBeenCalledTimes(1);
 
@@ -215,14 +297,18 @@ async function runMainCronCase(
     >;
     expect(replyCtx.InternalTurnSource).toBe("cron");
     expect(replyCtx.Provider).toBeUndefined();
-    expect(replyCtx.SessionKey).toBe(expectedMainSessionKey);
+    expect(replyCtx.SessionKey).toBe(
+      options.isolatedHeartbeat ? `${expectedMainSessionKey}:heartbeat` : expectedMainSessionKey,
+    );
     expect(replyCtx.Body).toContain("Reminder: Send the nightly report");
     expect(peekSystemEventEntries(expectedMainSessionKey)).toHaveLength(0);
     if (options.deleteAfterRun) {
       expect(cron.getJob(job.id)).toBeUndefined();
     }
+    return { expectedMainSessionKey, sandbox, terminal };
   } finally {
     cron.stop();
+    heartbeatRunner.stop();
     const drained = await waitForActiveCronJobs(5_000);
     expect(drained).toEqual({ drained: true, active: 0 });
     await vi.waitFor(() => expect(getQueueSize(CommandLane.Cron)).toBe(0), { timeout: 5_000 });
@@ -254,6 +340,13 @@ describe("main cron with the real heartbeat runner", () => {
     },
   );
 
+  it("drains coalesced cron and exec work without recurrence while retaining late arrivals", async () => {
+    await runMainCronCase("scheduled", "now", {
+      heartbeatEvery: "0m",
+      deleteAfterRun: true,
+      mixedExec: true,
+    });
+  });
   it("delivers during a direct manual run", async () => {
     await runMainCronCase("direct");
   });
@@ -272,5 +365,45 @@ describe("main cron with the real heartbeat runner", () => {
 
   it("delivers and removes an immediate one-shot when heartbeat cadence is disabled", async () => {
     await runMainCronCase("scheduled", "now", { heartbeatEvery: "0m", deleteAfterRun: true });
+  });
+
+  it("keeps a transient isolated heartbeat successful without creating an orphan outcome", async () => {
+    const result = await runMainCronCase("direct", "now", {
+      isolatedHeartbeat: true,
+      mainSessionKey: "cron:job:run:transient",
+      seedMainSession: false,
+      heartbeatResponse: createHeartbeatToolResponsePayload({
+        outcome: "progress",
+        notify: false,
+        summary: "Transient heartbeat completed",
+      }),
+    });
+    if (!result) {
+      throw new Error("expected completed cron run");
+    }
+    const sessionKey = result.expectedMainSessionKey;
+    const db = openOpenClawAgentDatabase(
+      toDatabaseOptions(
+        resolveSqliteScope({
+          agentId: "main",
+          sessionKey,
+          storePath: result?.sandbox.sessionStorePath,
+        }),
+      ),
+    ).db;
+
+    expect(result.terminal.status).toBe("ok");
+    expect(
+      db.prepare("SELECT session_key FROM session_nodes WHERE session_key = ?").get(sessionKey),
+    ).toBeUndefined();
+    expect(
+      db
+        .prepare("SELECT session_key FROM session_nodes WHERE session_key = ?")
+        .get(`${sessionKey}:heartbeat`),
+    ).toEqual({ session_key: `${sessionKey}:heartbeat` });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM heartbeat_outcomes").get()).toEqual({
+      count: 0,
+    });
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 });

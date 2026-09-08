@@ -30,13 +30,18 @@ vi.mock("../../runtime-plan/build.js", () => ({
 afterEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 
 it.each([
-  { agentId: "main", sandboxSessionKey: undefined, remoteSkills: false },
-  { agentId: "work", sandboxSessionKey: "global", remoteSkills: false },
-  { agentId: "work", sandboxSessionKey: "agent:main:policy", remoteSkills: false },
-  { agentId: "main", sandboxSessionKey: undefined, remoteSkills: true },
+  { agentId: "main", sandboxSessionKey: undefined, remoteSkills: false, oneShotCliRun: undefined },
+  { agentId: "work", sandboxSessionKey: "global", remoteSkills: false, oneShotCliRun: true },
+  {
+    agentId: "work",
+    sandboxSessionKey: "agent:main:policy",
+    remoteSkills: false,
+    oneShotCliRun: false,
+  },
+  { agentId: "main", sandboxSessionKey: undefined, remoteSkills: true, oneShotCliRun: true },
 ])(
-  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey and remote skills $remoteSkills",
-  async ({ agentId, sandboxSessionKey, remoteSkills }) => {
+  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, remote skills $remoteSkills, and one-shot $oneShotCliRun",
+  async ({ agentId, sandboxSessionKey, remoteSkills, oneShotCliRun }) => {
     await withOpenClawTestState({ label: "harness-owner" }, async (state) => {
       const config = {
         agents: {
@@ -105,6 +110,7 @@ it.each([
         conversationToolPolicySupport: "exact",
         runAttempt,
       });
+      const runtimePluginToolGrant = { pluginId: "owner-tools", toolNames: ["owner_only"] };
       const params = {
         admittedRunContext,
         agentId,
@@ -125,6 +131,8 @@ it.each([
             }
           : {}),
         timeoutMs: 5_000,
+        oneShotCliRun,
+        runtimePluginToolGrant,
       };
       let lifecycleGeneration = getAgentEventLifecycleGeneration();
       const laneController = createEmbeddedRunLaneController({
@@ -236,6 +244,10 @@ it.each([
         expect(runAttempt).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ agentId, sessionKey: "global", sandboxSessionKey }),
         );
+        expect.soft(runAttempt.mock.calls[0]?.[0].oneShotCliRun).toBe(oneShotCliRun);
+        expect
+          .soft(runAttempt.mock.calls[0]?.[0].runtimePluginToolGrant)
+          .toBe(runtimePluginToolGrant);
         const sandbox = runAttempt.mock.calls[0]?.[0].sandbox;
         if (remoteSkills) {
           const dispatched = runAttempt.mock.calls[0]?.[0];

@@ -5,6 +5,8 @@ import { CURRENT_SESSION_VERSION } from "./version.js";
 /** Inputs for the first entry in a session transcript. */
 type SessionTranscriptHeaderParams = {
   sessionId?: string;
+  /** Copied history retains its original model projection policy. */
+  version?: number;
   cwd?: string;
   /** Source transcript lineage recorded on forked transcript headers. */
   parentSession?: string;
@@ -16,7 +18,7 @@ type SessionTranscriptHeaderParams = {
 export function createSessionTranscriptHeader(params: SessionTranscriptHeaderParams = {}) {
   return {
     type: "session",
-    version: CURRENT_SESSION_VERSION,
+    version: params.version ?? CURRENT_SESSION_VERSION,
     id: params.sessionId ?? randomUUID(),
     timestamp: params.timestamp ?? new Date().toISOString(),
     cwd: params.cwd ?? process.cwd(),

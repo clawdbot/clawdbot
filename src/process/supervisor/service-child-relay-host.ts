@@ -4,6 +4,7 @@ import type { Duplex, Readable, Writable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { setTimeout as delay } from "node:timers/promises";
 import { toErrorObject } from "../../infra/errors.js";
+import { withTimeout } from "../../infra/fs-safe.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -217,6 +218,7 @@ export async function createServiceChildRelayAdapter(
   let childError: Error | undefined;
   let childDisconnected = false;
   let childExited = false;
+  const relayExit = createDeferredCore();
   let requestedSignal: "SIGTERM" | "SIGKILL" | undefined;
   let waitError: Error | undefined;
   const startup = createDeferredCore();
@@ -343,6 +345,28 @@ export async function createServiceChildRelayAdapter(
     // Only kernel group disappearance certifies closure. The anchor's census is
     // advisory: hidden or concurrently forked members can be absent from ps.
     const deadline = Date.now() + GRACEFUL_CANCEL_TIMEOUT_MS;
+    if (!childExited) {
+      // Control EOF can precede the relay reaping its anchor. Darwin reports
+      // EPERM for that unreaped zombie group, so join before observing it.
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        loseIdentity("service child relay did not exit before cleanup deadline");
+        return;
+      }
+      try {
+        await withTimeout(
+          Promise.race([relayExit.promise, extinctionCompletion.promise]),
+          remainingMs,
+          { message: "service child relay did not exit before cleanup deadline" },
+        );
+      } catch {
+        loseIdentity("service child relay did not exit before cleanup deadline");
+        return;
+      }
+      if (state !== "closing") {
+        return;
+      }
+    }
     for (;;) {
       try {
         // Observation only: signalling a retired numeric PGID could hit a reused group.
@@ -525,6 +549,7 @@ export async function createServiceChildRelayAdapter(
   });
   child.once("exit", () => {
     childExited = true;
+    relayExit.resolve();
     removeConstructionAbortListener();
     if (useWindowsJobAnchor) {
       finishWindowsAuthority();
