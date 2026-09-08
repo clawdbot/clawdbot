@@ -69,6 +69,16 @@ describe("buildSilentFallbackFailurePayload", () => {
     activeModelRef: "amazon-bedrock/claude-haiku",
   } as Parameters<typeof buildSilentFallbackFailurePayload>[0]["fallbackTransition"];
 
+  const selected = {
+    provider: "openrouter",
+    model: "z-ai/glm-5.3",
+  } as const;
+
+  const other = {
+    provider: "amazon-bedrock",
+    model: "claude-haiku",
+  } as const;
+
   const base = {
     fallbackTransition: transition,
     fallbackFailureKnown: true,
@@ -76,20 +86,26 @@ describe("buildSilentFallbackFailurePayload", () => {
     hasSuccessfulTerminalDelivery: false,
   };
 
-  it("keeps couldn't-reach wording for transport-class attempts", () => {
+  it("keeps couldn't-reach wording for transport-class attempts on the selected backend", () => {
     const payload = buildSilentFallbackFailurePayload({
       ...base,
-      fallbackAttempts: [{ reason: "timeout" }, { reason: "server_error" }],
+      fallbackAttempts: [
+        { ...selected, reason: "timeout" },
+        { ...selected, reason: "server_error" },
+      ],
     });
     expect(payload?.text).toContain("couldn't reach the configured model backend");
     expect(payload?.text).toContain(transition.selectedModelRef);
     expect(payload?.text).toContain(transition.activeModelRef);
   });
 
-  it("uses responded wording when every attempt is format/4xx", () => {
+  it("uses responded wording when every selected-backend attempt is format/empty_response", () => {
     const payload = buildSilentFallbackFailurePayload({
       ...base,
-      fallbackAttempts: [{ reason: "format" }, { reason: "format" }],
+      fallbackAttempts: [
+        { ...selected, reason: "format" },
+        { ...selected, reason: "empty_response" },
+      ],
     });
     expect(payload?.text).toContain("responded but produced no usable reply");
     expect(payload?.text).not.toContain("couldn't reach");
@@ -105,20 +121,23 @@ describe("buildSilentFallbackFailurePayload", () => {
     expect(payload?.text).not.toContain("couldn't reach");
   });
 
-  it("uses neutral wording for unknown reasons", () => {
+  it("uses neutral wording for unknown reasons on the selected backend", () => {
     const payload = buildSilentFallbackFailurePayload({
       ...base,
-      fallbackAttempts: [{ reason: "unknown" }],
+      fallbackAttempts: [{ ...selected, reason: "unknown" }],
     });
     expect(payload?.text).toContain("produced no usable reply");
     expect(payload?.text).not.toContain("responded");
     expect(payload?.text).not.toContain("couldn't reach");
   });
 
-  it("uses neutral wording for mixed transport and format attempts", () => {
+  it("uses neutral wording for mixed transport and format attempts on the selected backend", () => {
     const payload = buildSilentFallbackFailurePayload({
       ...base,
-      fallbackAttempts: [{ reason: "timeout" }, { reason: "format" }],
+      fallbackAttempts: [
+        { ...selected, reason: "timeout" },
+        { ...selected, reason: "format" },
+      ],
     });
     expect(payload?.text).toContain("produced no usable reply");
     expect(payload?.text).not.toContain("responded");
@@ -128,26 +147,77 @@ describe("buildSilentFallbackFailurePayload", () => {
   it("uses neutral wording for local auth cooldown skips without provider status", () => {
     const payload = buildSilentFallbackFailurePayload({
       ...base,
-      fallbackAttempts: [{ reason: "auth" }],
+      fallbackAttempts: [{ ...selected, reason: "auth" }],
     });
     expect(payload?.text).toContain("produced no usable reply");
     expect(payload?.text).not.toContain("responded");
     expect(payload?.text).not.toContain("couldn't reach");
   });
 
-  it("uses responded wording for real auth failures that carry provider status", () => {
+  it("uses neutral wording for auth failures that carry status (synthetic and real indistinguishable)", () => {
     const payload = buildSilentFallbackFailurePayload({
       ...base,
-      fallbackAttempts: [{ reason: "auth", status: 401 }],
+      fallbackAttempts: [{ ...selected, reason: "auth", status: 401 }],
     });
-    expect(payload?.text).toContain("responded but produced no usable reply");
+    expect(payload?.text).toContain("produced no usable reply");
+    expect(payload?.text).not.toContain("responded");
     expect(payload?.text).not.toContain("couldn't reach");
   });
 
   it("uses neutral wording when a skipped primary leaves an empty fallback path", () => {
     const payload = buildSilentFallbackFailurePayload({
       ...base,
-      fallbackAttempts: [{ reason: "auth" }, { reason: "rate_limit" }],
+      fallbackAttempts: [
+        { ...selected, reason: "auth" },
+        { ...selected, reason: "rate_limit" },
+      ],
+    });
+    expect(payload?.text).toContain("produced no usable reply");
+    expect(payload?.text).not.toContain("responded");
+    expect(payload?.text).not.toContain("couldn't reach");
+  });
+
+  it("uses neutral wording when format evidence is only on a different model than selected", () => {
+    const payload = buildSilentFallbackFailurePayload({
+      ...base,
+      fallbackAttempts: [{ ...other, reason: "format" }],
+    });
+    expect(payload?.text).toContain("produced no usable reply");
+    expect(payload?.text).not.toContain("responded");
+    expect(payload?.text).not.toContain("couldn't reach");
+  });
+
+  it("uses responded wording when format evidence matches the selected provider/model", () => {
+    const payload = buildSilentFallbackFailurePayload({
+      ...base,
+      fallbackAttempts: [
+        { ...other, reason: "timeout" },
+        { ...selected, reason: "format" },
+      ],
+    });
+    expect(payload?.text).toContain("responded but produced no usable reply");
+    expect(payload?.text).not.toContain("couldn't reach");
+  });
+
+  it("uses couldn't-reach wording when transport evidence matches only the selected backend", () => {
+    const payload = buildSilentFallbackFailurePayload({
+      ...base,
+      fallbackAttempts: [
+        { ...other, reason: "format" },
+        { ...selected, reason: "timeout" },
+      ],
+    });
+    expect(payload?.text).toContain("couldn't reach the configured model backend");
+    expect(payload?.text).not.toContain("responded");
+  });
+
+  it("uses neutral wording when format is on another model and selected has no attempts", () => {
+    const payload = buildSilentFallbackFailurePayload({
+      ...base,
+      fallbackAttempts: [
+        { ...other, reason: "format" },
+        { ...other, reason: "empty_response" },
+      ],
     });
     expect(payload?.text).toContain("produced no usable reply");
     expect(payload?.text).not.toContain("responded");
