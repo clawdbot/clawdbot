@@ -18,6 +18,7 @@ import { styleSelectParams } from "../../../packages/terminal-core/src/prompt-se
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { removeProviderAuthProfilesWithLock } from "../../agents/auth-profiles.js";
+import { resolveExplicitAuthOrderSelection } from "../../agents/auth-profiles/order.js";
 import {
   promoteAuthProfileInOrder,
   upsertAuthProfileAfterLoginWithLockOrThrow,
@@ -30,6 +31,7 @@ import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js"
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
+import { quoteCliArg } from "../../cli/quote-cli-arg.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { normalizeAgentModelRefForConfig } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -41,7 +43,6 @@ import {
   restorePriorAgentsDefaultsModelUnlessOptIn,
   resolveProviderMatch,
 } from "../../plugins/provider-auth-choice-helpers.js";
-import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
 import { prepareProviderAuthProfilesForPersistence } from "../../plugins/provider-auth-persistence.js";
 import { createVpsAwareOAuthHandlers } from "../../plugins/provider-oauth-flow.js";
 import { resolvePluginProvidersCore } from "../../plugins/providers.runtime.js";
@@ -544,6 +545,48 @@ function resolveConfiguredAuthSelectionForProvider(
     : { createIfMissing: false };
 }
 
+async function persistPastedAuthProfile(params: {
+  config: OpenClawConfig;
+  agentId: string;
+  agentDir: string;
+  profileId: string;
+  credential: AuthProfileCredential;
+  runtime: RuntimeEnv;
+}) {
+  const { agentId, agentDir, profileId, credential, config, runtime } = params;
+  const { provider } = credential;
+  // The secret belongs to this agent; do not advertise it to peer auth routing.
+  await upsertAuthProfileWithLockOrThrow({ agentDir, profileId, credential });
+  // Creating a stored order from config would freeze this agent against later global edits.
+  const promotion = await promoteAuthProfileInOrder({
+    agentDir,
+    provider,
+    profileId,
+    createIfMissing: false,
+  });
+  const recovery = formatCliCommand(
+    `openclaw models auth order set --provider ${quoteCliArg(provider)} --agent ${quoteCliArg(agentId)} ${quoteCliArg(profileId)}`,
+  );
+  if (!promotion.ok) {
+    throw new Error(
+      `The auth profile was saved, but its order could not be updated because the auth store is busy. Wait a moment, then run ${recovery}.`,
+    );
+  }
+  const { order } = resolveExplicitAuthOrderSelection({
+    storeOrder: promotion.value.order,
+    configuredOrder: config.auth?.order,
+    providerKey: provider,
+    providerAuthKey: resolveProviderIdForAuth(provider, { config }),
+  });
+  await refreshRunningGatewayAuthState(agentId);
+  runtime.log(`Auth profile: ${profileId} (${provider}/${credential.type})`);
+  if (order && !order.includes(profileId)) {
+    runtime.log(
+      `Warning: Auth profile ${profileId} was saved but excluded by the explicit auth order for ${provider}. To select it for agent ${agentId}, run ${recovery}. This sets a per-agent order override; include any other profiles you want to keep.`,
+    );
+  }
+}
+
 async function runProviderAuthMethod(params: {
   config: OpenClawConfig;
   agentId: string;
@@ -670,7 +713,8 @@ export async function modelsAuthPasteTokenCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const { agentId, agentDir } = await resolveModelsAuthAgent(opts.agent);
+  const config = await loadValidConfigOrThrow();
+  const { agentId, agentDir } = await resolveModelsAuthAgent(opts.agent, config);
   const rawProvider = normalizeOptionalString(opts.provider);
   if (!rawProvider) {
     throw new Error(
@@ -706,7 +750,9 @@ export async function modelsAuthPasteTokenCommand(
 
   const expires = resolveManualTokenExpiryMs(opts.expiresIn);
 
-  await upsertAuthProfileWithLockOrThrow({
+  await persistPastedAuthProfile({
+    config,
+    agentId,
     profileId,
     credential: {
       type: "token",
@@ -715,14 +761,8 @@ export async function modelsAuthPasteTokenCommand(
       ...(expires ? { expires } : {}),
     },
     agentDir,
+    runtime,
   });
-
-  await updateConfig((cfg) => applyAuthProfileConfig(cfg, { profileId, provider, mode: "token" }));
-
-  await refreshRunningGatewayAuthState(agentId);
-
-  logConfigUpdated(runtime);
-  runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
   if (provider === "anthropic") {
     runtime.log("Anthropic setup-token auth is supported in OpenClaw.");
     runtime.log("OpenClaw prefers Claude CLI reuse when it is available on the host.");
@@ -739,7 +779,8 @@ export async function modelsAuthPasteApiKeyCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const { agentId, agentDir } = await resolveModelsAuthAgent(opts.agent);
+  const config = await loadValidConfigOrThrow();
+  const { agentId, agentDir } = await resolveModelsAuthAgent(opts.agent, config);
   const rawProvider = normalizeOptionalString(opts.provider);
   if (!rawProvider) {
     throw new Error(
@@ -765,7 +806,9 @@ export async function modelsAuthPasteApiKeyCommand(
     },
   });
 
-  await upsertAuthProfileWithLockOrThrow({
+  await persistPastedAuthProfile({
+    config,
+    agentId,
     profileId,
     credential: {
       type: "api_key",
@@ -773,16 +816,8 @@ export async function modelsAuthPasteApiKeyCommand(
       key,
     },
     agentDir,
+    runtime,
   });
-
-  await updateConfig((cfg) =>
-    applyAuthProfileConfig(cfg, { profileId, provider, mode: "api_key" }),
-  );
-
-  await refreshRunningGatewayAuthState(agentId);
-
-  logConfigUpdated(runtime);
-  runtime.log(`Auth profile: ${profileId} (${provider}/api_key)`);
 }
 
 /** Interactive helper for adding token auth profiles, with provider/method prompts. */
