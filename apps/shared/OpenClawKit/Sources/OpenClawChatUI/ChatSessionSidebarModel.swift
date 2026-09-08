@@ -180,14 +180,50 @@ public enum ChatSessionSidebarModel {
     }
 
     public static func displayName(for session: OpenClawChatSessionEntry) -> String {
-        for candidate in [session.displayName, session.label] {
-            if let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !trimmed.isEmpty
-            {
-                return trimmed
-            }
+        let label = session.label?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let generated = session.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        // User renames live in label. Platform auto-labels (Android node stamp) must
+        // not outrank a generated topic title.
+        if let label, !label.isEmpty,
+           !self.isPlatformAutoSessionLabel(label, sessionKey: session.key)
+        {
+            return label
+        }
+        if let generated, !generated.isEmpty {
+            return generated
+        }
+        if let label, !label.isEmpty {
+            return label
         }
         return self.displayName(forKey: session.key)
+    }
+
+    private static func nodeDeviceId(from sessionKey: String) -> String? {
+        let trimmed = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rest: String
+        if trimmed.lowercased().hasPrefix("agent:") {
+            let parts = trimmed.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
+            guard parts.count == 3 else { return nil }
+            rest = String(parts[2])
+        } else {
+            rest = trimmed
+        }
+        guard rest.hasPrefix("node-") else { return nil }
+        let deviceId = String(rest.dropFirst("node-".count)).split(separator: ":").first.map(String.init)
+        return deviceId?.isEmpty == false ? deviceId : nil
+    }
+
+    private static func isPlatformAutoSessionLabel(_ label: String, sessionKey: String) -> Bool {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let deviceId = self.nodeDeviceId(from: sessionKey) else { return false }
+        if trimmed.compare("OpenClaw App", options: .caseInsensitive) == .orderedSame {
+            return true
+        }
+        if trimmed.compare("OpenClaw App · \(deviceId)", options: .caseInsensitive) == .orderedSame {
+            return true
+        }
+        return trimmed.range(of: "OpenClaw App ·", options: [.anchored, .caseInsensitive]) != nil
+            && trimmed.hasSuffix(" · \(deviceId)")
     }
 
     /// Compact "repo \u{2387} branch" line for worktree/work sessions; mirrors the

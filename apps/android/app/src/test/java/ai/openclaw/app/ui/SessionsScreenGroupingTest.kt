@@ -23,9 +23,41 @@ class SessionsScreenGroupingTest {
       ) { "Main thread" },
     )
     assertEquals(
+      "OpenClaw App · Release planning",
+      sessionPresentationTitle(
+        ChatSessionEntry(
+          key = dashboardKey,
+          updatedAtMs = null,
+          label = "OpenClaw App · Release planning",
+          displayName = "Generated title",
+        ),
+      ) { "Main thread" },
+    )
+    assertEquals(
       "Generated title",
       sessionPresentationTitle(
         ChatSessionEntry(key = dashboardKey, updatedAtMs = null, displayName = "Generated title"),
+      ) { "Main thread" },
+    )
+    assertEquals(
+      "Generated title",
+      sessionPresentationTitle(
+        ChatSessionEntry(
+          key = "agent:main:node-1234567890ab",
+          updatedAtMs = null,
+          label = "OpenClaw App · Pixel · 1234567890ab",
+          displayName = "Generated title",
+        ),
+      ) { "Main thread" },
+    )
+    assertEquals(
+      "OpenClaw App · Pixel · 1234567890ab",
+      sessionPresentationTitle(
+        ChatSessionEntry(
+          key = "agent:main:node-1234567890ab",
+          updatedAtMs = null,
+          label = "OpenClaw App · Pixel · 1234567890ab",
+        ),
       ) { "Main thread" },
     )
     assertEquals(

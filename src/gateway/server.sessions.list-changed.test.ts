@@ -890,7 +890,7 @@ test("sessions.list yields before responding during bulk transcript hydration", 
   const payload = expectRespondPayload(respond);
   const session = findSession(payload, "agent:main:bulk-0");
   expectFields(session, {
-    derivedTitle: "title 0",
+    derivedTitle: "Title 0",
     lastMessagePreview: "last 0",
   });
 });

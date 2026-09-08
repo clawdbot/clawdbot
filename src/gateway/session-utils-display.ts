@@ -17,6 +17,7 @@ import {
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.shared.js";
+import { isPlatformAutoSessionLabel } from "./platform-session-label.js";
 import type {
   SessionListActiveRunProjector,
   SessionListRowContext,
@@ -35,12 +36,16 @@ export function resolveGatewaySessionDisplayName(key: string, entry?: SessionEnt
   const originLabel = sessionDeliveryOrigin(entry)?.label;
   const isDashboardSession = parsedAgent?.rest.startsWith("dashboard:") === true;
   const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
+  const explicitLabel = entry?.label?.trim();
+  // Android node connect stamps are not user renames; prefer a generated topic.
+  const renameLabel =
+    explicitLabel && !isPlatformAutoSessionLabel(explicitLabel, key) ? explicitLabel : undefined;
   // A user-assigned label is an explicit rename; it must win over stored
   // channel-derived display names or renames silently vanish on refresh.
   // Group sessions prefer the human chat title (subject/#channel) over the
   // stored compact token displayName (e.g. "slack:g-general").
   const displayName =
-    entry?.label ??
+    renameLabel ??
     (isGroupSession ? buildGroupDisplayTitle({ subject, groupChannel, space }) : undefined) ??
     entry?.displayName ??
     (isGroupSession && channel

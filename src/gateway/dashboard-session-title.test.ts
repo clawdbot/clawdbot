@@ -25,8 +25,12 @@ import type { ChatAttachment } from "./chat-attachments.js";
 import {
   buildDashboardSessionTitleSource,
   generateWorktreeSessionTitle,
+  hasExplicitSessionName,
   maybeGenerateDashboardSessionTitle,
+  prepareDashboardSessionTitle,
+  resolveExplicitSessionName,
 } from "./dashboard-session-title.js";
+import { deriveGoalSessionTitle } from "./derive-goal-session-title.js";
 
 const cfg = {
   agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
@@ -260,9 +264,14 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   });
 
   it.each([
-    ["non-dashboard session", { sessionKey: "agent:main:main" }],
+    ["legacy main session", { sessionKey: "agent:main:main" }],
+    ["cron session", { sessionKey: "agent:main:cron:job-1" }],
     ["slash command", { userMessage: "/status" }],
     ["manual label", { entry: { ...baseEntry, label: "My release" } }],
+    [
+      "manual prefix-containing label",
+      { entry: { ...baseEntry, label: "OpenClaw App · Release planning" } },
+    ],
     ["persisted display name", { entry: { ...baseEntry, displayName: "My release" } }],
     ["group subject", { entry: { ...baseEntry, subject: "Release team" } }],
     ["channel name", { entry: { ...baseEntry, groupChannel: "releases" } }],
@@ -276,6 +285,34 @@ describe("maybeGenerateDashboardSessionTitle", () => {
 
     expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
     expect(updateSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["ios new-session key", "agent:main:ios-7f3a9c2b1d0e"],
+    ["android node key", "agent:main:node-1234567890ab"],
+  ])("titles %s", async (_name, sessionKey) => {
+    await expect(
+      maybeGenerateDashboardSessionTitle({ ...titleParams(), sessionKey }),
+    ).resolves.toBe(true);
+    expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
+  });
+
+  it("titles over an Android platform auto-label without treating it as a rename", async () => {
+    const entry = {
+      ...baseEntry,
+      label: "OpenClaw App · Pixel · 1234567890ab",
+    };
+    mockSessionUpdate(entry);
+
+    await expect(
+      maybeGenerateDashboardSessionTitle({
+        ...titleParams(entry),
+        sessionKey: "agent:main:node-1234567890ab",
+      }),
+    ).resolves.toBe(true);
+
+    const update = updateSessionEntry.mock.calls[0]?.[1];
+    expect(await update?.({ ...entry })).toEqual({ displayName: "Release Planning" });
   });
 
   it("retries a historical session from the transcript's first user message", async () => {
@@ -318,16 +355,59 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     );
   });
 
-  it("evicts a failed request so later activity can retry", async () => {
+  it("persists a deterministic goal title when model labeling fails", async () => {
+    generateConversationLabelWithFallback.mockRejectedValueOnce(new Error("route unavailable"));
+
+    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
+    expect(generateConversationLabelWithFallback).toHaveBeenCalledTimes(1);
+    const update = updateSessionEntry.mock.calls[0]?.[1];
+    expect(await update?.({ ...baseEntry })).toEqual({
+      displayName: "Help me plan the release",
+    });
+  });
+
+  it("does not persist a deterministic title when utility-only speculation fails", async () => {
+    generateConversationLabelWithFallback.mockRejectedValueOnce(new Error("route unavailable"));
+
+    await expect(
+      prepareDashboardSessionTitle({
+        cfg,
+        agentId: "main",
+        userMessage: "Help me plan the release",
+      }),
+    ).resolves.toBeNull();
+    expect(generateConversationLabelWithFallback).toHaveBeenCalledWith(
+      expect.objectContaining({ utilityOnly: true }),
+    );
+    expect(updateSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("returns null from utility-only speculation when the model yields no title", async () => {
+    generateConversationLabelWithFallback.mockResolvedValueOnce(null);
+
+    await expect(
+      prepareDashboardSessionTitle({
+        cfg,
+        agentId: "main",
+        userMessage: "Help me plan the release",
+      }),
+    ).resolves.toBeNull();
+    expect(updateSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("evicts a settled naming request so a later rename attempt can run", async () => {
     generateConversationLabelWithFallback
       .mockRejectedValueOnce(new Error("route unavailable"))
       .mockResolvedValueOnce("Release Planning");
 
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).rejects.toThrow(
-      "route unavailable",
-    );
+    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
+    // Clear the persisted name so a later send can claim naming again.
+    loadSessionEntry.mockReturnValue(baseEntry);
+    mockSessionUpdate(baseEntry);
     await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
     expect(generateConversationLabelWithFallback).toHaveBeenCalledTimes(2);
+    const update = updateSessionEntry.mock.calls.at(-1)?.[1];
+    expect(await update?.({ ...baseEntry })).toEqual({ displayName: "Release Planning" });
   });
 
   it("does not overwrite a name added while the model request is running", async () => {
@@ -479,6 +559,37 @@ describe("buildDashboardSessionTitleSource", () => {
   });
 });
 
+describe("hasExplicitSessionName", () => {
+  const androidStamp = "OpenClaw App · Pixel · 1234567890ab";
+  const androidKey = "agent:main:node-1234567890ab";
+  const dashboardKey = "agent:main:dashboard:chat-1";
+
+  it("treats a matching Android node stamp as unnamed", () => {
+    const entry = { ...baseEntry, label: androidStamp };
+    expect(hasExplicitSessionName(entry, androidKey)).toBe(false);
+    expect(resolveExplicitSessionName({ ...entry, displayName: "Generated" }, androidKey)).toBe(
+      "Generated",
+    );
+  });
+
+  it.each([
+    ["without a session key", androidStamp, undefined],
+    ["on a dashboard session", "OpenClaw App · Release planning", dashboardKey],
+    ["on an iOS session", "OpenClaw App · Release planning", "agent:main:ios-abc123"],
+  ] as const)("keeps a prefix-containing manual name %s", (_name, label, sessionKey) => {
+    const entry = { ...baseEntry, label, displayName: "Generated" };
+    expect(hasExplicitSessionName(entry, sessionKey)).toBe(true);
+    expect(resolveExplicitSessionName(entry, sessionKey)).toBe(label);
+  });
+
+  it.each(["OpenClaw App", "OpenClaw App · 1234567890ab"])(
+    "treats builder stamp %j on the matching node session as unnamed",
+    (label) => {
+      expect(hasExplicitSessionName({ ...baseEntry, label }, androidKey)).toBe(false);
+    },
+  );
+});
+
 function textAttachment(text: string): ChatAttachment {
   return {
     type: "file",
@@ -486,3 +597,54 @@ function textAttachment(text: string): ChatAttachment {
     content: Buffer.from(text).toString("base64"),
   };
 }
+
+describe("deriveGoalSessionTitle", () => {
+  it("returns undefined for empty or whitespace input", () => {
+    expect(deriveGoalSessionTitle(undefined)).toBeUndefined();
+    expect(deriveGoalSessionTitle("")).toBeUndefined();
+    expect(deriveGoalSessionTitle("   ")).toBeUndefined();
+  });
+
+  it("skips slash commands", () => {
+    expect(deriveGoalSessionTitle("/new")).toBeUndefined();
+    expect(deriveGoalSessionTitle("/model openai/gpt-5.4")).toBeUndefined();
+  });
+
+  it("prefers a task-verb sentence over earlier banter", () => {
+    expect(deriveGoalSessionTitle("Hey. Investigate why heartbeat failed overnight.")).toBe(
+      "Investigate why heartbeat failed overnight.",
+    );
+  });
+
+  it("sentence-cases a plain first-bubble topic", () => {
+    expect(deriveGoalSessionTitle("compare tang session naming with openclaw")).toBe(
+      "Compare tang session naming with openclaw",
+    );
+  });
+
+  it("strips inbound metadata before deriving", () => {
+    expect(
+      deriveGoalSessionTitle(
+        "[Mon 2026-08-10 12:00 UTC] investigate why heartbeat failed overnight",
+      ),
+    ).toBe("Investigate why heartbeat failed overnight");
+  });
+
+  it("ignores host envelope leftovers that are not a user task", () => {
+    expect(
+      deriveGoalSessionTitle("<environment_context>\n{}\n</environment_context>"),
+    ).toBeUndefined();
+    expect(
+      deriveGoalSessionTitle("<recommended_plugins>\nHere is a list of plugins\n"),
+    ).toBeUndefined();
+  });
+
+  it("truncates long goals at a word boundary within 60 characters", () => {
+    const result = deriveGoalSessionTitle(
+      "investigate the long gateway timeout that keeps happening when the utility model cannot name sessions during onboarding",
+    );
+    expect(result).toBeDefined();
+    expect(result!.length).toBeLessThanOrEqual(60);
+    expect(result!.endsWith("…")).toBe(true);
+  });
+});

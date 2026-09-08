@@ -12,34 +12,19 @@ import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagents/registry/subagent-run-liveness.js";
-import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { truncateUtf16Safe } from "../utils.js";
 import {
   estimateAggregateUsageCost,
   type ModelCostConfig,
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
+import { deriveGoalSessionTitle } from "./derive-goal-session-title.js";
 import {
   createSessionRowModelCacheKey,
   type SessionListRowContext,
 } from "./session-utils-contracts.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
-
-const DERIVED_TITLE_MAX_LEN = 60;
-
-function truncateTitle(text: string, maxLen: number): string {
-  if (text.length <= maxLen) {
-    return text;
-  }
-  const cut = truncateUtf16Safe(text, maxLen - 1);
-  const lastSpace = cut.lastIndexOf(" ");
-  if (lastSpace > maxLen * 0.6) {
-    return cut.slice(0, lastSpace) + "…";
-  }
-  return cut + "…";
-}
 
 export function deriveSessionTitle(
   entry: SessionEntry | undefined,
@@ -66,13 +51,11 @@ export function deriveSessionTitle(
     return subject;
   }
 
-  // Transcript metadata is model-only; sanitize at the shared title boundary so
-  // SQLite, file-backed sessions, and every session-list client stay consistent.
-  const normalized = firstUserMessage
-    ? stripInboundMetadata(firstUserMessage).replace(/\s+/g, " ").trim()
-    : "";
-  if (normalized) {
-    return truncateTitle(normalized, DERIVED_TITLE_MAX_LEN);
+  // When no model label was persisted, prefer a task-bearing sentence over a
+  // raw first-bubble truncation so Control UI and gateway clients stay readable.
+  const goalTitle = deriveGoalSessionTitle(firstUserMessage);
+  if (goalTitle) {
+    return goalTitle;
   }
 
   // Derived titles are human content only; UI/TUI/ACP own key-based fallbacks,
