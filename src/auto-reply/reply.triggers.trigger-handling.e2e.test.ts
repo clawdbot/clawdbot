@@ -15,7 +15,7 @@ import {
   expectBareNewOrResetAcknowledged,
   withTempHome,
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import { renderControlUiAgentFailureCopy } from "../agents/failover/user-copy.js";
 import { resolveSessionKey } from "../config/sessions.js";
 import {

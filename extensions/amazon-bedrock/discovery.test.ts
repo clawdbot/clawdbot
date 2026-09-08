@@ -1,5 +1,6 @@
 // Amazon Bedrock tests cover discovery plugin behavior.
 import type { BedrockClient } from "@aws-sdk/client-bedrock";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   discoverBedrockModels,
@@ -84,6 +85,7 @@ function discoverFreshBedrockModels(
 ): ReturnType<typeof discoverBedrockModels> {
   return discoverBedrockModels({
     ...params,
+    discoveryMode: "strict",
     config: { ...params.config, refreshInterval: 0 },
   });
 }
@@ -440,9 +442,10 @@ describe("bedrock discovery", () => {
       });
 
       const discovery = discoverFreshBedrockModels({ region: "abort-timeout", clientFactory });
+      const rejected = expect(discovery).rejects.toThrow();
       await vi.advanceTimersByTimeAsync(30_000);
 
-      await expect(discovery).resolves.toEqual([]);
+      await rejected;
       expect(sendMock).toHaveBeenCalledTimes(2);
       expect(abortSignals).toHaveLength(2);
       expect(abortSignals.every((signal) => signal.aborted)).toBe(true);
@@ -539,19 +542,148 @@ describe("bedrock discovery", () => {
     expect(models.find((m) => m.id === "ap.anthropic.claude-sonnet-4-6")).toBeUndefined();
   });
 
-  it("gracefully handles ListInferenceProfiles permission errors", async () => {
-    sendMock
-      .mockResolvedValueOnce({
-        modelSummaries: [baseActiveAnthropicSummary],
-      })
-      // Simulate AccessDeniedException for ListInferenceProfiles.
-      .mockRejectedValueOnce(new Error("AccessDeniedException"));
+  it.each(["foundation", "profiles", "profile-page"])(
+    "rejects failed %s acquisition and retries the complete catalog",
+    async (surface) => {
+      const failure = Object.assign(new Error("AccessDeniedException"), {
+        $metadata: { httpStatusCode: 403 },
+      });
+      const profile = buildBedrockProfile("us.amazon.nova-micro-v1:0", "US Nova", [
+        "amazon.nova-micro-v1:0",
+      ]);
+      if (surface === "foundation") {
+        sendMock.mockRejectedValueOnce(failure).mockResolvedValueOnce({});
+      } else {
+        sendMock.mockResolvedValueOnce({ modelSummaries: [baseActiveAnthropicSummary] });
+        if (surface === "profile-page") {
+          sendMock.mockResolvedValueOnce({
+            inferenceProfileSummaries: [profile],
+            nextToken: "next-page",
+          });
+        }
+        sendMock.mockRejectedValueOnce(failure);
+      }
+      const params = {
+        region: `failed-${surface}`,
+        clientFactory,
+        discoveryMode: "strict" as const,
+      };
+      await expect(discoverBedrockModels(params)).rejects.toMatchObject({ status: 403 });
+      expect(destroyMock).toHaveBeenCalledTimes(1);
 
-    const models = await discoverFreshBedrockModels({ region: "us-east-1", clientFactory });
-    // Foundation model should still be discovered despite profile discovery failure.
-    expect(models).toHaveLength(1);
-    expect(models[0]?.id).toBe("anthropic.claude-3-7-sonnet-20250219-v1:0");
+      mockBedrockDiscovery([baseActiveAnthropicSummary], [profile]);
+      const recovered = await discoverBedrockModels(params);
+      expect(recovered.map((model) => model.id)).toEqual([
+        baseActiveAnthropicSummary.modelId,
+        profile.inferenceProfileId,
+      ]);
+      expect(destroyMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([undefined, "strict"] as const)(
+    "preserves the %s empty-result contract and caches it",
+    async (discoveryMode) => {
+      mockBedrockDiscovery([]);
+      const params = {
+        pluginConfig: { discovery: { enabled: true, region: `successful-empty-${discoveryMode}` } },
+        discoveryMode,
+        env: {},
+        clientFactory,
+      };
+      const first = await resolveImplicitBedrockProvider(params);
+      const second = await resolveImplicitBedrockProvider(params);
+      if (discoveryMode === "strict") {
+        expect(first).toMatchObject({ models: [] });
+        expect(second).toMatchObject({ models: [] });
+      } else {
+        expect(first).toBeNull();
+        expect(second).toBeNull();
+      }
+      expect(sendMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each(["foundation", "profiles"])(
+    "preserves public %s failure defaults without caching incomplete inventory",
+    async (surface) => {
+      const failure = new Error("catalog unavailable");
+      if (surface === "foundation") {
+        sendMock.mockRejectedValueOnce(failure).mockResolvedValueOnce({});
+      } else {
+        sendMock
+          .mockResolvedValueOnce({ modelSummaries: [baseActiveAnthropicSummary] })
+          .mockRejectedValueOnce(failure);
+      }
+      const params = { region: `advisory-${surface}`, clientFactory };
+      const initial = await discoverBedrockModels(params);
+      expect(initial.map((model) => model.id)).toEqual(
+        surface === "foundation" ? [] : [baseActiveAnthropicSummary.modelId],
+      );
+      mockBedrockDiscovery(
+        [baseActiveAnthropicSummary],
+        [buildBedrockProfile("us.amazon.nova-micro-v1:0", "US Nova", ["amazon.nova-micro-v1:0"])],
+      );
+      expect(await discoverBedrockModels(params)).toHaveLength(2);
+      expect(sendMock).toHaveBeenCalledTimes(4);
+      expect(destroyMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("keeps public implicit-provider failures null", async () => {
+    sendMock.mockRejectedValueOnce(new Error("catalog unavailable")).mockResolvedValueOnce({});
+    await expect(
+      resolveImplicitBedrockProvider({
+        env: {},
+        pluginConfig: { discovery: { enabled: true, region: "advisory-implicit-failure" } },
+        clientFactory,
+      }),
+    ).resolves.toBeNull();
   });
+
+  it("keeps strict callers out of an advisory in-flight failure", async () => {
+    const started = createDeferred<void>();
+    const profiles = createDeferred<never>();
+    const failure = Object.assign(new Error("AccessDeniedException"), {
+      $metadata: { httpStatusCode: 403 },
+    });
+    sendMock
+      .mockResolvedValueOnce({ modelSummaries: [baseActiveAnthropicSummary] })
+      .mockImplementationOnce(() => {
+        started.resolve();
+        return profiles.promise;
+      })
+      .mockResolvedValueOnce({ modelSummaries: [baseActiveAnthropicSummary] })
+      .mockRejectedValueOnce(failure);
+    const params = { region: "advisory-strict-in-flight", clientFactory };
+    const advisory = discoverBedrockModels(params);
+    await started.promise;
+    await expect(
+      discoverBedrockModels({ ...params, discoveryMode: "strict" }),
+    ).rejects.toMatchObject({ status: 403 });
+    profiles.reject(failure);
+    await expect(advisory).resolves.toMatchObject([{ id: baseActiveAnthropicSummary.modelId }]);
+    mockBedrockDiscovery([baseActiveAnthropicSummary]);
+    await expect(
+      discoverBedrockModels({ ...params, discoveryMode: "strict" }),
+    ).resolves.toMatchObject([{ id: baseActiveAnthropicSummary.modelId }]);
+    expect(sendMock).toHaveBeenCalledTimes(6);
+    expect(destroyMock).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([false, undefined])(
+    "keeps non-attempt discovery null when enabled is %s",
+    async (enabled) => {
+      await expect(
+        resolveImplicitBedrockProvider({
+          pluginConfig: { discovery: { enabled } },
+          env: {},
+          clientFactory,
+        }),
+      ).resolves.toBeNull();
+      expect(sendMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps matching inference profiles when provider filters are enabled", async () => {
     mockBedrockDiscovery(

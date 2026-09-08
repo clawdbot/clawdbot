@@ -7,6 +7,7 @@ import {
   requireString,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -14,11 +15,7 @@ suite.define(() => {
   it.each(["queue", "steer", "collect", "followup"] as const)(
     "explains and submits the opposite of %s with modified Enter",
     async (followUpMode) => {
-      const context = await suite.newBrowserContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      });
+      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
       const page = await context.newPage();
       const inheritsQueueMode = followUpMode === "collect" || followUpMode === "followup";
       const runtimeConfig = {

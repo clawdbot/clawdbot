@@ -14,6 +14,12 @@ export function resolveSessionWorkspace(params: {
   if (!row) {
     return { root: null, label: null };
   }
+  if (row.repositoryWorkspaceId) {
+    return {
+      root: row.execNode ? row.execCwd?.trim() || null : null,
+      label: row.repository ? pathBasename(row.repository.url).replace(/\.git$/u, "") : null,
+    };
+  }
   // Exec-node paths belong to that node. Mirror loadSessionFileRoot precedence;
   // an unresolved worktree must never borrow the agent's different checkout.
   const root = row.execNode

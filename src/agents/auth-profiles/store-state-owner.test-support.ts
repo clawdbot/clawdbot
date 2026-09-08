@@ -15,7 +15,7 @@ import {
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "./store.js";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "./store-runtime.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 

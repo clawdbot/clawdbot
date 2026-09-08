@@ -34,6 +34,7 @@ export type LegacyStateDetection = {
   targetScope?: SessionScope;
   stateDir: string;
   oauthDir: string;
+  pluginSessionStoreAgentIds: readonly string[];
   sessions: {
     legacyDir: string;
     legacyStorePath: string;
@@ -74,6 +75,7 @@ export type LegacyStateDetection = {
   sharedAuthStore: SharedAuthStoreMigrationDetection;
   worktrees: {
     hasLegacy: boolean;
+    legacyIds: string[];
     pathRewrites: Array<{ id: string; fromPath: string; toPath: string }>;
   };
   taskStateSidecars: {
@@ -177,4 +179,74 @@ export type MigrationMessages = {
   changes: string[];
   warnings: string[];
   notices?: string[];
+  /** The owner completed its required work and classified every warning as advisory. */
+  warningDisposition?: "recoverable";
+};
+
+export const LEGACY_STATE_MIGRATION_PLAN_SCHEMA_VERSION =
+  "openclaw.legacyStateMigrationPlan.v1" as const;
+
+export type LegacyStateMigrationMode = "automatic" | "doctor";
+
+export type LegacyStateMigrationEndpoint =
+  | { kind: "path"; path: string }
+  | { kind: "sqlite"; path: string }
+  | { kind: "owner"; id: string };
+
+export type LegacyStateMigrationStepPlan = {
+  id: string;
+  phase: "shared" | "final";
+  source: LegacyStateMigrationEndpoint[];
+  target: LegacyStateMigrationEndpoint[];
+  requiredness: "required" | "conditional" | "not-required";
+  reversibility: "checkpoint-required" | "not-applicable";
+  outcome: "planned" | "skipped" | "deferred";
+  refusal?: { code: string; message: string };
+};
+
+export type LegacyStateMigrationStepReceipt = Omit<LegacyStateMigrationStepPlan, "outcome"> & {
+  outcome: "completed" | "skipped" | "warning" | "refused";
+  changes: string[];
+  warnings: string[];
+  notices?: string[];
+  refusal?: { code: string; message: string };
+};
+
+export type PlannedPluginDoctorAction = {
+  pluginId: string;
+  id: string;
+};
+
+/** Immutable authority prepared before state mutation for the later session repair writer. */
+export type PreparedPostSessionPluginMigration = {
+  step: Omit<LegacyStateMigrationStepPlan, "outcome">;
+  plannedActions: readonly PlannedPluginDoctorAction[];
+};
+
+type LegacyStateMigrationCandidate = {
+  root: string;
+  version: string;
+  artifact: {
+    outcome: "deferred";
+    refusal: { code: "candidate-artifact-digest-required"; message: string };
+  };
+};
+
+export type LegacyStateMigrationPlan = {
+  schemaVersion: typeof LEGACY_STATE_MIGRATION_PLAN_SCHEMA_VERSION;
+  mutationAllowed: false;
+  outcome: "planned" | "refused";
+  warnings: string[];
+  refusal?: { code: string; message: string };
+  mode: LegacyStateMigrationMode;
+  candidate: LegacyStateMigrationCandidate;
+  snapshot: {
+    homeDir: string;
+    configPath: string;
+    configDigest?: string;
+    stateDir: string;
+    stateDigest?: string;
+  };
+  steps: LegacyStateMigrationStepPlan[];
+  planDigest: string;
 };

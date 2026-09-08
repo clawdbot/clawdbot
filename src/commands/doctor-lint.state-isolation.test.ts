@@ -19,7 +19,8 @@ import { resolveMcpOAuthAccessToken } from "../agents/mcp-oauth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
-import { readConfigMachineState, writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseForTest,

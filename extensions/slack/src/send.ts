@@ -27,7 +27,7 @@ import {
   normalizeOptionalString as normalizeSlackApiString,
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { sliceUtf16Safe, truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
 import type { SlackAuthoredTextPlacement } from "./authored-text.js";
@@ -485,7 +485,7 @@ function resolveSlackTextChunks(params: {
     const chunks: string[] = [];
     let remaining = text;
     while (remaining) {
-      const chunk = sliceUtf16Safe(remaining, 0, chunkLimit) || Array.from(remaining)[0] || "";
+      const chunk = sliceUtf16Safe(remaining, 0, chunkLimit) || truncateCodePoints(remaining, 1);
       chunks.push(chunk);
       remaining = remaining.slice(chunk.length);
     }

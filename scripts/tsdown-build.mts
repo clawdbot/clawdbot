@@ -16,7 +16,6 @@ import { isPathInside } from "@openclaw/fs-safe/path";
 import { decodeMountInfoPath } from "../packages/normalization-core/src/mountinfo-path.ts";
 import { BUNDLED_PLUGIN_BUILD_ENV_NAMES } from "./lib/bundled-plugin-build-entries.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
-import { CLAUDE_AGENT_SDK_ASSET_DIR } from "./lib/claude-agent-sdk-assets.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   resolveDistArtifactLockPath,
@@ -122,6 +121,7 @@ export const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
   "scripts/lib/root-package-bundled-plugin-excludes.mjs",
   "scripts/lib/tsdown-config-groups.mts",
+  "scripts/lib/tsdown-declaration-boundary.mts",
   "scripts/lib/tsdown-output-roots.mts",
 ];
 export const TSDOWN_PACKAGES_CACHE_INPUT = {
@@ -334,16 +334,7 @@ function listExistingGeneratedDeclarationOutputPaths(
   for (const root of roots) {
     collectDeclarationOutputPaths(path.resolve(cwd, root), protectedPaths, fsImpl);
   }
-  // Copied SDK types belong to the runtime package: JS builds replace them,
-  // while declaration publication (including cache restores) must leave them intact.
-  const runtimeAssetRoots = roots.map((root) =>
-    path.resolve(cwd, root, CLAUDE_AGENT_SDK_ASSET_DIR),
-  );
-  return new Set(
-    [...protectedPaths].filter(
-      (file) => !runtimeAssetRoots.some((root) => isPathInside(root, file)),
-    ),
-  );
+  return protectedPaths;
 }
 
 function listExistingPreservedOutputPaths(cwd: string, env: NodeJS.ProcessEnv, fsImpl: typeof fs) {

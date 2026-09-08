@@ -228,40 +228,54 @@ suite.define(() => {
     );
   });
 
-  it("renders historical workspace recovery failures from transcript history", async () => {
-    await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1440 },
-      },
-      async ({ page }) => {
-        await installMockGateway(page, {
-          historyMessages: [
-            {
-              role: "custom",
-              customType: "cloud-workspace-recovery-failed",
-              content:
-                "Cloud workspace recovery attempt failed: snapshot verification failed. OpenClaw preserved the result and will retry.",
-              timestamp: Date.now() - 500,
-            },
-          ],
-          methodResponses: { "sessions.list": workerRecoverySessionsList(false) },
-          sessionKey,
-        });
-
-        const response = await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        expect(response?.status()).toBe(200);
-        await page
-          .getByText("OpenClaw preserved the result and will retry.", { exact: false })
-          .waitFor({
-            timeout: 10_000,
+  it.each([
+    {
+      customType: "cloud-workspace-recovery-failed",
+      content:
+        "Cloud workspace recovery attempt failed: snapshot verification failed. OpenClaw preserved the result and will retry.",
+    },
+    {
+      customType: "run-failed-before-reply",
+      content: "This turn did not run: Cloud worker is unavailable. Choose another runner.",
+    },
+  ])(
+    "renders durable $customType notices from transcript history",
+    async ({ customType, content }) => {
+      await suite.withPage(
+        {
+          colorScheme: "dark",
+          locale: "en-US",
+          serviceWorkers: "block",
+          viewport: { height: 900, width: 1440 },
+        },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page, {
+            historyMessages: [
+              {
+                role: "custom",
+                customType,
+                content,
+                timestamp: Date.now() - 500,
+              },
+            ],
+            methodResponses: { "sessions.list": workerRecoverySessionsList(false) },
+            sessionKey,
           });
-        await capture(page, "04-workspace-recovery-failed-history.png");
-      },
-    );
-  });
+
+          const response = await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          expect(response?.status()).toBe(200);
+          const notice = page.locator(".chat-group.other").filter({ hasText: content });
+          await notice.waitFor({ timeout: 10_000 });
+          expect(await page.locator(".chat-group.assistant").count()).toBe(0);
+          await page.reload();
+          await notice.waitFor({ timeout: 10_000 });
+          expect(await notice.count()).toBe(1);
+          await gateway.waitForRequest("chat.startup");
+          await capture(page, `04-${customType}-history.png`);
+        },
+      );
+    },
+  );
 
   it.each(["failed", "reclaimed", "request"])(
     "exposes the full %s diagnostic with keyboard and clipboard access",

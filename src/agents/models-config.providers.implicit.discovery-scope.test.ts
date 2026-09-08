@@ -3,7 +3,10 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.js";
-import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import {
+  createPluginManifestRecordFixture,
+  createPluginMetadataSnapshotFixture,
+} from "../plugins/plugin-metadata.test-support.js";
 import {
   prepareProviderExternalAuthWithPlugin,
   resolveProviderSyntheticAuthWithPlugin,
@@ -13,6 +16,8 @@ import {
   resolveSyntheticAuthWithProvider,
 } from "../plugins/provider-synthetic-auth.js";
 import type { ProviderPlugin } from "../plugins/types.js";
+import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   createOpenClawTestState,
@@ -612,6 +617,74 @@ describe("resolveImplicitProviders startup discovery scope", () => {
 
     expect(outcomes).toEqual([{ provider: "openai", status: "unavailable" }]);
   });
+
+  it.each(["timeout", "secret-unavailable"] as const)(
+    "records every selected family identity after %s without accepting late success",
+    async (failure) => {
+      const family = createProvider("family");
+      const healthy = createProvider("healthy");
+      mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([family, healthy]);
+      const completion = createDeferredCore();
+      let lateCatalog: Promise<void> | undefined;
+      const outcomes: Array<{ provider: string; status: string }> = [];
+      mocks.runProviderCatalog.mockImplementation((params) => {
+        if (params.provider.id === "healthy") {
+          return Promise.resolve({
+            provider: {
+              baseUrl: "https://healthy.example.test/v1",
+              models: [createTextModel("healthy-live", "Healthy live")],
+            },
+          });
+        }
+        if (failure === "secret-unavailable") {
+          return Promise.reject(
+            new SecretSurfaceUnavailableError({
+              ownerKind: "provider",
+              ownerId: "family",
+              state: "unavailable",
+              paths: ["models.providers.family.apiKey"],
+              refKeys: [],
+              reason: "fixture secret is unavailable",
+            }),
+          );
+        }
+        lateCatalog = completion.promise.then(() => {
+          params.reportCatalogOutcome?.({ provider: "family-plan", status: "ready" });
+        });
+        return lateCatalog;
+      });
+      const providers = await resolveImplicitProviders({
+        agentDir: state.agentDir(),
+        config: {},
+        env: state.env,
+        explicitProviders: {},
+        providerDiscoveryProviderIds: ["family", "family-plan", "healthy"],
+        providerDiscoveryTimeoutMs: 1,
+        pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
+          plugins: [
+            createPluginManifestRecordFixture({
+              id: "family",
+              providers: ["family", "family-plan"],
+            }),
+            createPluginManifestRecordFixture({ id: "healthy", providers: ["healthy"] }),
+          ],
+        }),
+        onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
+      });
+      const expected = [
+        { provider: "family", status: "unavailable" },
+        { provider: "family-plan", status: "unavailable" },
+      ];
+      try {
+        expect(providers?.healthy?.models.map((model) => model.id)).toEqual(["healthy-live"]);
+        expect(outcomes).toEqual(expected);
+      } finally {
+        completion.resolve();
+        await lateCatalog;
+      }
+      expect(outcomes).toEqual(expected);
+    },
+  );
 
   it("rethrows non-timeout live catalog discovery failures", async () => {
     mocks.runProviderCatalog.mockRejectedValueOnce(

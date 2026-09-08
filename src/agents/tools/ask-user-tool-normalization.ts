@@ -1,4 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { Type } from "typebox";
 import type { QuestionRequestQuestion } from "../../../packages/gateway-protocol/src/index.js";
 import { ToolInputError } from "./common.js";
 
@@ -109,3 +110,56 @@ export function normalizeQuestionTimeoutSeconds(rawTimeoutSeconds: unknown): num
     Math.max(MIN_ASK_USER_TIMEOUT_SECONDS, rawTimeoutSeconds ?? DEFAULT_ASK_USER_TIMEOUT_SECONDS),
   );
 }
+
+export const AskUserToolSchema = Type.Object(
+  {
+    questions: Type.Array(
+      Type.Object(
+        {
+          id: Type.String({
+            minLength: 1,
+            pattern: "^[a-z][a-z0-9_]*$",
+            description: "Unique snake_case answer key.",
+          }),
+          header: Type.String({
+            minLength: 1,
+            description: "Short chip label; longer input is truncated to 12 characters.",
+          }),
+          question: Type.String({
+            minLength: 1,
+            description: "Single-sentence question only. Put all selectable choices in options.",
+          }),
+          options: Type.Array(
+            Type.Object(
+              {
+                label: Type.String({ minLength: 1 }),
+                description: Type.Optional(Type.String()),
+              },
+              { additionalProperties: false },
+            ),
+            {
+              minItems: 2,
+              maxItems: 4,
+              description:
+                "Every selectable choice. Put the recommended choice first; do not repeat choices only in the question text.",
+            },
+          ),
+          multiSelect: Type.Optional(
+            Type.Boolean({
+              description: "True only when the user may choose several options at once.",
+            }),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+      { minItems: 1, maxItems: 3 },
+    ),
+    timeoutSeconds: Type.Optional(
+      Type.Integer({
+        description:
+          "Maximum human wait in seconds; default 900, clamped 30-3600. Earlier run cancellation or overall run timeout still applies.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);

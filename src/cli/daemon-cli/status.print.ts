@@ -11,6 +11,7 @@ import {
   resolveGatewayRestartLogPath,
   resolveGatewaySupervisorLogPaths,
 } from "../../daemon/restart-logs.js";
+import { buildGatewayRuntimeRecoveryHints } from "../../daemon/runtime-hints.js";
 import { isSystemdStartLimitHit } from "../../daemon/service-runtime.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import {
@@ -31,7 +32,6 @@ import {
   formatRuntimeStatus,
   resolveDaemonInstallBlockMessage,
   resolveRuntimeStatusColor,
-  renderRuntimeHints,
   safeDaemonEnv,
 } from "./shared.js";
 import {
@@ -428,47 +428,37 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     defaultRuntime.error(errorText("Service unit not found."));
     const recovery = installBlock ?? `Run: ${installCommand}`;
     defaultRuntime.error(errorText(recovery));
-  } else if (service.runtime?.missingGuiSession) {
-    defaultRuntime.error(
-      errorText("LaunchAgent plist exists, but macOS has no usable GUI session for this user."),
-    );
-    for (const hint of renderRuntimeHints(
-      service.runtime,
-      service.command?.environment ?? process.env,
-      status.logFile,
-    )) {
-      defaultRuntime.error(errorText(hint));
-    }
-  } else if (service.runtime?.missingSupervision) {
-    defaultRuntime.error(errorText("LaunchAgent plist exists but launchd has no loaded job."));
-    for (const hint of renderRuntimeHints(
-      service.runtime,
-      service.command?.environment ?? process.env,
-      status.logFile,
-    )) {
-      defaultRuntime.error(errorText(hint));
-    }
-  } else if (serviceLoaded && service.runtime?.status === "stopped") {
+  } else if (
+    service.runtime?.missingGuiSession ||
+    (serviceLoaded && service.runtime?.status === "stopped")
+  ) {
+    const missingGuiSession = service.runtime.missingGuiSession;
     const startLimitHit = process.platform === "linux" && isSystemdStartLimitHit(service.runtime);
     defaultRuntime.error(
       errorText(
-        startLimitHit
-          ? // systemd gave up restarting after repeated crashes; sending the operator
-            // to restart (which now clears the failed latch) beats "exited immediately".
-            `systemd stopped restarting the gateway after repeated crashes; run ${formatCliCommand(
-              "openclaw gateway restart",
-            )} or inspect logs.`
-          : "Service is loaded but not running (likely exited immediately).",
+        missingGuiSession
+          ? "LaunchAgent plist exists, but macOS has no usable GUI session for this user."
+          : startLimitHit
+            ? // systemd gave up restarting after repeated crashes; sending the operator
+              // to restart (which now clears the failed latch) beats "exited immediately".
+              `systemd stopped restarting the gateway after repeated crashes; run ${formatCliCommand(
+                "openclaw gateway restart",
+              )} or inspect logs.`
+            : "Service is loaded but not running (likely exited immediately).",
       ),
     );
-    for (const hint of renderRuntimeHints(
-      service.runtime,
-      service.command?.environment ?? process.env,
-      status.logFile,
-    )) {
+    const env = service.command?.environment ?? process.env;
+    for (const hint of buildGatewayRuntimeRecoveryHints({
+      kind: missingGuiSession ? "gui-session" : "stopped",
+      restartCommand: formatCliCommand("openclaw gateway restart", env),
+      env,
+      logFile: status.logFile,
+    })) {
       defaultRuntime.error(errorText(hint));
     }
-    spacer();
+    if (!missingGuiSession) {
+      spacer();
+    }
   }
 
   if (service.runtime?.cachedLabel) {

@@ -291,7 +291,7 @@ describe("DraftPlaceState repository selection", () => {
   });
 
   it.each(["device", "cloud"] as const)(
-    "preserves a remote project and enables worktree when switching to %s placement",
+    "preserves a remote project and base ref without a Gateway worktree when switching to %s placement",
     (placement) => {
       const { state, browser, persistPreference, requestUpdate } = createRepositoryFixture();
       state.selectRemoteProject(REMOTE_PROJECT);
@@ -304,12 +304,13 @@ describe("DraftPlaceState repository selection", () => {
         expect(state.cloudProfileId).toBe("aws");
       }
       expect(browser.remoteProject).toEqual(REMOTE_PROJECT);
-      expect(state.worktree).toBe(true);
+      expect(state.worktree).toBe(false);
+      expect(state.remoteRepository).toEqual({ url: REMOTE_PROJECT.cloneUrl, ref: "release" });
       expect(state.baseRef).toBe("release");
       persistPreference.mockClear();
       requestUpdate.mockClear();
       state.selectWorktree(false);
-      expect(state.worktree).toBe(true);
+      expect(state.worktree).toBe(false);
       expect(persistPreference).not.toHaveBeenCalled();
       expect(requestUpdate).not.toHaveBeenCalled();
     },

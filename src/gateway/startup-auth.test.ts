@@ -10,6 +10,8 @@ import { ensureGatewayStartupAuth, mergeGatewayTailscaleConfig } from "./startup
 const KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS = [
   "change-me-to-a-long-random-token",
   "change-me-now",
+  "undefined",
+  "null",
 ] as const;
 
 const mocks = vi.hoisted(() => ({
@@ -552,6 +554,16 @@ describe("ensureGatewayStartupAuth", () => {
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
+  it.each(["", "  "])(
+    "rejects persisted blank token %j instead of generating an ephemeral replacement",
+    async (token) => {
+      await expect(
+        runStartupAuth({ cfg: gatewayAuthConfig({ mode: "token", token }), env: emptyEnv() }),
+      ).rejects.toThrow(/blank/);
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    },
+  );
+
   it("accepts any non-placeholder token (negative control)", async () => {
     await expectResolvedToken({
       cfg: gatewayAuthConfig({ mode: "token", token: "a-legit-random-token-0123456789abcdef" }),
@@ -608,8 +620,8 @@ describe("assertGatewayAuthNotKnownWeak", () => {
     },
   );
 
-  it("allows an empty token to fall through to generation path", () => {
-    expectGatewayAuthAllowed({
+  it("rejects an explicit empty token", () => {
+    expectKnownWeakAuthRejected({
       mode: "token",
       modeSource: "config",
       token: "",

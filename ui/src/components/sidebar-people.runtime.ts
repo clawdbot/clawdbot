@@ -153,8 +153,8 @@ export class SidebarPeopleRuntime {
     };
     this.portal.markTrigger(trigger);
     this.observer.observe(this.host, { childList: true, subtree: true });
-    document.addEventListener("pointerdown", this.outsidePointer, true);
-    document.addEventListener("focusin", this.outsideFocus, true);
+    document.addEventListener("pointerdown", this.outsideInteraction, true);
+    document.addEventListener("focusin", this.outsideInteraction, true);
     document.addEventListener("keydown", this.outsideKey, true);
     this.portal.scheduleOpen(delay, () => {
       if (this.portal.held) {
@@ -356,17 +356,7 @@ export class SidebarPeopleRuntime {
     this.portal.focusInside = document.activeElement === this.active?.trigger;
   }
 
-  private readonly outsidePointer = (event: Event) => {
-    if (
-      event.target instanceof Node &&
-      !this.active?.row.contains(event.target) &&
-      !this.portal.card?.contains(event.target)
-    ) {
-      this.close();
-    }
-  };
-
-  private readonly outsideFocus = (event: Event) => {
+  private readonly outsideInteraction = (event: Event) => {
     if (
       event.target instanceof Node &&
       !this.active?.row.contains(event.target) &&
@@ -393,8 +383,8 @@ export class SidebarPeopleRuntime {
       this.lastOpenAt = performance.now();
     }
     this.observer.disconnect();
-    document.removeEventListener("pointerdown", this.outsidePointer, true);
-    document.removeEventListener("focusin", this.outsideFocus, true);
+    document.removeEventListener("pointerdown", this.outsideInteraction, true);
+    document.removeEventListener("focusin", this.outsideInteraction, true);
     document.removeEventListener("keydown", this.outsideKey, true);
     this.portal.reset();
     this.active?.trigger.setAttribute("aria-haspopup", "dialog");

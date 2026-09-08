@@ -25,11 +25,9 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => {
   };
 });
 
-const {
-  clearManagedPluginOfficialCatalogCache,
-  listManagedPlugins,
-  resolveManagedPluginIconSource,
-} = await import("./management-service.js");
+const { clearManagedPluginOfficialCatalogCache } = await import("./management-catalog.js");
+const { listManagedPlugins, resolveManagedPluginIconSource } =
+  await import("./management-service.js");
 
 function metadataSnapshot(params: {
   id?: string;

@@ -13,6 +13,114 @@ describe("resolveWorkingProgress", () => {
   beforeEach(() => resetWorkingProgress());
   afterEach(() => resetWorkingProgress());
 
+  it.each(["failed", "unconfirmed", "waiting-idle"] as const)(
+    "does not let an older %s send identify an unknown active turn",
+    (sendState) => {
+      expect(
+        resolveWorkingProgress(
+          SESSION,
+          null,
+          2_000,
+          [
+            {
+              id: "old-send",
+              text: "Review this send",
+              createdAt: 1_000,
+              sendRunId: "old-run",
+              sendAttempts: 1,
+              sendState,
+              sendError: "Review required",
+            },
+          ],
+          [],
+          [],
+        ),
+      ).toMatchObject({ runId: null, startedAt: 2_000 });
+    },
+  );
+
+  it("uses only the matching reconnect send when restoring an active turn", () => {
+    const queue = ["other-run", "active-run"].map((sendRunId, index) => ({
+      id: sendRunId,
+      text: "Reconnect send",
+      createdAt: (index + 1) * 1_000,
+      sendRunId,
+      sendState: "waiting-reconnect" as const,
+      sendAttempts: 1,
+    }));
+    expect(resolveWorkingProgress(SESSION, "active-run", 3_000, queue, [], [])).toMatchObject({
+      runId: "active-run",
+      startedAt: 2_000,
+    });
+  });
+
+  it.each(["failed", "unconfirmed", "waiting-idle"] as const)(
+    "retains matching durable timing from a %s send after the run is identified",
+    (sendState) => {
+      const queue = ["old-run", "active-run"].map((sendRunId, index) => ({
+        id: sendRunId,
+        text: "Retained attempted send",
+        createdAt: (index + 1) * 1_000,
+        sendRunId,
+        sendState,
+        sendAttempts: 1,
+        sendError: "Review required",
+      }));
+      expect(resolveWorkingProgress(SESSION, "active-run", 3_000, queue, [], [])).toMatchObject({
+        runId: "active-run",
+        startedAt: 2_000,
+      });
+    },
+  );
+
+  it("keeps a submitted turn's identity and timing across a delayed foreign preamble", () => {
+    const queue = [
+      {
+        id: "new-send",
+        text: "New turn",
+        createdAt: 60_000,
+        sendRunId: "new-run",
+        sendState: "sending" as const,
+        sendAttempts: 1,
+      },
+    ];
+    const submitted = resolveWorkingProgress(SESSION, null, null, queue, [], []);
+    const segments = [{ runId: "old-run", ts: 1_000 }];
+    expect(resolveWorkingProgress(SESSION, null, null, queue, segments, [])).toEqual(submitted);
+    expect(resolveWorkingProgress(SESSION, "new-run", 61_000, [], segments, [])).toEqual(submitted);
+    expect(submitted).toMatchObject({ runId: "new-run", startedAt: 60_000 });
+  });
+
+  it("preserves anonymous progress when the same turn gains an identity", () => {
+    const anonymous = resolveWorkingProgress(SESSION, null, null, [], [{ ts: 1_000 }], []);
+    expect(resolveWorkingProgress(SESSION, "active-run", 2_000, [], [{ ts: 1_000 }], [])).toEqual({
+      ...anonymous,
+      runId: "active-run",
+    });
+  });
+
+  it.each(["other-run", undefined])(
+    "ignores stream and tool timing without matching ownership (%s)",
+    (runId) => {
+      expect(
+        resolveWorkingProgress(
+          SESSION,
+          "active-run",
+          3_000,
+          [],
+          [
+            { runId, ts: 500 },
+            { runId: "active-run", ts: 2_000 },
+          ],
+          [
+            { runId, __openclawToolStreamReceivedAt: 100 },
+            { runId: "active-run", __openclawToolStreamReceivedAt: 2_500 },
+          ],
+        ),
+      ).toMatchObject({ runId: "active-run", startedAt: 2_000 });
+    },
+  );
+
   it("prefers observed stream identity over a future queued send", () => {
     expect(
       resolveWorkingProgress(
@@ -23,7 +131,7 @@ describe("resolveWorkingProgress", () => {
           {
             id: "future-send",
             text: "Run next",
-            createdAt: 2_000,
+            createdAt: 500,
             sendRunId: "future-run",
             sendState: "waiting-reconnect",
             sendAttempts: 1,
@@ -32,7 +140,7 @@ describe("resolveWorkingProgress", () => {
         [{ ts: 1_000, runId: "active-run" }],
         [],
       ),
-    ).toMatchObject({ runId: "active-run" });
+    ).toMatchObject({ runId: "active-run", startedAt: 1_000 });
   });
 });
 

@@ -979,7 +979,7 @@ class ChatComposerDraftTest {
     assertFalse(
       chatComposerSendEnabled(
         voiceNoteState = VoiceNoteRecorderState.Idle,
-        pendingRunCount = 0,
+        talkActive = false,
         hasContent = true,
         shareStaging = true,
         sendInFlight = false,
@@ -988,7 +988,7 @@ class ChatComposerDraftTest {
     assertTrue(
       chatComposerSendEnabled(
         voiceNoteState = VoiceNoteRecorderState.Idle,
-        pendingRunCount = 0,
+        talkActive = false,
         hasContent = true,
         shareStaging = false,
         sendInFlight = false,
@@ -997,7 +997,7 @@ class ChatComposerDraftTest {
     assertFalse(
       chatComposerSendEnabled(
         voiceNoteState = VoiceNoteRecorderState.Idle,
-        pendingRunCount = 0,
+        talkActive = false,
         hasContent = true,
         shareStaging = false,
         sendInFlight = true,
@@ -1010,7 +1010,7 @@ class ChatComposerDraftTest {
     assertFalse(
       chatComposerSendEnabled(
         voiceNoteState = VoiceNoteRecorderState.Idle,
-        pendingRunCount = 0,
+        talkActive = false,
         hasContent = true,
         shareStaging = false,
         dictationActive = true,
@@ -1023,7 +1023,7 @@ class ChatComposerDraftTest {
     assertFalse(
       chatComposerSendEnabled(
         voiceNoteState = VoiceNoteRecorderState.Idle,
-        pendingRunCount = 0,
+        talkActive = false,
         hasContent = true,
         shareStaging = false,
         modelUnavailable = true,

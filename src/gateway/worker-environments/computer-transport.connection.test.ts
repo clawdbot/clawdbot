@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import {
@@ -16,9 +17,15 @@ import {
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
-import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
+import {
+  getGatewaySuspendAdmissionPhase,
+  isGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import { createWorkerComputerTool } from "../../worker/computer-runtime.js";
+import { parseNodeWorkerComputerInput } from "../../worker/node-computer-protocol.js";
 import { WorkerConnection } from "../../worker/worker-connection.js";
+import { GatewayConnectionWork } from "../server-connection-work.js";
 import {
   attachWorkerWsMessageHandler,
   type WorkerConnectionService,
@@ -66,8 +73,8 @@ describe("worker computer connection lifetime", () => {
     expect(requestComputer).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["policy", "pairing", "completed"])(
-    "fences desktop input across $0 disconnect and reconnect, while durable work survives",
+  it.each(["policy", "pairing", "completed", "ordinary-close"])(
+    "fences desktop input across $0 boundaries, while durable work survives",
     async (boundary) => {
       const h = createHarness();
       const service = createWorkerComputerService(h.options);
@@ -93,6 +100,7 @@ describe("worker computer connection lifetime", () => {
       const durableDone = createDeferred();
       let durableSignal: AbortSignal | undefined;
       let pendingComputer: ReturnType<typeof rpc> | undefined;
+      let freshComputer: Promise<unknown> | undefined;
       let computerRequests = 0;
       const serverService: WorkerConnectionService = {
         admitWorker: async () => ({ ok: true, identity }),
@@ -111,6 +119,7 @@ describe("worker computer connection lifetime", () => {
           return { ok: true, result: { resultJson: "{}" } };
         },
       };
+      const connectionWork = new GatewayConnectionWork();
       const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
       await once(server, "listening");
       const address = server.address();
@@ -122,6 +131,7 @@ describe("worker computer connection lifetime", () => {
         let closed = false;
         const cleanup = attachWorkerWsMessageHandler({
           socket,
+          connectionWork,
           connId: "fixture-connection",
           service: serverService,
           publicAdmission: { clientIp: "127.0.0.1", rateLimiter: undefined },
@@ -200,6 +210,67 @@ describe("worker computer connection lifetime", () => {
           })
           .catch((error: unknown) => error);
         await durableEntered.promise;
+        if (boundary === "ordinary-close") {
+          const readComputerEffects = () => ({
+            computerRequests,
+            nativeExecutions: h.nativeExecutionIds.length,
+            inputs: h.privateInvoke.mock.calls
+              .map(([invocation]) =>
+                parseNodeWorkerComputerInput(JSON.stringify(invocation.params)),
+              )
+              .filter((input) => input.operation === "act"),
+          });
+          await tool.execute("before-close", { action: "type", text: "allowed before close" });
+          const beforeClose = readComputerEffects();
+          expect(beforeClose).toMatchObject({
+            computerRequests: 2,
+            nativeExecutions: 2,
+            inputs: [
+              { operation: "act", params: { action: "type", text: "allowed before close" } },
+            ],
+          });
+          expect(server.clients.size).toBe(1);
+          const workerSocket = [...server.clients][0];
+          if (!workerSocket) {
+            throw new Error("Expected the admitted worker socket");
+          }
+          const received = createDeferred<string>();
+          workerSocket.once("message", (data) => received.resolve(rawDataToString(data)));
+          connectionWork.beginClose();
+          expect(getGatewaySuspendAdmissionPhase()).toBe("accepting");
+          expect(isGatewayRestartDraining()).toBe(false);
+          freshComputer = tool
+            .execute("after-close", { action: "type", text: "must not type after close" })
+            .catch((error: unknown) => error);
+          const frame: unknown = JSON.parse(await received.promise);
+          expect(frame).toMatchObject({
+            type: "req",
+            method: "worker.computer",
+            params: {
+              command: "computer.act",
+              paramsJson: expect.stringContaining("must not type after close"),
+            },
+          });
+          // Receipt alone does not settle async dispatch. A control round trip proves
+          // the socket stays live while the pre-close request still holds the drain.
+          const draining = connectionWork.drain();
+          const drained = vi.fn();
+          void draining.then(drained, drained);
+          const pong = once(workerSocket, "pong");
+          workerSocket.ping("held-durable");
+          await pong;
+          expect(drained).not.toHaveBeenCalled();
+          durableResume.resolve();
+          await durableDone.promise;
+          await draining;
+          expect(await durable).toMatchObject({ ok: true });
+          expect(durableSignal).toBeUndefined();
+          expect(workerSocket.readyState).toBe(WebSocket.OPEN);
+          expect(h.options.placements.validateTurnClaim(h.claim)).toBe(true);
+          expect(validateAgentRunDelegatedAuthority(h.authority)).toBe(true);
+          expect(readComputerEffects()).toEqual(beforeClose);
+          return;
+        }
         const pause = async () => {
           entered.resolve();
           await resume.promise;
@@ -274,9 +345,12 @@ describe("worker computer connection lifetime", () => {
         await Promise.allSettled(cleanups.map((close) => close("test finished")));
         await service.close();
         await connection.stop();
+        await freshComputer;
         for (const socket of server.clients) {
           socket.terminate();
         }
+        connectionWork.beginClose();
+        await connectionWork.drain();
         await new Promise<void>((resolve, reject) => {
           server.close((error) => (error ? reject(error) : resolve()));
         });

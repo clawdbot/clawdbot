@@ -61,11 +61,6 @@ type BundledChannelSetupEntryRuntimeContract = {
   };
 };
 
-type BundledChannelPackageSetupFeature =
-  | "configPromotion"
-  | "legacyStateMigrations"
-  | "legacySessionSurfaces";
-
 type BundledChannelArtifactValues = {
   entry: BundledChannelEntryRuntimeContract;
   setupEntry: BundledChannelSetupEntryRuntimeContract;
@@ -349,16 +344,6 @@ function listBundledChannelPluginIdsForRoot(
 
 export function listBundledChannelPluginIds(): readonly ChannelId[] {
   return listBundledChannelPluginIdsForRoot(resolveBundledChannelRootScope());
-}
-
-export function hasBundledChannelPackageSetupFeature(
-  id: ChannelId,
-  feature: BundledChannelPackageSetupFeature,
-): boolean {
-  const rootScope = resolveBundledChannelRootScope();
-  return (
-    resolveBundledChannelMetadata(id, rootScope)?.packageManifest?.setupFeatures?.[feature] === true
-  );
 }
 
 function resolveBundledChannelMetadata(

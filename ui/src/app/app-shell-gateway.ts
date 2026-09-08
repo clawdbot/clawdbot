@@ -2,7 +2,6 @@ import type { UiCommandParams } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import type { GatewayAgentRow } from "../api/types.ts";
 import type { RouteId } from "../app-routes.ts";
-import type { SidebarWorkboardRuntime } from "../components/app-sidebar-workboard.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
@@ -50,12 +49,10 @@ export interface ShellGatewayHost {
   criticalNoticeRuntime: Promise<
     typeof import("../pages/chat/critical-observer-notice.runtime.ts")
   > | null;
-  sidebarWorkboardRuntime: SidebarWorkboardRuntime | null;
   readonly outboxStoreImport: { load: () => Promise<unknown> };
   recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]): void;
   selectChatSession(sessionKey: string, agentId?: string | null): void;
   storedOutboxScopeHost(context: ApplicationContext<RouteId>): StoredOutboxScopeHost;
-  syncSidebarWorkboard(): void;
   requestUpdate(): void;
 }
 
@@ -144,7 +141,6 @@ export class ShellGatewayOwner {
   }
 
   handleGatewayEvent(event: GatewayEventFrame): void {
-    this.host.sidebarWorkboardRuntime?.handleGatewayEvent(event.event);
     if (event.event === "sessions.changed") {
       const context = this.host.context;
       if (context) {
@@ -301,7 +297,6 @@ export class ShellGatewayOwner {
     if (previousPhase !== "connected" && snapshot.phase === "connected") {
       i18n.retryPendingLocale();
     }
-    this.host.syncSidebarWorkboard();
   }
 
   ensureRuntimeConfig(

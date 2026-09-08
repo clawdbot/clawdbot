@@ -1,9 +1,14 @@
 // Document extractor runtime tests cover lazy document extraction adapters.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  DocumentExtractionRequest,
+  DocumentExtractionResult,
+} from "../plugins/document-extractor-types.js";
+import type { resolvePluginDocumentExtractors } from "../plugins/document-extractors.runtime.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 
 const { resolvePluginDocumentExtractorsMock } = vi.hoisted(() => ({
-  resolvePluginDocumentExtractorsMock: vi.fn(),
+  resolvePluginDocumentExtractorsMock: vi.fn<typeof resolvePluginDocumentExtractors>(),
 }));
 
 vi.mock("../plugins/document-extractors.runtime.js", () => ({
@@ -11,6 +16,7 @@ vi.mock("../plugins/document-extractors.runtime.js", () => ({
 }));
 
 import { extractDocumentContent } from "./document-extractors.runtime.js";
+import { extractPdfContent } from "./pdf-extract.js";
 
 describe("extractDocumentContent", () => {
   beforeEach(() => {
@@ -118,5 +124,71 @@ describe("extractDocumentContent", () => {
     expect(resolvePluginDocumentExtractorsMock).toHaveBeenCalledTimes(2);
     expect(oldExtract).toHaveBeenCalledOnce();
     expect(newExtract).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      name: "populated optional fields",
+      password: "  retained  ",
+      pageNumbers: [2, 1],
+      callback: true,
+    },
+    { name: "empty password and pages", password: "", pageNumbers: [], callback: false },
+  ])("preserves the composed PDF request with $name", async (row) => {
+    const { password, pageNumbers, callback } = row;
+    const buffer = Buffer.from("%PDF-1.4");
+    const config = {};
+    const images: DocumentExtractionResult["images"] = [];
+    const imageError = new Error("image rendering failed");
+    const onImageExtractionError = vi.fn<(error: unknown) => void>();
+    const extract = vi.fn(async (request: DocumentExtractionRequest) => {
+      expect(request).toStrictEqual({
+        buffer,
+        mimeType: "application/pdf",
+        maxPages: 2,
+        maxPixels: 100,
+        minTextChars: 10,
+        ...(password ? { password: "  retained  " } : {}),
+        pageNumbers,
+        ...(callback ? { onImageExtractionError } : {}),
+      });
+      expect(request.buffer).toBe(buffer);
+      expect(request.pageNumbers).toBe(pageNumbers);
+      expect(request.onImageExtractionError).toBe(callback ? onImageExtractionError : undefined);
+      request.onImageExtractionError?.(imageError);
+      return { text: "pdf text", images };
+    });
+    resolvePluginDocumentExtractorsMock.mockReturnValue([
+      {
+        id: "pdf",
+        pluginId: "document-extract",
+        label: "PDF",
+        mimeTypes: ["application/pdf"],
+        extract,
+      },
+    ]);
+
+    const result = await extractPdfContent({
+      buffer,
+      maxPages: 2,
+      maxPixels: 100,
+      minTextChars: 10,
+      password,
+      pageNumbers,
+      config,
+      onImageExtractionError: callback ? onImageExtractionError : undefined,
+    });
+
+    expect(resolvePluginDocumentExtractorsMock).toHaveBeenCalledOnce();
+    expect(resolvePluginDocumentExtractorsMock.mock.calls[0]?.[0]?.config).toBe(config);
+    expect(extract).toHaveBeenCalledOnce();
+    expect(result).toStrictEqual({ text: "pdf text", images });
+    expect(result.images).toBe(images);
+    if (callback) {
+      expect(onImageExtractionError).toHaveBeenCalledOnce();
+      expect(onImageExtractionError).toHaveBeenCalledWith(imageError);
+    } else {
+      expect(onImageExtractionError).not.toHaveBeenCalled();
+    }
   });
 });

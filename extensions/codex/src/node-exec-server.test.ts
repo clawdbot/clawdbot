@@ -144,6 +144,38 @@ afterEach(() => {
 });
 
 describe("Codex node exec-server", () => {
+  it("reports an unconfirmed transport stop instead of treating its result object as success", async () => {
+    const transport = await import("./app-server/transport.js");
+    const close = transport.closeCodexAppServerTransportAndWait;
+    const failedClose = vi
+      .spyOn(transport, "closeCodexAppServerTransportAndWait")
+      .mockImplementation(async (...args) => {
+        await close(...args);
+        return { exited: false, cleanup: "uncertain" };
+      });
+    const command = createCodexNodeExecServerCommand();
+    const frames = createNodeFrames();
+    const workspace = createManagedWorkspaceInvocation(process.cwd());
+    const invocation = command.handle(
+      JSON.stringify({ placement: workspace.placement, authorization: "human-approved" }),
+      frames.io,
+      workspace.context,
+    );
+    const outcome = invocation.catch((error: unknown) => error);
+    try {
+      await Promise.race([frames.ready, invocation]);
+      frames.controller.abort(new Error("node cleanup fixture disconnected"));
+      await expect(outcome).resolves.toMatchObject({
+        message: "Codex node exec-server process tree did not terminate.",
+      });
+      await expect(command.onDisconnect?.()).rejects.toThrow("did not terminate");
+    } finally {
+      frames.controller.abort();
+      await outcome;
+      failedClose.mockRestore();
+    }
+  });
+
   it("uses admitted Full launch authority without asking for a human decision", async () => {
     const { placement } = createManagedWorkspaceInvocation(process.cwd());
     const request = vi.fn(async () => ({ decision: "deny" as const }));

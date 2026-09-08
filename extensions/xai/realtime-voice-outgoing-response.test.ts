@@ -24,7 +24,7 @@ const { FakeWebSocket } = await vi.hoisted(async () => {
   }
   return { FakeWebSocket: MockWebSocket };
 });
-vi.mock("ws", () => ({ default: FakeWebSocket }));
+vi.mock("./ws-runtime.js", () => ({ WebSocket: FakeWebSocket }));
 
 beforeEach(() => {
   FakeWebSocket.instances = [];

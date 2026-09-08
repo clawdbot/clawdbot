@@ -46,8 +46,6 @@ function createSpawnInput(params: {
 }): SpawnInput {
   return {
     runId: params.runId,
-    sessionId: "queued-cancellation",
-    backendId: "test",
     scopeKey: params.scopeKey,
     replaceExistingScope: params.replaceExistingScope,
     mode: params.mode ?? "child",
@@ -106,9 +104,9 @@ describe("process supervisor queued cancellation", () => {
         exitCode: null,
         exitSignal: null,
       });
-      expect(supervisor.getRecord(replacementRunId)).toMatchObject({
-        state: "exited",
-        terminationReason: "manual-cancel",
+      expect(replacementRun.activity).toEqual({
+        resultSettled: true,
+        lastOutputAtMs: replacementRun.startedAtMs,
       });
 
       first.settle(0);

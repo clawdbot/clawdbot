@@ -4,11 +4,15 @@ import type {
   InternalSessionEntry as SessionEntry,
   RestartRecoveryRun,
 } from "../../config/sessions.js";
-import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
+import {
+  applySessionEntryReplacements,
+  listSessionEntriesReadOnly,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartRecoveryCandidate } from "../../gateway/chat-abort.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import {
+  assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
@@ -32,9 +36,12 @@ import {
   normalizeStringSet,
   resolveRestartRecoveryStorePaths,
 } from "./main-session-restart-recovery-shared.js";
+import { captureYieldedMainSessionContinuation } from "./main-session-restart-recovery-target.js";
 
 async function markRecoveryStore(params: {
   storePath: string;
+  sessionKey?: string;
+  assertCommitAllowed?: () => void;
   statuses?: Array<NonNullable<SessionEntry["status"]>>;
   plan: (
     entry: SessionEntry,
@@ -42,23 +49,25 @@ async function markRecoveryStore(params: {
   ) =>
     | {
         action: "mark";
-        isCurrent?: () => boolean;
         forceRestartSafeTools?: boolean;
         replaceRuns?: boolean;
         resetRuntime?: boolean;
         runs?: RestartRecoveryRun[];
       }
     | { action: "retire_terminal" }
+    | { action: "restore_yielded"; isCurrent: () => boolean }
     | undefined;
 }) {
-  const commitGuards: Array<() => boolean> = [];
+  const yieldOwners: Array<() => boolean> = [];
   return await applySessionEntryReplacements<{ marked: number; skipped: number }>({
     storePath: params.storePath,
+    sessionKeys: params.sessionKey ? [params.sessionKey] : undefined,
     statuses: params.statuses,
     requireWriteSuccess: true,
     assertCommitAllowed: () => {
-      if (commitGuards.some((isCurrent) => !isCurrent())) {
-        throw new Error("Restart recovery owner changed before commit");
+      params.assertCommitAllowed?.();
+      if (yieldOwners.some((isCurrent) => !isCurrent())) {
+        throw new Error("Yielded requester continuation changed before recovery handoff");
       }
     },
     update: (entries) => {
@@ -73,6 +82,13 @@ async function markRecoveryStore(params: {
           counts.skipped++;
           continue;
         }
+        if (plan.action === "restore_yielded") {
+          yieldOwners.push(plan.isCurrent);
+          transitionMainSessionRecovery(entry, { kind: "clear" });
+          replacements.push({ sessionKey, entry });
+          counts.skipped++;
+          continue;
+        }
         if (plan.action === "retire_terminal") {
           transitionMainSessionRecovery(entry, {
             kind: "observe",
@@ -84,10 +100,6 @@ async function markRecoveryStore(params: {
           counts.skipped++;
           continue;
         }
-        const { isCurrent, ...mark } = plan;
-        if (isCurrent) {
-          commitGuards.push(isCurrent);
-        }
         if (plan.replaceRuns) {
           entry.restartRecoveryRuns = plan.runs;
         }
@@ -98,7 +110,7 @@ async function markRecoveryStore(params: {
           kind: "mark_interrupted",
           cycleId: randomUUID(),
           now: Date.now(),
-          ...mark,
+          ...plan,
         });
         replacements.push({ sessionKey, entry });
         counts.marked++;
@@ -149,63 +161,101 @@ export async function markRestartAbortedMainSessions(params: {
     storePaths.add(storePath);
   }
   for (const storePath of storePaths) {
-    const storeResult = await markRecoveryStore({
-      storePath,
-      plan: (entry, sessionKey) => {
-        // The shutdown owner supplies paired identities. Recheck ownership after
-        // store discovery; an ID collision must not select a row or attach its fences.
-        const matchingActiveRuns = activeRuns.filter(
-          (run) =>
-            run.sessionKey === sessionKey &&
-            run.sessionId === entry.sessionId &&
-            (entry.status === "running" ||
-              run.observedAt === undefined ||
-              normalizeFiniteTimestamp(entry.updatedAt) === undefined ||
-              (entry.updatedAt < run.observedAt &&
-                run.lifecycleGeneration !== currentLifecycleGeneration)) &&
-            params.isActiveRun?.(run) !== false,
-        );
-        const matchedActiveAdmission = activeAdmissions.isActive({
-          scope: storePath,
-          sessionKey,
-          sessionId: entry.sessionId,
-        });
-        if (matchingActiveRuns.length === 0 && !matchedActiveAdmission) {
-          return undefined;
-        }
-        const wasRunning = entry.status === "running";
-        const runs = normalizeMainSessionRecoveryRunFences([
-          ...(entry.restartRecoveryRuns ?? []).filter(
-            (run) => run.lifecycleGeneration === currentLifecycleGeneration,
-          ),
-          ...listAgentRunsForSession({ sessionKey, sessionId: entry.sessionId }),
-          ...matchingActiveRuns.map(({ runId, lifecycleGeneration }) => ({
-            runId,
-            lifecycleGeneration,
-          })),
-        ]);
-        return {
-          action: "mark",
-          // Planning yields before SQLite commits. Revalidate the captured owners
-          // in its synchronous guard, not just while selecting this row.
-          isCurrent: () =>
-            isAgentEventLifecycleGenerationCurrent(currentLifecycleGeneration) &&
-            ((matchedActiveAdmission &&
-              activeAdmissions.isActive({
-                scope: storePath,
+    // Preselect read-only: ID-only admissions can own multiple persisted keys.
+    // The per-key replacement below rereads the row and revalidates its owner.
+    const sessionKeys = listSessionEntriesReadOnly({ storePath, projection: "list", clone: false })
+      .filter(
+        ({ sessionKey, entry }) =>
+          activeRuns.some(
+            (run) => run.sessionKey === sessionKey && run.sessionId === entry.sessionId,
+          ) ||
+          activeAdmissions.isActive({ scope: storePath, sessionKey, sessionId: entry.sessionId }),
+      )
+      .map(({ sessionKey }) => sessionKey);
+    for (const selectedSessionKey of sessionKeys) {
+      let isCurrent: (() => boolean) | undefined;
+      try {
+        const storeResult = await markRecoveryStore({
+          storePath,
+          sessionKey: selectedSessionKey,
+          assertCommitAllowed: () => {
+            if (isCurrent && !isCurrent()) {
+              throw new Error("Restart recovery owner changed before commit");
+            }
+          },
+          plan: (entry, sessionKey) => {
+            // The shutdown owner supplies paired identities. Recheck ownership after
+            // store discovery; an ID collision must not select a row or attach its fences.
+            const matchingActiveRuns = activeRuns.filter(
+              (run) =>
+                run.sessionKey === sessionKey &&
+                run.sessionId === entry.sessionId &&
+                (entry.status === "running" ||
+                  run.observedAt === undefined ||
+                  normalizeFiniteTimestamp(entry.updatedAt) === undefined ||
+                  (entry.updatedAt < run.observedAt &&
+                    run.lifecycleGeneration !== currentLifecycleGeneration)) &&
+                params.isActiveRun?.(run) !== false,
+            );
+            const matchedActiveAdmission = activeAdmissions.isActive({
+              scope: storePath,
+              sessionKey,
+              sessionId: entry.sessionId,
+            });
+            if (matchingActiveRuns.length === 0 && !matchedActiveAdmission) {
+              return undefined;
+            }
+            if (
+              captureYieldedMainSessionContinuation({
+                cfg: params.cfg,
+                entry,
                 sessionKey,
-                sessionId: entry.sessionId,
-              })) ||
-              matchingActiveRuns.some((run) => params.isActiveRun?.(run) !== false)),
-          forceRestartSafeTools: matchedActiveAdmission,
-          replaceRuns: true,
-          resetRuntime: !wasRunning,
-          runs,
-        };
-      },
-    });
-    result.marked += storeResult.marked;
-    result.skipped += storeResult.skipped;
+                storePath,
+              })
+            ) {
+              return undefined;
+            }
+            const wasRunning = entry.status === "running";
+            const runs = normalizeMainSessionRecoveryRunFences([
+              ...(entry.restartRecoveryRuns ?? []).filter(
+                (run) => run.lifecycleGeneration === currentLifecycleGeneration,
+              ),
+              ...listAgentRunsForSession({ sessionKey, sessionId: entry.sessionId }),
+              ...matchingActiveRuns.map(({ runId, lifecycleGeneration }) => ({
+                runId,
+                lifecycleGeneration,
+              })),
+            ]);
+            // Planning yields before SQLite commits. Revalidate the captured owners
+            // in its synchronous guard, not just while selecting this row.
+            isCurrent = () =>
+              isAgentEventLifecycleGenerationCurrent(currentLifecycleGeneration) &&
+              ((matchedActiveAdmission &&
+                activeAdmissions.isActive({
+                  scope: storePath,
+                  sessionKey,
+                  sessionId: entry.sessionId,
+                })) ||
+                matchingActiveRuns.some((run) => params.isActiveRun?.(run) !== false));
+            return {
+              action: "mark",
+              forceRestartSafeTools: matchedActiveAdmission,
+              replaceRuns: true,
+              resetRuntime: !wasRunning,
+              runs,
+            };
+          },
+        });
+        result.marked += storeResult.marked;
+        result.skipped += storeResult.skipped;
+      } catch (error) {
+        assertAgentRunLifecycleGenerationCurrent(currentLifecycleGeneration);
+        if (!isCurrent || isCurrent()) {
+          throw error;
+        }
+        result.skipped++;
+      }
+    }
   }
 
   if (result.marked > 0) {
@@ -227,6 +277,7 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
   updatedBeforeMs?: number;
 }): Promise<{ marked: number; skipped: number }> {
   const result = { marked: 0, skipped: 0 };
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const providedActiveSessionIds =
     params.activeSessionIds === undefined ? undefined : normalizeStringSet(params.activeSessionIds);
   const providedActiveSessionKeys =
@@ -251,8 +302,9 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
     const storeResult = await markRecoveryStore({
       storePath,
       statuses: ["running"],
+      assertCommitAllowed: () => assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration),
       plan: (entry, sessionKey) => {
-        if (entry.status !== "running" || entry.abortedLastRun === true) {
+        if (entry.status !== "running") {
           return undefined;
         }
         const updatedAt = normalizeFiniteTimestamp(entry.updatedAt);
@@ -263,14 +315,41 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
         ) {
           return undefined;
         }
-        if (
+        const hasLiveOwner = () =>
           hasCurrentProcessOwner({
             activeSessionIds: resolveActiveSessionIds(),
             activeSessionKeys: resolveActiveSessionKeys(),
             entry,
             sessionKey,
-          })
-        ) {
+          });
+        if (hasLiveOwner()) {
+          return undefined;
+        }
+        const continuation = captureYieldedMainSessionContinuation({
+          cfg: params.cfg,
+          entry,
+          sessionKey,
+          storePath,
+        });
+        if (continuation) {
+          // A newer foreground start clears endedAt. Only an unclaimed waiting cycle
+          // may hand its interruption marker back to the exact durable child batch.
+          const state = entry.mainRestartRecovery;
+          if (
+            entry.abortedLastRun === true &&
+            !state?.reservation &&
+            !state?.foregroundClaims &&
+            !state?.tombstone &&
+            !entry.restartRecoveryDeliveryRunId
+          ) {
+            return {
+              action: "restore_yielded",
+              isCurrent: () => continuation() && !hasLiveOwner(),
+            };
+          }
+          return undefined;
+        }
+        if (entry.abortedLastRun === true) {
           return undefined;
         }
         return isMainRestartRecoveryAggregateTerminalOnly(entry)

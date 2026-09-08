@@ -67,40 +67,56 @@ function runMatrixDoctorFix(params: { rootDir: string; stateDir: string }) {
   );
   fs.writeFileSync(
     loaderPath,
-    `import { registerHooks } from "node:module";
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier.endsWith("/doctor-ui.js")) {
-      return {
-        shortCircuit: true,
-        url: "data:text/javascript," + encodeURIComponent([
-          "export async function detectUiProtocolFreshnessIssues() { return []; }",
-          "export function uiProtocolFreshnessIssueToHealthFinding() { return {}; }",
-          "export function uiProtocolFreshnessIssueToRepairEffects() { return []; }",
-          "export async function maybeRepairUiProtocolFreshness() {}",
-        ].join("\\n")),
-      };
-    }
-    if (specifier.endsWith("/doctor-health-contributions.js")) {
-      return {
-        shortCircuit: true,
-        url: "data:text/javascript," + encodeURIComponent(
-          "export async function runDoctorHealthContributions() {}",
-        ),
-      };
-    }
-    return nextResolve(specifier, context);
-  },
-});
+    String.raw`import { realpathSync } from "node:fs";
+const uiSource = [
+  'process.stderr.write("matrix-doctor-fixture:ui\\n");',
+  "export async function detectUiProtocolFreshnessIssues() { return []; }",
+  "export function uiProtocolFreshnessIssueToHealthFinding() { return {}; }",
+  "export function uiProtocolFreshnessIssueToRepairEffects() { return []; }",
+  "export async function maybeRepairUiProtocolFreshness() {}",
+].join("\n");
+const healthSource = [
+  'process.stderr.write("matrix-doctor-fixture:health\\n");',
+  "export async function runDoctorHealthContributions() {}",
+].join("\n");
+if (process.versions.bun) {
+  const { plugin } = await import("bun");
+  const sources = new Map([
+    [realpathSync("./src/commands/doctor-ui.ts"), uiSource],
+    [realpathSync("./src/flows/doctor-health-contributions.ts"), healthSource],
+  ]);
+  const escapedPaths = [...sources.keys()].map((path) => path.replace(/[.*+?^$(){}|[\]\\]/g, "\\$&"));
+  plugin({
+    name: "matrix-doctor-fixture",
+    setup(build) {
+      build.onLoad({ filter: new RegExp("^(?:" + escapedPaths.join("|") + ")$"), namespace: "file" }, ({ path }) => ({
+        contents: sources.get(realpathSync(path)),
+        loader: "js",
+      }));
+    },
+  });
+} else {
+  const { registerHooks } = await import("node:module");
+  registerHooks({
+    resolve(specifier, context, nextResolve) {
+      const source = specifier.endsWith("/doctor-ui.js")
+        ? uiSource
+        : specifier.endsWith("/doctor-health-contributions.js")
+          ? healthSource
+          : undefined;
+      return source === undefined
+        ? nextResolve(specifier, context)
+        : { shortCircuit: true, url: "data:text/javascript," + encodeURIComponent(source) };
+    },
+  });
+}
 `,
   );
   const entryPath = fileURLToPath(new URL("../../src/entry.ts", import.meta.url));
   return spawnSync(
     process.execPath,
     [
-      "--import",
-      "tsx",
-      "--import",
+      ...(process.versions.bun ? ["--preload"] : ["--import", "tsx", "--import"]),
       loaderPath,
       entryPath,
       "doctor",
@@ -148,18 +164,28 @@ describe("Matrix account state Doctor migration", () => {
     resetPluginStateStoreForTests();
   });
 
-  it("repairs a 2026.7.1 account database before Matrix persists a new sync cursor", async () => {
+  it("repairs active account state without opening token-root archives", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
     const storageRootDir = path.join(
       stateDir,
       "matrix",
       "accounts",
+      "sync-cache-backup",
+      "matrix.example.org__bot",
+      "0123456789abcdef",
+    );
+    const archivedStorageRootDir = path.join(
+      stateDir,
+      "matrix",
+      "accounts",
       "default",
       "matrix.example.org__bot",
-      "token-hash",
+      "sync-cache-backup",
     );
     const databasePath = path.join(storageRootDir, "state", "openclaw.sqlite");
+    const archivedDatabasePath = path.join(archivedStorageRootDir, "state", "openclaw.sqlite");
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    fs.mkdirSync(path.dirname(archivedDatabasePath), { recursive: true });
     const compressedFixture = Buffer.from(
       fs.readFileSync(MATRIX_V2026_7_1_FIXTURE_BASE64, "utf8").replaceAll(/\s/gu, ""),
       "base64",
@@ -170,6 +196,7 @@ describe("Matrix account state Doctor migration", () => {
     const rawFixture = gunzipSync(compressedFixture);
     expect(createHash("sha256").update(rawFixture).digest("hex")).toBe(MATRIX_V2026_7_1_RAW_SHA256);
     fs.writeFileSync(databasePath, rawFixture);
+    fs.writeFileSync(archivedDatabasePath, rawFixture);
 
     const beforeRepairRowsSha256 = matrixStateRowsSha256(databasePath);
     const staleStore = new SqliteBackedMatrixSyncStore(storageRootDir);
@@ -196,11 +223,17 @@ describe("Matrix account state Doctor migration", () => {
     expect(doctor.error, doctorOutput).toBeUndefined();
     expect(doctor.signal, doctorOutput).toBeNull();
     expect(doctor.status, doctorOutput).toBe(0);
+    expect(doctor.stderr.match(/^matrix-doctor-fixture:(?:ui|health)$/gm)?.toSorted()).toEqual([
+      "matrix-doctor-fixture:health",
+      "matrix-doctor-fixture:ui",
+    ]);
     expect(doctorOutput).toContain(`Matrix account SQLite ${storageRootDir}`);
+    expect(doctorOutput).not.toContain(`Matrix account SQLite ${archivedStorageRootDir}`);
     expect(doctorOutput).toContain(
       "Migrated shared state audit event ledger → versioned message lifecycle schema",
     );
     expect(matrixStateRowsSha256(databasePath)).toBe(beforeRepairRowsSha256);
+    expect(fs.readFileSync(archivedDatabasePath)).toEqual(rawFixture);
 
     const repairedStore = new SqliteBackedMatrixSyncStore(storageRootDir);
     await expect(repairedStore.getSavedSyncToken()).resolves.toBe("cursor-a");

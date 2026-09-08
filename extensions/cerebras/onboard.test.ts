@@ -39,6 +39,7 @@ function createCatalogContext(overrides: Partial<CatalogContext> = {}): CatalogC
     resolveProviderApiKey: () => ({
       apiKey: "fixture-cerebras-key",
       discoveryApiKey: "fixture-discovery-key",
+      profileId: "cerebras:fixture-profile",
     }),
     resolveProviderAuth: () => ({
       apiKey: "fixture-cerebras-key",
@@ -298,12 +299,13 @@ describe("Cerebras native catalog", () => {
     expect(glm).not.toHaveProperty("replacedBy");
   });
 
-  it("falls back offline after discovery failure and retries on the next request", async () => {
+  it("reports unavailable discovery and recovers on the next request", async () => {
     mockCatalogResponse({ error: "unavailable" }, { status: 503 });
-    const fallback = await runCerebrasCatalog();
-    expect(fallback.models.map((model) => model.id)).toEqual(
-      manifest.modelCatalog.providers.cerebras.models.map((model) => model.id),
-    );
+    const provider = await registerSingleProviderPlugin(plugin);
+    await expect(provider.catalog?.run(createCatalogContext())).resolves.toEqual({
+      providers: {},
+      outcomes: [{ provider: "cerebras", status: "unavailable" }],
+    });
 
     mockCatalogResponse({ data: [NATIVE_TEXT_MODEL] });
     const recovered = await runCerebrasCatalog();

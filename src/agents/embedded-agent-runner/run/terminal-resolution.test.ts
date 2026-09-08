@@ -756,6 +756,40 @@ describe("terminal resolution", () => {
     },
   );
 
+  it("activates the prompt owner for an OpenAI Responses compaction checkpoint", async () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      stopReason: "length",
+      providerReplay: {
+        v: 1,
+        type: "openai-responses-compaction",
+        id: "cmp-terminal-retry",
+        data: "opaque-compaction",
+        provider: "openai",
+        api: "openai-responses",
+        model: "gpt-5.6-luna",
+        baseUrlHash: "base-url-hash",
+      },
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+    const activateCompactionContinuation = vi.fn();
+    const input = makeTerminalInput({
+      attempt,
+      attemptAssistant: assistant,
+      activateCompactionContinuation,
+    });
+
+    await expect(resolveEmbeddedRunTerminal(input)).resolves.toEqual({ action: "retry" });
+    expect(activateCompactionContinuation).toHaveBeenCalledWith(
+      expect.stringContaining("Continue from the compacted transcript"),
+    );
+    expect(input.armPostCompactionGuard).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { expectation: "required" as const, expectedError: true },
     { expectation: "optional" as const, expectedError: false },

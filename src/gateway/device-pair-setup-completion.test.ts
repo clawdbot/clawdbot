@@ -19,6 +19,7 @@ import {
 } from "./device-pair-setup-completion.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 const tempDirs = createTrackedTempDirs();
@@ -98,7 +99,7 @@ describe("device pair setup completion", () => {
       send: vi.fn(),
       close: vi.fn(),
     };
-    const clients = new Set<GatewayWsClient>([
+    const clients = new GatewayClientRegistry([
       {
         socket: slowSocket as unknown as GatewayWsClient["socket"],
         connect: { role: "operator", scopes: ["operator.pairing"] } as GatewayWsClient["connect"],

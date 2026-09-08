@@ -4,6 +4,73 @@ import { POLICY_RULE_METADATA } from "./metadata.js";
 import { isPolicyValueAtLeastAsStrict } from "./strictness.js";
 
 describe("policy doctor strictness", () => {
+  it.each<[string, unknown, unknown, boolean]>([
+    ["normalizes string and object requirements", [" deploy "], [{ pattern: "deploy" }], true],
+    [
+      "trims argument constraints",
+      [{ pattern: " deploy ", argPattern: " ^--prod$ " }],
+      [{ pattern: "deploy", argPattern: "^--prod$" }],
+      true,
+    ],
+    [
+      "treats blank optional arguments as absent",
+      [{ pattern: "deploy", argPattern: " " }],
+      ["deploy"],
+      true,
+    ],
+    ["ignores list order", ["status", "deploy", "deploy"], ["deploy", "status", "deploy"], true],
+    ["preserves duplicate cardinality", ["deploy", "deploy"], ["deploy"], false],
+    [
+      "requires identical argument constraints",
+      [{ pattern: "deploy", argPattern: "^--stage$" }],
+      [{ pattern: "deploy", argPattern: "^--prod$" }],
+      false,
+    ],
+    [
+      "rejects a removed argument constraint",
+      ["deploy"],
+      [{ pattern: "deploy", argPattern: "^--prod$" }],
+      false,
+    ],
+    ["preserves pattern case", ["Deploy"], ["deploy"], false],
+    [
+      "preserves argument pattern case",
+      [{ pattern: "deploy", argPattern: "^--PROD$" }],
+      [{ pattern: "deploy", argPattern: "^--prod$" }],
+      false,
+    ],
+    ["accepts matching empty requirements", [], [], true],
+    ["keeps empty requirements meaningful", [], ["deploy"], false],
+    ["rejects blank entries instead of dropping them", ["deploy", " "], ["deploy"], false],
+    [
+      "rejects unsupported requirement keys",
+      [{ pattern: "deploy", argpattern: "^--prod$" }],
+      ["deploy"],
+      false,
+    ],
+    [
+      "rejects null argument constraints",
+      [{ pattern: "deploy", argPattern: null }],
+      ["deploy"],
+      false,
+    ],
+    [
+      "rejects non-string argument constraints",
+      [{ pattern: "deploy", argPattern: 1 }],
+      ["deploy"],
+      false,
+    ],
+    ["rejects missing patterns", [{ argPattern: "^--prod$" }], [], false],
+    ["rejects non-array requirements", {}, [], false],
+  ])("exec approval requirements: %s", (_name, candidate, baseline, expected) => {
+    const rule = POLICY_RULE_METADATA.find(
+      (entry) => entry.policyPath.join(".") === "execApprovals.agents.allowlist.expected",
+    );
+    expect(rule).toBeDefined();
+    expect(isPolicyValueAtLeastAsStrict(rule!, candidate, baseline)).toBe(expected);
+    expect(isPolicyValueAtLeastAsStrict(rule!, baseline, candidate)).toBe(expected);
+  });
+
   it("compares policy values through strictness metadata", () => {
     const allowHosts = POLICY_RULE_METADATA.find(
       (rule) => rule.policyPath.join(".") === "tools.exec.allowHosts",

@@ -495,6 +495,7 @@ export async function gatherDispatchRequest(
         sessionKey: acpDispatchSessionKey,
         workspaceDir,
         remoteMediaMode: "cache",
+        abortSignal: getPreDispatchAbortSignal(),
       }),
     );
     if (staged) {
@@ -546,6 +547,7 @@ export async function gatherDispatchRequest(
     notePreparedSession,
     resolvePreparedTranscriptBinding,
     sessionAgentId,
+    noteRunVerbosity: verboseProgress.noteRunVerbosity,
     shouldEmitVerboseProgress,
     shouldEmitFullVerboseProgress,
     replyRoute,

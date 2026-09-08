@@ -762,8 +762,8 @@ export function recordSessionGoalChanged(params: {
   summary: string;
 }): void {
   const watcherSessionKey = params.entry.spawnedBy ?? params.entry.parentSessionKey;
-  // Callers that own an explicit store agent must pass it: bare "global" keys
-  // parse to the default agent and would misattribute the event.
+  // Forward the resolved store agent: bare "global" does not encode an owner,
+  // so inferring it here would throw after the goal mutation has already committed.
   recordSessionStateEvent({
     sessionKey: params.sessionKey,
     sessionId: params.entry.sessionId,

@@ -216,6 +216,45 @@ describe("OpenAI dynamic model capabilities", () => {
     expect(model?.compat?.codeMode).toBe("preferred");
   });
 
+  it.each(["openai-responses", "openai-chatgpt-responses"] as const)(
+    "constructs %s models without adding the template's transport defaults",
+    (api) => {
+      const template: ProviderRuntimeModel = {
+        id: "gpt-5.4",
+        name: "Template",
+        provider: "openai",
+        api: "openai-completions",
+        baseUrl: "https://template.example/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 128_000,
+        maxTokens: 8_192,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        headers: { "X-Template": "preserved" },
+        compat: { supportsDeveloperRole: true, codeMode: "capable" },
+      };
+      const original = structuredClone(template);
+      const model = buildOpenAIProvider().resolveDynamicModel?.({
+        provider: "openai",
+        modelId: template.id,
+        providerConfig: {
+          api,
+          baseUrl:
+            api === "openai-responses"
+              ? "https://api.openai.com/v1"
+              : "https://chatgpt.com/backend-api/codex",
+          models: [],
+        },
+        modelRegistry: modelRegistry([template]),
+      });
+
+      expect(model).not.toBe(template);
+      expect(model).toMatchObject({ id: template.id, api, headers: original.headers });
+      expect(model?.compat).toEqual(original.compat);
+      expect(template).toEqual(original);
+    },
+  );
+
   it("retains the environment-selected endpoint with preferred metadata", () => {
     vi.stubEnv("OPENAI_BASE_URL", "https://proxy.example/v1");
     const model = buildOpenAIProvider().resolveDynamicModel?.({

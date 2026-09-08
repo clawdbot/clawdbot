@@ -5,6 +5,7 @@ import {
 } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { AssistantMessage, Context, Model } from "openclaw/plugin-sdk/llm";
+import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { wrapXaiProviderStream } from "./stream.js";
 
@@ -37,14 +38,7 @@ const model = {
   maxTokens: 8_192,
 } satisfies Model<"openai-responses">;
 
-const usage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = createZeroUsageFixture();
 
 function wrapResponses(options: { fastMode?: boolean; clientVersion?: string }): StreamFn {
   const wrapped = wrapXaiProviderStream(

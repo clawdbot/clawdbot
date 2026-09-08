@@ -11,19 +11,6 @@ type CallbackPayload<K extends keyof ReplyOptions> =
   NonNullable<ReplyOptions[K]> extends (...args: infer Args) => unknown ? Args[0] : never;
 type DraftPreview = ReturnType<typeof createDiscordDraftPreviewController>;
 
-function isFailedProgress(payload: {
-  phase?: string;
-  status?: string;
-  exitCode?: number | null;
-}): boolean {
-  return (
-    payload.phase === "error" ||
-    payload.status === "failed" ||
-    payload.status === "error" ||
-    (typeof payload.exitCode === "number" && payload.exitCode !== 0)
-  );
-}
-
 export function createDiscordMessageProgressRuntime(params: {
   ctx: DiscordMessagePreflightContext;
   sessionKey?: string;
@@ -83,7 +70,7 @@ export function createDiscordMessageProgressRuntime(params: {
       : undefined,
     onReasoningEnd: draftPreview.draftStream
       ? () => {
-          handleAssistantMessageBoundary();
+          draftPreview.resetReasoningProgress();
           return false;
         }
       : undefined,
@@ -152,9 +139,6 @@ export function createDiscordMessageProgressRuntime(params: {
       return await draftPreview.pushToolEvent(payload);
     },
     onItemEvent: async (payload) => {
-      if (isFailedProgress(payload)) {
-        return false;
-      }
       if (payload.kind === "preamble") {
         if (shouldYieldDraftCommentary()) {
           return undefined;
@@ -175,9 +159,6 @@ export function createDiscordMessageProgressRuntime(params: {
       return await draftPreview.pushApprovalEvent(payload);
     },
     onCommandOutput: async (payload) => {
-      if (isFailedProgress(payload)) {
-        return false;
-      }
       return await draftPreview.pushCommandOutputEvent(payload);
     },
     onPatchSummary: async (payload) => {

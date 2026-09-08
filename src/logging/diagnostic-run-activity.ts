@@ -15,16 +15,10 @@ import {
   applyArgumentChurnObservation,
   clearArgumentChurnActivity,
   clearArgumentChurnPolicyWaits,
-  type DiagnosticArgumentChurnActivity,
   type DiagnosticArgumentChurnObservationParams,
-  mergeArgumentChurnActivity,
-  recordDiagnosticActivityProgress,
 } from "./diagnostic-argument-churn-activity.js";
-import { createDiagnosticEmbeddedRunIndex } from "./diagnostic-embedded-run-index.js";
 import {
   clearRepeatedRequestActivity,
-  type DiagnosticRepeatedRequestActivity,
-  mergeRepeatedRequestActivity,
   recordRepeatedRequestObservation,
 } from "./diagnostic-repeated-request-activity.js";
 import {
@@ -32,9 +26,6 @@ import {
   clearRecoveredOwnerEmbeddedRuns,
   clearRecoveredOwnerMarkers,
   countActiveCoreModelCalls,
-  type DiagnosticRecoveryEmbeddedRun,
-  type DiagnosticRecoveryModelCall,
-  type DiagnosticRecoveryTool,
   hasEmbeddedRunStartedAfter,
   markerBelongsToRecoveredOwner,
   ownerRefsForRecovery,
@@ -44,9 +35,23 @@ import {
   shouldIgnoreRecoveredOwnerStartEvent,
 } from "./diagnostic-run-activity-recovery.js";
 import {
+  BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
   buildDiagnosticSessionActivitySnapshot,
   type DiagnosticSessionActivitySnapshot,
 } from "./diagnostic-run-activity-snapshot.js";
+import {
+  activeDiagnosticOwners,
+  activityByRef,
+  activityByRunId,
+  embeddedRunIndex,
+  registerSessionActivityRefs,
+  resolveSessionActivity,
+  sessionRefs,
+  touchSessionActivity,
+  type DiagnosticBackendActivity,
+  type DiagnosticOwnerRegistration,
+  type SessionActivity,
+} from "./diagnostic-run-activity-state.js";
 
 export {
   BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
@@ -55,22 +60,6 @@ export {
 } from "./diagnostic-run-activity-snapshot.js";
 export type { DiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity-snapshot.js";
 export type { DiagnosticEmbeddedRunOwner } from "../infra/diagnostic-model-request-provenance.js";
-
-type SessionActivity = DiagnosticArgumentChurnActivity &
-  DiagnosticRepeatedRequestActivity & {
-    sessionId?: string;
-    sessionKey?: string;
-    activeEmbeddedRuns: Map<string, DiagnosticRecoveryEmbeddedRun>;
-    activeTools: Map<string, DiagnosticRecoveryTool>;
-    activeModelCalls: Map<string, DiagnosticRecoveryModelCall>;
-    activeCoreModelCalls: Map<
-      CoreModelRequestOwnerGeneration,
-      Map<string, DiagnosticRecoveryModelCall>
-    >;
-    recoveredOwnerStartEventCutoffs: Map<string, number>;
-    lastProgressAt: number;
-    lastProgressReason?: string;
-  };
 
 type DiagnosticToolStartedActivityEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "tool.execution.started" }>,
@@ -87,155 +76,8 @@ type RunProgressEvent = Pick<
   "runId" | "sessionId" | "sessionKey" | "reason"
 >;
 
-const activityByRef = new Map<string, SessionActivity>();
-const activityByRunId = new Map<string, SessionActivity>();
-const embeddedRunIndex = createDiagnosticEmbeddedRunIndex(activityByRunId);
-const activeDiagnosticOwners = new Map<
-  CoreModelRequestOwnerGeneration,
-  { activity: SessionActivity; owner: DiagnosticEmbeddedRunOwner }
->();
 const closedDiagnosticOwnerGenerations = new WeakSet<CoreModelRequestOwnerGeneration>();
 let embeddedRunSequence = 0;
-
-function sessionRefs(params: { sessionId?: string; sessionKey?: string }): string[] {
-  const refs: string[] = [];
-  const sessionId = params.sessionId?.trim();
-  const sessionKey = params.sessionKey?.trim();
-  if (sessionId) {
-    refs.push(`id:${sessionId}`);
-  }
-  if (sessionKey) {
-    refs.push(`key:${sessionKey}`);
-  }
-  return refs;
-}
-
-function registerSessionActivityRefs(
-  activity: SessionActivity,
-  params: { sessionId?: string; sessionKey?: string; runId?: string },
-): void {
-  activity.sessionId ??= params.sessionId;
-  activity.sessionKey ??= params.sessionKey;
-  for (const ref of sessionRefs(params)) {
-    activityByRef.set(ref, activity);
-  }
-  if (params.runId) {
-    activityByRunId.set(params.runId, activity);
-  }
-}
-
-function replaceSessionActivityReferences(source: SessionActivity, target: SessionActivity): void {
-  for (const [ref, activity] of activityByRef) {
-    if (activity === source) {
-      activityByRef.set(ref, target);
-    }
-  }
-  for (const [runId, activity] of activityByRunId) {
-    if (activity === source) {
-      activityByRunId.set(runId, target);
-    }
-  }
-}
-
-function mergeSessionActivity(target: SessionActivity, source: SessionActivity): void {
-  target.sessionId ??= source.sessionId;
-  target.sessionKey ??= source.sessionKey;
-  for (const [key, embeddedRun] of source.activeEmbeddedRuns) {
-    const existing = target.activeEmbeddedRuns.get(key);
-    if (existing && existing.runId !== embeddedRun.runId) {
-      embeddedRunIndex.remove(target, key);
-    }
-    target.activeEmbeddedRuns.set(key, embeddedRun);
-  }
-  for (const [key, tool] of source.activeTools) {
-    target.activeTools.set(key, tool);
-  }
-  for (const [key, modelCall] of source.activeModelCalls) {
-    target.activeModelCalls.set(key, modelCall);
-  }
-  for (const [generation, modelCalls] of source.activeCoreModelCalls) {
-    target.activeCoreModelCalls.set(generation, modelCalls);
-  }
-  for (const [generation, registration] of activeDiagnosticOwners) {
-    if (registration.activity === source) {
-      activeDiagnosticOwners.set(generation, { ...registration, activity: target });
-    }
-  }
-  for (const [ownerRef, cutoff] of source.recoveredOwnerStartEventCutoffs) {
-    target.recoveredOwnerStartEventCutoffs.set(
-      ownerRef,
-      Math.max(cutoff, target.recoveredOwnerStartEventCutoffs.get(ownerRef) ?? 0),
-    );
-  }
-  const sourceProgressIsNewer =
-    source.lastProgressSequence !== undefined
-      ? target.lastProgressSequence === undefined ||
-        source.lastProgressSequence > target.lastProgressSequence
-      : target.lastProgressSequence === undefined && source.lastProgressAt > target.lastProgressAt;
-  if (sourceProgressIsNewer) {
-    target.lastProgressAt = source.lastProgressAt;
-    target.lastProgressReason = source.lastProgressReason;
-    target.lastProgressSequence = source.lastProgressSequence;
-  }
-  mergeArgumentChurnActivity(target, source);
-  mergeRepeatedRequestActivity(target, source);
-  replaceSessionActivityReferences(source, target);
-}
-
-function resolveSessionActivity(params: {
-  sessionId?: string;
-  sessionKey?: string;
-  runId?: string;
-  create?: boolean;
-}): SessionActivity | undefined {
-  let activity: SessionActivity | undefined;
-  if (params.runId) {
-    const byRun = activityByRunId.get(params.runId);
-    if (byRun) {
-      activity = byRun;
-    }
-  }
-
-  for (const ref of sessionRefs(params)) {
-    const byRef = activityByRef.get(ref);
-    if (!byRef) {
-      continue;
-    }
-    if (!activity) {
-      activity = byRef;
-    } else if (activity !== byRef) {
-      mergeSessionActivity(activity, byRef);
-    }
-  }
-
-  if (activity) {
-    registerSessionActivityRefs(activity, params);
-    return activity;
-  }
-
-  if (!params.create) {
-    return undefined;
-  }
-
-  const created: SessionActivity = {
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    activeEmbeddedRuns: new Map(),
-    activeTools: new Map(),
-    activeModelCalls: new Map(),
-    activeCoreModelCalls: new Map(),
-    recoveredOwnerStartEventCutoffs: new Map(),
-    lastProgressAt: Date.now(),
-  };
-  registerSessionActivityRefs(created, params);
-  return created;
-}
-
-function touchSessionActivity(activity: SessionActivity, reason: string, now = Date.now()): void {
-  activity.lastProgressAt = now;
-  activity.lastProgressReason = reason;
-  recordDiagnosticActivityProgress(activity);
-}
 
 function touchSemanticSessionActivity(
   activity: SessionActivity,
@@ -303,13 +145,109 @@ export function markDiagnosticOwnedToolActivity(
   }
 }
 
-function hasDiagnosticActivityOwner(activity: SessionActivity): boolean {
+function hasDiagnosticActivityOwner(activity: SessionActivity | undefined): boolean {
+  if (!activity) {
+    return false;
+  }
   for (const registration of activeDiagnosticOwners.values()) {
-    if (registration.activity === activity) {
+    if (
+      registration.activity === activity &&
+      resolveCurrentDiagnosticOwner(registration.owner) === registration
+    ) {
       return true;
     }
   }
   return false;
+}
+
+function hasDiagnosticOwnerForRefs(params: {
+  runId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+}): boolean {
+  return (
+    (params.runId && hasDiagnosticActivityOwner(activityByRunId.get(params.runId))) ||
+    sessionRefs(params).some((ref) => hasDiagnosticActivityOwner(activityByRef.get(ref)))
+  );
+}
+
+function resolveCurrentDiagnosticOwner(
+  owner: DiagnosticEmbeddedRunOwner,
+  assertCurrent?: () => void,
+): DiagnosticOwnerRegistration | undefined {
+  const registration = activeDiagnosticOwners.get(owner.generation);
+  if (registration?.owner !== owner) {
+    return undefined;
+  }
+  try {
+    assertCurrent?.();
+  } catch {
+    return undefined;
+  }
+  // The caller assertion may synchronously retire or replace the registration.
+  return activeDiagnosticOwners.get(owner.generation) === registration &&
+    registration.activity.activeEmbeddedRuns.get(owner.workKey)?.generation === owner.generation
+    ? registration
+    : undefined;
+}
+
+/** Binds one backend attempt's quiet allowance to its exact live core owner. */
+export function beginDiagnosticBackendActivity(params: {
+  owner: DiagnosticEmbeddedRunOwner;
+  noOutputTimeoutMs: number;
+  assertCurrent: () => void;
+}): {
+  observeOutput: (modelProgress: boolean) => boolean;
+  setOutstandingWork: (active: boolean) => void;
+  close: () => void;
+} {
+  const { owner, noOutputTimeoutMs, assertCurrent } = params;
+  let quietAllowanceMs = noOutputTimeoutMs;
+  const registration = resolveCurrentDiagnosticOwner(owner, assertCurrent);
+  const backendActivity: DiagnosticBackendActivity = {
+    deadlineAtMs: Date.now() + noOutputTimeoutMs,
+    assertCurrent,
+  };
+  if (registration) {
+    registration.backendActivity = backendActivity;
+  }
+  const currentActivity = () => {
+    const current = resolveCurrentDiagnosticOwner(owner, assertCurrent);
+    return current?.backendActivity === backendActivity ? current.activity : undefined;
+  };
+  return {
+    observeOutput: (modelProgress) => {
+      const activity = currentActivity();
+      if (!activity) {
+        return false;
+      }
+      const now = Date.now();
+      backendActivity.deadlineAtMs = now + quietAllowanceMs;
+      if (!modelProgress || activity.activeTools.size > 0) {
+        return false;
+      }
+      touchSessionActivity(activity, "model_call:stream_progress", now);
+      return true;
+    },
+    setOutstandingWork: (active) => {
+      if (!currentActivity()) {
+        return;
+      }
+      const allowanceMs = active
+        ? Math.max(noOutputTimeoutMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)
+        : noOutputTimeoutMs;
+      // Work-state changes preserve the last output's origin, not a new progress clock.
+      backendActivity.deadlineAtMs += allowanceMs - quietAllowanceMs;
+      quietAllowanceMs = allowanceMs;
+    },
+    close: () => {
+      // Compare-release remains valid after abort and cannot retire a later attempt.
+      const current = activeDiagnosticOwners.get(owner.generation);
+      if (current?.owner === owner && current.backendActivity === backendActivity) {
+        delete current.backendActivity;
+      }
+    },
+  };
 }
 
 function recordModelStarted(
@@ -405,14 +343,22 @@ export function markDiagnosticArgumentChurnObservation(
 
 export const markDiagnosticRunProgress: (params: RunProgressEvent) => void = applyRunProgress;
 
-function applyRunProgress(params: RunProgressEvent, semantic = false): void {
+function applyRunProgress(
+  params: RunProgressEvent,
+  provenance: "direct" | "semantic" | "unbound" = "direct",
+): void {
   const runId = params.runId?.trim() || undefined;
+  // Exact owners record transport progress synchronously. Delayed public events
+  // must neither merge their session refs nor refresh a replacement or tool phase.
+  if (provenance === "unbound" && hasDiagnosticOwnerForRefs({ ...params, runId })) {
+    return;
+  }
   const activity = resolveSessionActivity({ ...params, runId, create: true });
   if (!activity) {
     return;
   }
   // Only an explicit fact from the current owner may clear its recovery evidence.
-  if (!semantic || !runId) {
+  if (provenance !== "semantic" || !runId) {
     touchSessionActivity(activity, params.reason);
     return;
   }
@@ -422,17 +368,15 @@ function applyRunProgress(params: RunProgressEvent, semantic = false): void {
 function recordRunCompleted(
   event: Extract<DiagnosticEventPayload, { type: "run.completed" }>,
 ): void {
+  if (hasDiagnosticOwnerForRefs(event)) {
+    return;
+  }
   const activity = resolveSessionActivity(event);
   if (!activity) {
     return;
   }
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
-  for (const registration of activeDiagnosticOwners.values()) {
-    if (registration.activity === activity && registration.owner.runId === event.runId) {
-      return;
-    }
-  }
   activityByRunId.delete(event.runId);
   if (activity.repeatedRequestOwnerRunId === event.runId) {
     touchSessionActivity(activity, "run:attempt_completed"); // Session evidence survives retry re-arm.
@@ -504,16 +448,16 @@ export function closeDiagnosticEmbeddedRunOwner(owner: DiagnosticEmbeddedRunOwne
     return;
   }
   const { activity } = registration;
+  activeDiagnosticOwners.delete(owner.generation);
+  closedDiagnosticOwnerGenerations.add(owner.generation);
+  activity.activeCoreModelCalls.delete(owner.generation);
+  if (activity.activeEmbeddedRuns.get(owner.workKey)?.generation !== owner.generation) {
+    return;
+  }
   const cutoff = getInternalDiagnosticEventSequence();
   const ownerRefs = new Set(ownerRefsForStartedEvent(owner));
   rememberRecoveredOwnerStartEventCutoffs(activity, ownerRefs, cutoff);
-  activeDiagnosticOwners.delete(owner.generation);
-  closedDiagnosticOwnerGenerations.add(owner.generation);
-  const embeddedRun = activity.activeEmbeddedRuns.get(owner.workKey);
-  if (embeddedRun?.generation === owner.generation) {
-    embeddedRunIndex.remove(activity, owner.workKey);
-  }
-  activity.activeCoreModelCalls.delete(owner.generation);
+  embeddedRunIndex.remove(activity, owner.workKey);
   for (const [key, tool] of activity.activeTools) {
     if (
       markerBelongsToRecoveredOwner(tool, ownerRefs) &&
@@ -658,7 +602,33 @@ export function getDiagnosticSessionActivitySnapshot(
     return {};
   }
 
-  return buildDiagnosticSessionActivitySnapshot(activity, now);
+  let activeBackendLivenessDeadlineAtMs: number | undefined;
+  for (const embeddedRun of activity.activeEmbeddedRuns.values()) {
+    const registration = embeddedRun.generation
+      ? activeDiagnosticOwners.get(embeddedRun.generation)
+      : undefined;
+    const backendActivity = registration?.backendActivity;
+    if (
+      !registration ||
+      !backendActivity ||
+      resolveCurrentDiagnosticOwner(registration.owner, backendActivity.assertCurrent) !==
+        registration ||
+      registration.activity !== activity ||
+      registration.backendActivity !== backendActivity
+    ) {
+      continue;
+    }
+    activeBackendLivenessDeadlineAtMs = Math.max(
+      activeBackendLivenessDeadlineAtMs ?? backendActivity.deadlineAtMs,
+      backendActivity.deadlineAtMs,
+    );
+  }
+  return {
+    ...buildDiagnosticSessionActivitySnapshot(activity, now),
+    ...(activeBackendLivenessDeadlineAtMs !== undefined
+      ? { activeBackendLivenessDeadlineAtMs }
+      : {}),
+  };
 }
 
 export function getDiagnosticEmbeddedRunActivitySequence(): number {
@@ -712,7 +682,10 @@ export function startDiagnosticRunActivityTracking(): void {
           recordModelEnded(event, resolveCoreModelRequestLifecycleDiagnosticMetadata(metadata));
           return;
         case "run.progress":
-          return applyRunProgress(event, isCoreSemanticRunProgressDiagnosticMetadata(metadata));
+          return applyRunProgress(
+            event,
+            isCoreSemanticRunProgressDiagnosticMetadata(metadata) ? "semantic" : "unbound",
+          );
         case "run.completed":
           return recordRunCompleted(event);
         default:

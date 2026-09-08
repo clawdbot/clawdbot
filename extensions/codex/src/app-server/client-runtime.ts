@@ -3,10 +3,10 @@ import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { readCodexSessionMeta } from "../session-catalog-provenance.js";
 import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
+import type { CodexAppServerAuthProfileLookup } from "./auth-profile.js";
 import type { CodexAppServerClient } from "./client.js";
 import { isJsonObject, type CodexServiceTier, type JsonObject } from "./protocol.js";
 import { mergeCodexRateLimitsUpdate } from "./rate-limit-cache.js";
-import type { CodexAppServerAuthProfileLookup } from "./session-binding.js";
 import { withTimeout } from "./timeout.js";
 
 type ClientRuntimeContext = Omit<CodexAppServerAuthProfileLookup, "agentDir"> & {

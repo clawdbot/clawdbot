@@ -385,9 +385,6 @@ function mergeLegacyIntoDefaults(params: {
     defaults[params.fieldKey] = merged;
     params.changes.push(params.mergedMessage);
   }
-
-  root.defaults = defaults;
-  params.raw[params.rootKey] = root;
 }
 
 function hasLegacySandboxPerSession(value: unknown): boolean {

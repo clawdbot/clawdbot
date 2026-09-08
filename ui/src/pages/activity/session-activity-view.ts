@@ -39,6 +39,7 @@ type SessionActivityViewProps = {
   presenceViewers: readonly PresenceViewer[];
   result?: SessionsListResult;
   loading: boolean;
+  retrying: boolean;
   error?: string;
   onRetry: () => void;
   onAutomationDayToggle: (dayKey: string) => void;
@@ -501,16 +502,26 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
         </div>
         ${renderPeopleControl(props, people, selectedPerson, projection.timeCount)}
       </div>
-      <div class="activity-feed__main">
-        ${props.loading ? html`<p role="status">${t("common.loading")}</p>` : nothing}
+      <div class="activity-feed__feedback">
+        <span role=${props.error ? "alert" : "status"} title=${props.error ?? nothing}>
+          ${
+            props.error ??
+            (props.retrying
+              ? t("common.refreshing")
+              : props.loading && !props.result
+                ? t("common.loading")
+                : nothing)
+          }
+        </span>
         ${
-          props.error
-            ? html`<p role="alert">
-                ${props.error}
-                <button class="btn" @click=${props.onRetry}>${t("common.retry")}</button>
-              </p>`
+          props.error || props.retrying
+            ? html`<button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onRetry}>
+                ${t("common.retry")}
+              </button>`
             : nothing
         }
+      </div>
+      <div class="activity-feed__main">
         ${
           props.result?.peopleIncomplete
             ? html`<p role="status">${t("activityFeed.partialHistory")}</p>`

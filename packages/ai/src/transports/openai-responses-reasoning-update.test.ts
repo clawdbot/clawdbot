@@ -127,6 +127,20 @@ describe("cache-preserving Responses reasoning changes", () => {
     }
   });
 
+  it.each([
+    { input: [], expectedStatus: "history_shorter" },
+    { input: [user("edited"), answer, user("second")], expectedStatus: "history_changed" },
+    {
+      input: [user("first"), { ...answer, content: [] }, user("second")],
+      expectedStatus: "history_changed",
+    },
+  ])("keeps required-input history validation: $expectedStatus", ({ input, expectedStatus }) => {
+    const request = { ...next(), max_output_tokens: 512, input };
+    const result = resolveResponsesContinuationRequest(initial(), request, "required-input");
+    expect(result).toEqual({ request, continuationStatus: expectedStatus });
+    expect(result.request.previous_response_id).toBeUndefined();
+  });
+
   it("replays unstored HTTP input and resets to the chosen effort after cache expiry", () => {
     vi.useFakeTimers();
     const claim = (request: ResponsesContinuationRequest) =>

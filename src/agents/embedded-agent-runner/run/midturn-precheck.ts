@@ -1,6 +1,7 @@
 /**
  * Signals mid-turn prechecks that require preemptive compaction routing.
  */
+import type { AgentMessage } from "../../runtime/index.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
 /**
@@ -17,7 +18,7 @@ export type MidTurnPrecheckRequest = {
 };
 
 /** Stable message used to identify synthetic mid-turn overflow errors in session cleanup. */
-export const MID_TURN_PRECHECK_ERROR_MESSAGE =
+const MID_TURN_PRECHECK_ERROR_MESSAGE =
   "Context overflow: prompt too large for the model (mid-turn precheck).";
 
 /**
@@ -38,4 +39,13 @@ export class MidTurnPrecheckSignal extends Error {
 /** Narrows unknown errors to the mid-turn overflow signal used by attempt cleanup. */
 export function isMidTurnPrecheckSignal(error: unknown): error is MidTurnPrecheckSignal {
   return error instanceof MidTurnPrecheckSignal;
+}
+
+/** This local routing signal is not a provider response or durable conversation item. */
+export function isMidTurnPrecheckAssistantError(message: AgentMessage | undefined): boolean {
+  return (
+    message?.role === "assistant" &&
+    message.stopReason === "error" &&
+    message.errorMessage === MID_TURN_PRECHECK_ERROR_MESSAGE
+  );
 }

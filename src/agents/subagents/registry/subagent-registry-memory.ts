@@ -204,9 +204,13 @@ export function getSubagentRunsForChildSession(
 export function getSubagentRunsForCollectorGroup(
   requesterSessionKey: string,
   groupId: string,
+  requesterAgentId?: string,
 ): Iterable<[string, SubagentRunRecord]> {
   const key = JSON.stringify([requesterSessionKey, groupId]);
-  return runsByCollectorGroupKey.get(key)?.entries() ?? [];
+  // Restore can backfill agent ownership after index insertion; read the live owner.
+  return [...(runsByCollectorGroupKey.get(key)?.entries() ?? [])].filter(
+    ([, entry]) => entry.requesterAgentId === requesterAgentId,
+  );
 }
 
 /** Resolve a collector tombstone that reserves its child session from ordinary turns. */

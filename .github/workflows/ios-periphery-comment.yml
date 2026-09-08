@@ -81,25 +81,30 @@ jobs:
               core.info(`Skipping workflow_run for ${run.event ?? "unknown"} event.`);
               return;
             }
+            const publicationIntent = (candidate) => ["report", "draft"].find(
+              (intent) => candidate.display_title === `${run.name} [${intent}]`,
+            );
+            const intent = publicationIntent(run);
+            if (!intent) {
+              core.info(`Skipping run ${run.id}; no report or draft publication admission.`);
+              return;
+            }
+            const matchesPublication = (pull) =>
+              pull.state === "open" &&
+              pull.base?.repo?.full_name === repository &&
+              pull.head?.sha === run.head_sha &&
+              pull.draft === (intent === "draft");
             const livePull = await github.rest.pulls.get({
               owner,
               repo,
               pull_number: pr.number,
             });
-            if (livePull.data.state !== "open") {
-              core.info(`Skipping closed PR #${pr.number}.`);
-              return;
-            }
-            if (livePull.data.base?.repo?.full_name !== repository) {
-              core.info(`Skipping PR #${pr.number} targeting ${livePull.data.base?.repo?.full_name ?? "unknown repository"}.`);
-              return;
-            }
-            if (livePull.data.head?.sha !== run.head_sha) {
-              core.info(`Skipping stale run ${run.id}; PR #${pr.number} is now at ${livePull.data.head?.sha}.`);
+            if (!matchesPublication(livePull.data)) {
+              core.info(`Skipping run ${run.id}; PR #${pr.number} state, repository, head, or draft status does not match ${intent} admission.`);
               return;
             }
 
-            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+            const jobs = intent === "draft" ? [] : await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
               owner,
               repo,
               run_id: run.id,
@@ -108,13 +113,16 @@ jobs:
             });
             const scopeJob = jobs.find((job) => job.name === scopeJobName);
             const scanJob = jobs.find((job) => job.name === scanJobName);
-            const scanSkipped =
-              scopeJob?.conclusion === "success" && scanJob?.conclusion === "skipped";
-            if (scanSkipped) {
-              core.info(`Skipping intentionally omitted Periphery scan for PR #${pr.number}.`);
+            const skipReason = intent === "draft"
+              ? "the pull request is a draft"
+              : scopeJob?.conclusion === "success" && scanJob?.conclusion === "skipped"
+                ? `the pull request no longer touches ${scopeLabel} scan scope`
+                : undefined;
+            if (skipReason) {
+              core.info(`Skipping Periphery scan for PR #${pr.number} because ${skipReason}.`);
             }
 
-            const artifacts = scanSkipped
+            const artifacts = skipReason
               ? []
               : await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
                   owner,
@@ -124,7 +132,7 @@ jobs:
                 });
 
             const readReport = async () => {
-              if (scanSkipped) {
+              if (skipReason) {
                 return;
               }
               const artifactName = `${artifactPrefix}-${run.id}-${run.run_attempt}`;
@@ -386,12 +394,12 @@ jobs:
 
             let mode = "failure";
             let body = `${marker}\n`;
-            if (scanSkipped) {
+            if (skipReason) {
               mode = "skipped";
               body += [
                 heading,
                 "",
-                `Periphery scan skipped because the pull request is a draft or no longer touches ${scopeLabel} scan scope.`,
+                `Periphery scan skipped because ${skipReason}.`,
               ].join("\n");
             } else if (findings === null) {
               body += [
@@ -455,20 +463,6 @@ jobs:
               return;
             }
 
-            const currentPull = await github.rest.pulls.get({
-              owner,
-              repo,
-              pull_number: pr.number,
-            });
-            if (
-              currentPull.data.state !== "open" ||
-              currentPull.data.base?.repo?.full_name !== repository ||
-              currentPull.data.head?.sha !== run.head_sha
-            ) {
-              core.info(`Skipping stale run ${run.id}; PR #${pr.number} changed before comment update.`);
-              return;
-            }
-
             const workflowRuns = await github.paginate(github.rest.actions.listWorkflowRuns, {
               owner,
               repo,
@@ -479,6 +473,7 @@ jobs:
             });
             const supersedingRun = workflowRuns.find(
               (candidate) =>
+                publicationIntent(candidate) === intent &&
                 (candidate.id === run.id ||
                   candidate.pull_requests?.some(
                     (candidatePull) => candidatePull.number === pr.number,
@@ -489,6 +484,18 @@ jobs:
             );
             if (supersedingRun) {
               core.info(`Skipping superseded run ${run.id} attempt ${run.run_attempt}; run ${supersedingRun.id} attempt ${supersedingRun.run_attempt} is newer.`);
+              return;
+            }
+
+            // Revalidate after all report/comment/run reads; REST reads and writes
+            // are separate operations, so this cannot make publication atomic.
+            const currentPull = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: pr.number,
+            });
+            if (!matchesPublication(currentPull.data)) {
+              core.info(`Skipping run ${run.id}; PR #${pr.number} changed before ${intent} comment update.`);
               return;
             }
 

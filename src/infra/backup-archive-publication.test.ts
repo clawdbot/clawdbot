@@ -40,6 +40,9 @@ async function prepareArchive(
   const preparedPromise = writeArchiveStreamToFile({
     archivePath: plan.tempArchivePath,
     createArchiveStream: () => archiveStream,
+    onPartialArchive: (receipt) => {
+      plan.pendingCleanupArchives.push(receipt);
+    },
   });
   archiveStream.end(content);
   return await preparedPromise;

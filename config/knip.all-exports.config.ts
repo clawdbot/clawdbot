@@ -44,6 +44,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/infra/exec-host.native.test-support.ts!",
   // The Windows CLI lifetime test launches this isolated probe by path.
   "test/helpers/openclaw-test-instance.cli.test-support.mjs!",
+  // The public QA Gateway child launches this transport proxy by path.
+  "test/fixtures/qa-gateway-rpc-proxy.mjs!",
   // Vitest loads these by configuration or module alias rather than imports.
   "test/setup*.ts!",
   "test/non-isolated-runner.ts!",

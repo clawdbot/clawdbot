@@ -428,18 +428,34 @@ describe("media store", () => {
       },
     },
     {
-      name: "uses original filename to detect generic stream content type",
+      name: "normalizes original filename while detecting generic stream content type",
       run: async () => {
         const saved = await store.saveMediaStream(
           Readable.from([Buffer.from("name,value\none,1\n")]),
           "application/octet-stream",
           "stream-inbound",
           1024,
-          "report.csv",
+          "cafe\u0301.csv",
         );
 
-        expect(saved.id).toMatch(/^report---[a-f0-9-]{36}\.csv$/);
+        expect(saved.id).toMatch(/^caf\u00e9---[a-f0-9-]{36}\.csv$/);
         expect(saved.contentType).toBe("text/csv");
+      },
+    },
+    {
+      name: "preserves original extension for generic file streams",
+      run: async () => {
+        const buffer = Buffer.from("custom binary");
+        const saved = await store.saveMediaStream(
+          Readable.from([buffer]),
+          "application/octet-stream",
+          "stream-inbound",
+          1024,
+          "report.CuStOm",
+        );
+
+        expect(store.extractOriginalFilename(saved.path)).toBe("report.CuStOm");
+        await expect(fs.readFile(saved.path)).resolves.toEqual(buffer);
       },
     },
     {
@@ -642,9 +658,9 @@ describe("media store", () => {
       name: "preserves original extension for generic file buffers",
       buffer: Buffer.from("custom binary"),
       contentType: "application/octet-stream",
-      originalFilename: "report.custom",
+      originalFilename: "report.CuStOm",
       expectedContentType: "application/octet-stream",
-      expectedExtension: ".custom",
+      expectedExtension: ".CuStOm",
     },
     {
       name: "does not preserve mixed-case image header extensions for generic container buffers",
@@ -978,6 +994,31 @@ describe("media store", () => {
         name: "strips Windows-invalid and underscores non-portable characters",
         originalFilename: "my <file>:test!.txt",
         expectedIdPattern: /^my_filetest---[a-f0-9-]{36}\.txt$/,
+      },
+      {
+        name: "normalizes decomposed Hangul in stored names",
+        originalFilename: "\u1100\u1161.txt",
+        expectedIdPattern: /^\uac00---[a-f0-9-]{36}\.txt$/,
+        expectedExtractedFilename: "\uac00.txt",
+      },
+      {
+        name: "normalizes letters joined by filename sanitization",
+        originalFilename: "\u1100?\u1161.txt",
+        expectedIdPattern: /^\uac00---[a-f0-9-]{36}\.txt$/,
+        expectedExtractedFilename: "\uac00.txt",
+      },
+      {
+        name: "preserves decomposed accents in stored names",
+        originalFilename: "cafe\u0301.txt",
+        expectedIdPattern: /^caf\u00e9---[a-f0-9-]{36}\.txt$/,
+        expectedExtractedFilename: "caf\u00e9.txt",
+      },
+      {
+        name: "composes Unicode before applying the filename cap",
+        originalFilename: `${"a".repeat(59)}\u1100\u1161.txt`,
+        expectedIdPattern: /^a{59}\uac00---[a-f0-9-]{36}\.txt$/,
+        expectedExtractedFilename: `${"a".repeat(59)}\uac00.txt`,
+        maxBaseNameLength: 60,
       },
       {
         name: "truncates long original filenames",

@@ -81,6 +81,7 @@ vi.mock("openai", () => {
   return { default: MockOpenAI };
 });
 
+import { createZeroUsage } from "../usage.test-support.js";
 import {
   streamOpenAICompletions,
   streamSimpleOpenAICompletions,
@@ -695,14 +696,7 @@ describe("OpenAI-compatible completions params", () => {
             api: model.api,
             provider: model.provider,
             model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "toolUse",
             content: [{ type: "toolCall", id: "call_plan", name: "update_plan", arguments: {} }],
             timestamp: 1,
@@ -749,14 +743,7 @@ describe("OpenAI-compatible completions params", () => {
             api: model.api,
             provider: model.provider,
             model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "toolUse",
             content: [{ type: "toolCall", id: "call_husk", name: "screenshot", arguments: {} }],
             timestamp: 1,
@@ -805,14 +792,7 @@ describe("OpenAI-compatible completions params", () => {
             api: model.api,
             provider: model.provider,
             model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "toolUse",
             content: [{ type: "toolCall", id: "call_shot", name: "screenshot", arguments: {} }],
             timestamp: 1,
@@ -847,7 +827,7 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedMessages?.find((message) => Array.isArray(message.content))).toMatchObject({
       role: "user",
       content: [
-        { type: "text", text: "Attached image(s) from tool result:" },
+        { type: "text", text: "Image(s) from tool result #1 (screenshot):" },
         { type: "image_url", image_url: { url: "data:image/png;base64,aW1n" } },
       ],
     });
@@ -1170,14 +1150,7 @@ describe("OpenAI-compatible completions params", () => {
             api: "openai-completions",
             provider: "xiaomi",
             model: "mimo-v2.5-pro",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "toolUse",
             content: [
               {

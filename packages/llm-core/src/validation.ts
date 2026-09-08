@@ -252,6 +252,12 @@ function coerceWithUnionSchema(value: unknown, schemas: JsonSchemaObject[]): unk
     }
   }
   for (const schema of schemas) {
+    const types = getSchemaTypes(schema);
+    // A nullable alternative represents absence, not a fallback for invalid
+    // non-null values such as zero below an integer branch's minimum.
+    if (value !== null && types.length === 1 && types[0] === "null") {
+      continue;
+    }
     const candidate = structuredClone(value);
     const coerced = coerceWithJsonSchema(candidate, schema);
     const validator = getSubSchemaValidator(schema);
@@ -341,15 +347,26 @@ export function validateToolCall(tools: Tool[], toolCall: ToolCall): unknown {
   return validateToolArguments(tool, toolCall);
 }
 
+function introducesNullValue(previous: unknown, converted: unknown): boolean {
+  if (converted === null) {
+    return previous !== null;
+  }
+  if (!isObjectBackedRecord(previous) || !isObjectBackedRecord(converted)) {
+    return false;
+  }
+  return Object.entries(converted).some(([key, value]) =>
+    introducesNullValue(previous[key], value),
+  );
+}
+
 /** Validates tool arguments against TypeBox or plain JSON-schema parameters. */
 export function validateToolArguments(tool: Tool, toolCall: ToolCall): unknown {
   const args = structuredClone(toolCall.arguments);
   const validator = getValidator(tool.parameters);
-  validator.Convert(args);
 
   if (isJsonSchemaObject(tool.parameters)) {
-    // TypeBox conversion is intentionally conservative for plain JSON schemas;
-    // mirror the provider-facing coercions so model-emitted string numbers validate.
+    // Apply nullable-union policy before TypeBox's more permissive conversion
+    // can replace invalid non-null values with null.
     const coerced = coerceWithJsonSchema(args, tool.parameters);
     if (coerced !== args) {
       if (isObjectBackedRecord(args) && isObjectBackedRecord(coerced)) {
@@ -365,6 +382,13 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): unknown {
 
   if (validator.Check(args)) {
     return args;
+  }
+
+  // Retain TypeBox-specific recovery (for example numeric enums and records),
+  // but never turn a rejected value into a nullable placeholder to pass validation.
+  const converted = validator.Convert(structuredClone(args));
+  if (!introducesNullValue(args, converted) && validator.Check(converted)) {
+    return converted;
   }
 
   const errors =

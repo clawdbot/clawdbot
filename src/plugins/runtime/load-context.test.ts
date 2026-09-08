@@ -216,6 +216,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
   });
 
   it("uses the source runtime snapshot for plugin activation source config", () => {
+    const env = { HOME: "/tmp/openclaw-home" };
     const runtimeConfig = { plugins: {} };
     const sourceConfig = {
       plugins: {
@@ -226,18 +227,19 @@ describe("resolvePluginRuntimeLoadContext", () => {
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
     loadConfigMock.mockReturnValue(runtimeConfig);
 
-    const context = resolvePluginRuntimeLoadContext();
+    const context = resolvePluginRuntimeLoadContext({ env });
 
     expect(context.rawConfig).toBe(runtimeConfig);
     expect(context.activationSourceConfig).toBe(sourceConfig);
     expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
       config: runtimeConfig,
-      env: process.env,
+      env,
       manifestRegistry,
     });
   });
 
   it("applies auto-enable against each operation's exact prepared metadata", () => {
+    const env = { HOME: "/tmp/openclaw-home" };
     const config = { plugins: {} };
     const firstRegistry = { diagnostics: [], plugins: [] };
     const secondRegistry = { diagnostics: [], plugins: [] };
@@ -250,17 +252,17 @@ describe("resolvePluginRuntimeLoadContext", () => {
       .mockReturnValueOnce({ config: secondConfig, changes: [], autoEnabledReasons: {} });
 
     const first = withPluginCache(createPluginCache(), () =>
-      resolvePluginRuntimeLoadContext({ config, metadataSnapshot: firstSnapshot }),
+      resolvePluginRuntimeLoadContext({ config, env, metadataSnapshot: firstSnapshot }),
     );
     const second = withPluginCache(createPluginCache(), () =>
-      resolvePluginRuntimeLoadContext({ config, metadataSnapshot: secondSnapshot }),
+      resolvePluginRuntimeLoadContext({ config, env, metadataSnapshot: secondSnapshot }),
     );
     expect(first.config).toBe(firstConfig);
     expect(second.config).toBe(secondConfig);
     expect(second.manifestRegistry).toBe(secondRegistry);
     expect(applyPluginAutoEnableMock).toHaveBeenNthCalledWith(2, {
       config,
-      env: process.env,
+      env,
       manifestRegistry: secondRegistry,
       discovery: undefined,
     });

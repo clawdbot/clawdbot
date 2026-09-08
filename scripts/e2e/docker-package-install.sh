@@ -4,8 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
-IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-docker-e2e-bare:local")"
-MUSL_IMAGE_NAME="openclaw-docker-e2e-musl:local"
+# This mixed-platform lane owns its images; shared bare/functional tags belong to other lanes.
+IMAGE_NAME="openclaw-package-install-bare:$$"
+MUSL_IMAGE_NAME="openclaw-package-install-musl:$$"
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz docker-package-install "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
 IDENTITY_PATH="${OPENCLAW_DOCKER_ARTIFACT_IDENTITY_PATH:-$ROOT_DIR/.artifacts/docker-tests/docker-package-install-identities.json}"
 NPM_PROOF_CONTAINER="openclaw-package-npm-proof-$$"
@@ -22,6 +23,7 @@ cleanup() {
     "$PNPM_PROOF_CONTAINER" \
     "$BUN_PROOF_CONTAINER" \
     "$MUSL_PROOF_CONTAINER" >/dev/null 2>&1 || true
+  docker_e2e_docker_cmd image rm "$IMAGE_NAME" "$MUSL_IMAGE_NAME" >/dev/null 2>&1 || true
   docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
   rm -rf "$PACKAGE_HARNESS_DIR"
 }
@@ -144,7 +146,7 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
 echo "Installing the real OpenClaw package artifact with npm on musl..."
 DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   --name "$MUSL_PROOF_CONTAINER" \
-  -v "$PACKAGE_TGZ:/tmp/openclaw-current.tgz:ro" \
+  "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$MUSL_IMAGE_NAME" \
   sh -lc '
     set -eu

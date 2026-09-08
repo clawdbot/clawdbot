@@ -45,9 +45,9 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   npm publication, or `pnpm release:candidate`. Keep normal CI, npm
   qualification, Docker, Package Acceptance, performance, and soak gates intact.
 - macOS app signing/notarization/appcast and Windows Hub asset promotion run
-  in parallel with or after npm publication and never delay npm. Their own
-  qualification and artifact gates still apply; Windows Hub assets remain a
-  GitHub release finalization requirement.
+  in parallel with or after npm publication and never delay npm or GitHub
+  finalization. Their own qualification and artifact gates still apply; track
+  selected platforms through verified assets and updater evidence separately.
 - Do not set GitHub secrets from unvalidated 1Password candidates. If a candidate returns 401/403, leave the existing secret alone and report the exact missing provider.
 - Use `$one-password` for secret reads/writes: one persistent tmux session, targeted items only, no secret output.
 - Watch one parent run plus compact child summaries. Avoid broad `gh run view` polling loops; REST quota is easy to burn.

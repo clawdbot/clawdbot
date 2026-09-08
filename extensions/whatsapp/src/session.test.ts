@@ -18,22 +18,26 @@ import { logWebSelfId } from "./auth-store.js";
 import { enqueueCredsSave } from "./creds-persistence.js";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
 
-const { envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
-  envHttpProxyAgentCtor: vi.fn(function MockEnvHttpProxyAgent(
-    this: { options: unknown; dispatch: () => void },
-    options: unknown,
-  ) {
-    this.options = options;
-    this.dispatch = () => {};
-  }),
-  proxyAgentCtor: vi.fn(function MockProxyAgent(
-    this: { options: unknown; dispatch: () => void },
-    options: unknown,
-  ) {
-    this.options = options;
-    this.dispatch = () => {};
-  }),
-}));
+const { envHttpProxyAgentCtor, proxyAgentCtor, dispatchSpy } = vi.hoisted(() => {
+  const dispatchSpyLocal = vi.fn(() => true);
+  return {
+    dispatchSpy: dispatchSpyLocal,
+    envHttpProxyAgentCtor: vi.fn(function MockEnvHttpProxyAgent(
+      this: { options: unknown; dispatch: () => boolean },
+      options: unknown,
+    ) {
+      this.options = options;
+      this.dispatch = dispatchSpyLocal;
+    }),
+    proxyAgentCtor: vi.fn(function MockProxyAgent(
+      this: { options: unknown; dispatch: () => boolean },
+      options: unknown,
+    ) {
+      this.options = options;
+      this.dispatch = dispatchSpyLocal;
+    }),
+  };
+});
 
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
@@ -548,11 +552,33 @@ describe("web session", () => {
 
     const passed = readLastSocketOptions();
     expect(passed.agent).toBeUndefined();
-    expect(envHttpProxyAgentCtor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        proxyTls: expect.objectContaining({ ca: "whatsapp-managed-env-proxy-ca" }),
-      }),
-    );
+    const fetchAgent = requireValue(passed.fetchAgent, "fetch dispatcher");
+    if (
+      typeof fetchAgent !== "object" ||
+      fetchAgent === null ||
+      !("dispatch" in fetchAgent) ||
+      typeof fetchAgent.dispatch !== "function"
+    ) {
+      throw new Error("expected attached fetch dispatcher.dispatch");
+    }
+    fetchAgent.dispatch({ origin: "https://media.whatsapp.net", path: "/", method: "POST" }, {});
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    const proxy = requireValue(proxyAgentCtor.mock.instances[0], "selected proxy");
+    expect(dispatchSpy.mock.contexts[0]).toBe(proxy);
+    expect(proxy.options).toMatchObject({
+      uri: "https://proxy.test:8443",
+      allowH2: false,
+      proxyTls: { ca: "whatsapp-managed-env-proxy-ca" },
+    });
+    expect(proxy.options).not.toHaveProperty("requestTls.ca");
+
+    fetchAgent.dispatch({ origin: "https://mmg.whatsapp.net", path: "/", method: "POST" }, {});
+    expect(dispatchSpy).toHaveBeenCalledTimes(2);
+    const direct = requireValue(envHttpProxyAgentCtor.mock.instances[0], "direct dispatcher");
+    expect(dispatchSpy.mock.contexts[1]).toBe(direct);
+    expect(direct.options).not.toHaveProperty("proxyTls");
+    expect(direct.options).not.toHaveProperty("connect.ca");
+    expect(direct.options).not.toHaveProperty("requestTls.ca");
   });
 
   it("uses lowercase HTTPS proxy before uppercase for WA WebSocket connection", async () => {
@@ -1005,7 +1031,9 @@ describe("web session", () => {
             fsSync.constants.O_NOFOLLOW |
             fsSync.constants.O_NONBLOCK,
         );
-        expect(parentHandle.chmod).toHaveBeenCalledWith(0o700);
+        // fs-safe 0.8.0 skips the directory chmod when the dir already has the
+        // target mode; the fixture starts at 0o700, so no chmod is dispatched.
+        expect(parentHandle.chmod).not.toHaveBeenCalled();
         expect(parentHandle.close).toHaveBeenCalledTimes(1);
         expect(fsSync.statSync(authDir).mode & 0o777).toBe(0o700);
       }

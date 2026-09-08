@@ -112,14 +112,8 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
         argv: ["/definitely/not/a/real-openclaw-command"],
         env: { OPENCLAW_CHILD_OOM_SCORE_ADJ: "0" },
         runId: missingRunId,
-        sessionId: missingRunId,
-        backendId: "qa-process-lifecycle",
       }),
     ).rejects.toMatchObject({ code: "ENOENT" });
-    expect(getProcessSupervisor().getRecord(missingRunId)).toMatchObject({
-      state: "exited",
-      terminationReason: "spawn-error",
-    });
 
     const shellMarker = `shell-route-${process.pid}`;
     const foregroundCommand =
@@ -211,6 +205,7 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
 
     const killMarker = `kill-target-${process.pid}`;
     const spawnedChildren = new Map<number, ChildProcess>();
+    // oxlint-disable-next-line typescript/unbound-method -- Forward with each child's receiver via originalEmit.call(this, ...).
     const originalEmit = ChildProcess.prototype.emit;
     const captureSpawn = vi.spyOn(ChildProcess.prototype, "emit").mockImplementation(function (
       this: ChildProcess,
@@ -241,6 +236,7 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
       throw new Error(`missing spawned child ${killedSession.pid}`);
     }
     const handle = (child as ChildProcess & { _handle: { kill: (signal: number) => number } })
+      // oxlint-disable-next-line eslint/no-underscore-dangle -- Native kill errno exercises Node's real error path without ending the child.
       ._handle;
     const originalKill = handle.kill;
     const observedErrors: Array<NodeJS.ErrnoException> = [];
@@ -256,10 +252,6 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
         expect(child.listenerCount("error")).toBe(errorListenerCount);
         expect(observedErrors[attempt]).toMatchObject({ code: "EPERM", syscall: "kill" });
         await Promise.resolve();
-        expect(getProcessSupervisor().getRecord(killedSession.sessionId)).toMatchObject({
-          state: "running",
-          pid: killedSession.pid,
-        });
         expect(listRunningSessions()).toEqual(
           expect.arrayContaining([
             expect.objectContaining({ id: killedSession.sessionId, exited: false }),

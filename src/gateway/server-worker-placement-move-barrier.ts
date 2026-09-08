@@ -38,6 +38,7 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
       key: sessionKey,
       agentId,
       clone: false,
+      exactRead: true,
     });
     const lifecycleIdentities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
     let begun: Awaited<ReturnType<typeof begin>> | undefined;

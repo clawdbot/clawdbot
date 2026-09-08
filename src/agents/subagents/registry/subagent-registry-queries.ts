@@ -98,6 +98,7 @@ export type SubagentRunReadIndex<T extends SubagentRunReadRecord = SubagentRunRe
   hasDescendantRunAwaitingSettle(rootSessionKey: string, excludeRunId?: string): boolean;
   listDescendantRunsForRequester(rootSessionKey: string): T[];
   runsByControllerSessionKey: ReadonlyMap<string, readonly T[]>;
+  swarmRunsByRequesterSessionKey: ReadonlyMap<string, readonly T[]>;
 };
 
 export type LatestSubagentRunReadIndex = {
@@ -146,6 +147,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
   const latestSnapshotEndedByChildSessionKey = new Map<string, T>();
   const latestRunsByChildSessionKey = new Map<string, T>();
   const runsByControllerSessionKey = new Map<string, T[]>();
+  const swarmRunsByRequesterSessionKey = new Map<string, T[]>();
   const latestRunByRequesterAndChildSessionKey = new Map<string, Map<string, T>>();
   const activeDescendantCountBySessionKey = new Map<string, number>();
   const pendingDescendantCountBySessionKey = new Map<string, number>();
@@ -159,6 +161,12 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
   }
 
   for (const [, entry] of runs.entries()) {
+    if (entry.collect && entry.groupId && entry.swarmRequesterSessionKey) {
+      const requester = entry.swarmRequesterSessionKey;
+      const members = swarmRunsByRequesterSessionKey.get(requester) ?? [];
+      members.push(entry);
+      swarmRunsByRequesterSessionKey.set(requester, members);
+    }
     const childSessionKey = entry.childSessionKey.trim();
     const controllerSessionKey = resolveControllerSessionKey(entry);
     if (controllerSessionKey) {
@@ -319,6 +327,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     hasDescendantRunAwaitingSettle,
     listDescendantRunsForRequester,
     runsByControllerSessionKey,
+    swarmRunsByRequesterSessionKey,
   };
 }
 

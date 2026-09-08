@@ -24,6 +24,7 @@ import {
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createWorkerConnection } from "../worker/worker-connection.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { GatewayConnectionWork } from "./server-connection-work.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
@@ -280,9 +281,11 @@ describe("gateway pre-auth hardening", () => {
     const logGateway = createGatewayWsTestLogger();
     const logHealth = createGatewayWsTestLogger();
     const logWsControl = createGatewayWsTestLogger();
+    const connectionWork = new GatewayConnectionWork();
     attachGatewayWsConnectionHandler({
       wss,
       clients,
+      connectionWork,
       bootId: "preauth-hardening-test-boot",
       preauthConnectionBudget,
       port: 0,
@@ -346,6 +349,8 @@ describe("gateway pre-auth hardening", () => {
       expect(workerConnectionService.admitWorker).toHaveBeenCalledOnce();
     } finally {
       await client.stop();
+      connectionWork.beginClose();
+      await connectionWork.drain();
       await new Promise<void>((resolve) => {
         wss.close(() => resolve());
       });

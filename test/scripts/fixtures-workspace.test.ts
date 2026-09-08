@@ -113,7 +113,9 @@ describe("workspace fixture assertions", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("agents delete --json did not emit valid JSON");
     expect(result.stderr).toContain("recent invalid json tail");
-    expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_INVALID_JSON");
+    // Node can quote only a short input prefix, while Bun includes more of the same marker.
+    expect(result.stderr).not.toContain("DO_NOT_");
+    expect(result.stderr).toContain(outputPath);
   });
 
   it("rejects an agents delete result that explicitly reports local transport", () => {

@@ -7,11 +7,8 @@
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildControlledSubagentRunsReadContext } from "../../agents/subagents/registry/subagent-control-scope.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../../agents/subagents/registry/subagent-lifecycle-events.js";
-import {
-  countPendingDescendantRuns,
-  listSubagentRunsForController,
-} from "../../agents/subagents/registry/subagent-registry-read.js";
 import {
   addSubagentRunForTests,
   releaseSubagentRun,
@@ -74,9 +71,8 @@ describe("subagents status", () => {
     }
 
     const text = buildSubagentsStatusLine({
-      runs: listSubagentRunsForController("agent:main:main"),
+      context: buildControlledSubagentRunsReadContext("agent:main:main"),
       verboseEnabled: true,
-      pendingDescendantsForRun: (entry) => countPendingDescendantRuns(entry.childSessionKey),
       now,
     });
 
@@ -163,12 +159,10 @@ describe("subagents status", () => {
     },
   ])("$name", ({ seedRuns, verboseLevel, expectedText, unexpectedText }) => {
     seedRuns();
-    const runs = listSubagentRunsForController("agent:main:main");
     const text =
       buildSubagentsStatusLine({
-        runs,
+        context: buildControlledSubagentRunsReadContext("agent:main:main"),
         verboseEnabled: verboseLevel === "on",
-        pendingDescendantsForRun: (entry) => countPendingDescendantRuns(entry.childSessionKey),
         now: 5000,
       }) ?? "";
     for (const expected of expectedText) {
@@ -177,6 +171,86 @@ describe("subagents status", () => {
     for (const blocked of unexpectedText) {
       expect(text).not.toContain(blocked);
     }
+  });
+
+  it.each([1, 2])(
+    "keeps the newest three details and %i pending children in the full counts",
+    (children) => {
+      const now = Date.now();
+      const parentKey = "agent:main:subagent:tie-a";
+      for (const [name, ageMs, ended] of [
+        ["tie-b", 2_000, false],
+        ["done", 3_000, true],
+        ["oldest", 4_000, false],
+        ["first", 1_000, false],
+        ["tie-a", 2_000, true],
+        ["stale", 3 * 60 * 60_000, false],
+      ] as const) {
+        addSubagentRunForTests({
+          runId: name,
+          childSessionKey: `agent:main:subagent:${name}`,
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: `${name} worker`,
+          cleanup: "keep",
+          createdAt: now - ageMs,
+          startedAt: now - ageMs,
+          endedAt: ended ? now - 500 : undefined,
+        });
+      }
+      for (let index = 0; index < children; index++) {
+        addSubagentRunForTests({
+          runId: `child-${index}`,
+          childSessionKey: `${parentKey}:subagent:${index}`,
+          requesterSessionKey: parentKey,
+          requesterDisplayKey: "tie-a",
+          task: "pending child",
+          cleanup: "keep",
+          createdAt: now - 1_000,
+          startedAt: now - 1_000,
+          endedAt: index > 0 ? now - 500 : undefined,
+        });
+      }
+
+      expect(
+        buildSubagentsStatusLine({
+          context: buildControlledSubagentRunsReadContext("agent:main:main"),
+          verboseEnabled: true,
+          now,
+        }),
+      ).toBe(
+        [
+          "🤖 Subagents: 4 active · 1 done",
+          "  • first worker · 1s",
+          "  • tie-b worker · 2s",
+          `  • tie-a worker · 2s · ${children} child${children === 1 ? "" : "ren"} active`,
+        ].join("\n"),
+      );
+    },
+  );
+
+  it.each([
+    { endedAt: Number.NaN, duration: "4s" },
+    { endedAt: Infinity, duration: "0s" },
+    { endedAt: -Infinity, duration: "0s" },
+  ])("preserves active duration for non-finite end $endedAt", ({ endedAt, duration }) => {
+    const run: SubagentRunRecord = {
+      runId: "non-finite-end",
+      childSessionKey: "agent:main:subagent:non-finite-end",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "active worker",
+      cleanup: "keep",
+      createdAt: 1_000,
+      execution: { status: "running", startedAt: 1_000, endedAt },
+    };
+    expect(
+      buildSubagentsStatusLine({
+        context: { runs: [run], countPendingDescendantRuns: () => 0 },
+        verboseEnabled: false,
+        now: 5_000,
+      }),
+    ).toBe(`🤖 Subagents: 1 active\n  • active worker · ${duration}`);
   });
 });
 

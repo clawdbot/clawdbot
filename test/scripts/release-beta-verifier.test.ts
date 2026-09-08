@@ -358,7 +358,9 @@ describe("parseReleaseVerifyBetaArgs", () => {
 describe("validateClawHubBootstrapEvidence", () => {
   const clawhubToolchainIntegrity =
     "sha512-VwM6FQrZVarFRDiEqG42npUeyCu/iLhPnpO+b7kKIGRXv+TA6Lb8pboHnIgT6cmjFEnW3j/pTbshWeDQMQ7QWQ==";
-  const clawhubToolchainSha256 = "adc9d3613a752dfe00597a8826f45fab82e7651478d16ba1bf5354369157fee9";
+  const clawhubToolchainSha256 = sha256(
+    readFileSync(".github/release/clawhub-cli/package-lock.json"),
+  );
   const clawhubToolchainVersion = "0.23.3";
   const releaseSha = "a".repeat(40);
   const workflowSha = "b".repeat(40);

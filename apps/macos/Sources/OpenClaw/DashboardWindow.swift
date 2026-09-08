@@ -89,10 +89,35 @@ struct DashboardLinkRequest: Equatable {
     let target: DashboardLinkTarget
 }
 
-struct DashboardWindowAuth: Equatable {
-    var gatewayUrl: String?
-    var token: String?
-    var password: String?
+enum DashboardWindowAuth: Equatable {
+    case sharedCredentials(gatewayUrl: String?, token: String?, password: String?)
+    case browserIdentity(gatewayUrl: String)
+
+    init(gatewayUrl: String?, token: String?, password: String?) {
+        self = .sharedCredentials(gatewayUrl: gatewayUrl, token: token, password: password)
+    }
+
+    var gatewayUrl: String? {
+        switch self {
+        case let .sharedCredentials(gatewayUrl, _, _): gatewayUrl
+        case let .browserIdentity(gatewayUrl): gatewayUrl
+        }
+    }
+
+    var token: String? {
+        guard case let .sharedCredentials(_, token, _) = self else { return nil }
+        return token
+    }
+
+    var password: String? {
+        guard case let .sharedCredentials(_, _, password) = self else { return nil }
+        return password
+    }
+
+    var usesBrowserIdentity: Bool {
+        if case .browserIdentity = self { return true }
+        return false
+    }
 
     var hasCredential: Bool {
         self.token?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ||

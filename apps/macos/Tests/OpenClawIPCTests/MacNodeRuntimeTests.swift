@@ -537,6 +537,8 @@ struct MacNodeRuntimeTests {
     @Test func `handle location invoke applies authorization required by mode`() async throws {
         let authorizedWhenInUse = try #require(CLAuthorizationStatus(rawValue: 4))
         let cases: [(mode: OpenClawLocationMode, status: CLAuthorizationStatus, accepted: Bool)] = [
+            (.off, authorizedWhenInUse, false),
+            (.off, .authorizedAlways, false),
             (.whileUsing, authorizedWhenInUse, true),
             (.always, authorizedWhenInUse, false),
             (.whileUsing, .authorizedAlways, true),
@@ -554,6 +556,9 @@ struct MacNodeRuntimeTests {
                     runtime, "req-location", OpenClawLocationCommand.get.rawValue)
 
                 #expect(response.ok == testCase.accepted)
+                if testCase.mode == .off {
+                    #expect(response.error?.message == "LOCATION_DISABLED: enable Location in Settings")
+                }
             }
         }
     }

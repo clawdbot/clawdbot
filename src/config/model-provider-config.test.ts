@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   resolveMergedModelProviderModels,
-  resolveModelProviderRouteOverridePresence,
+  createModelProviderRouteOverrideResolver,
 } from "./model-provider-config.js";
 import type { ModelDefinitionConfig } from "./types.models.js";
 
@@ -49,7 +49,7 @@ describe("resolveMergedModelProviderModels", () => {
   });
 });
 
-describe("resolveModelProviderRouteOverridePresence", () => {
+describe("createModelProviderRouteOverrideResolver", () => {
   it.each([
     ["empty metadata", {}, "none"],
     ["affirmative reasoning support", { supportsReasoningEffort: true }, "none"],
@@ -87,19 +87,17 @@ describe("resolveModelProviderRouteOverridePresence", () => {
     } as never;
 
     expect(
-      resolveModelProviderRouteOverridePresence({
+      createModelProviderRouteOverrideResolver({
         provider: "openai",
-        modelId: "gpt-5.6-sol",
         authoredConfig: config,
-      }),
+      })("gpt-5.6-sol"),
     ).toBe(expected);
   });
 
   it("treats a provider request timeout as authored behavior", () => {
     expect(
-      resolveModelProviderRouteOverridePresence({
+      createModelProviderRouteOverrideResolver({
         provider: "openai",
-        modelId: "gpt-5.5",
         authoredConfig: {
           models: {
             providers: {
@@ -107,7 +105,7 @@ describe("resolveModelProviderRouteOverridePresence", () => {
             },
           },
         },
-      }),
+      })("gpt-5.5"),
     ).toBe("present");
   });
 });

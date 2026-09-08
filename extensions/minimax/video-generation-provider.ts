@@ -14,6 +14,7 @@ import {
   executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
   postJsonRequest,
+  readProviderBinaryResponse,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
@@ -23,7 +24,6 @@ import {
   type ProviderOperationTimeoutMs,
   type TransientProviderRetryConfig,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
@@ -270,6 +270,8 @@ async function downloadVideoFromUrl(params: {
     label: "MiniMax generated video download",
     requestFailedMessage: "MiniMax generated video download failed",
     maxBytes: params.maxBytes,
+    validateBinaryResponse: true,
+    chunkTimeoutMs: 0,
     fetchResponse: async ({ timeoutMs }) =>
       await fetchMinimaxResponse({
         stage: "download",
@@ -354,14 +356,13 @@ async function downloadVideoFromFileId(params: {
   });
   try {
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-    const buffer = await readResponseWithLimit(response, params.maxBytes, {
+    const buffer = await readProviderBinaryResponse(response, deadline.label, "video", {
+      maxBytes: params.maxBytes,
+      chunkTimeoutMs: 0,
       timeoutMs,
       onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
-        new Error(
-          `MiniMax generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
-        ),
-      onOverflow: ({ maxBytes }) =>
-        new Error(`MiniMax generated video download exceeds ${maxBytes} bytes`),
+        new Error(`${deadline.label} timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`),
+      onOverflow: ({ maxBytes }) => new Error(`${deadline.label} exceeds ${maxBytes} bytes`),
     });
     return {
       buffer,

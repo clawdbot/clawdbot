@@ -2,6 +2,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 
 const { requestPreparedCompactionMock } = vi.hoisted(() => ({
   requestPreparedCompactionMock: vi.fn(),
@@ -37,14 +38,7 @@ function createSession() {
     api: "openai-responses",
     provider: "xai",
     model: "grok-4.5",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop",
     timestamp: 2,
   });

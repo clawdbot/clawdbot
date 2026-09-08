@@ -183,13 +183,6 @@ public struct SkillInstallOption: Codable, Identifiable, Sendable {
     public let kind: String
     public let label: String
     public let bins: [String]
-
-    public init(id: String, kind: String, label: String, bins: [String]) {
-        self.id = id
-        self.kind = kind
-        self.label = label
-        self.bins = bins
-    }
 }
 
 public struct SkillInstallResult: Codable, Sendable {
@@ -201,12 +194,6 @@ public struct SkillInstallResult: Codable, Sendable {
     public let slug: String?
     public let version: String?
     public let warning: String?
-}
-
-public struct SkillUpdateResult: Codable, Sendable {
-    public let ok: Bool
-    public let skillKey: String
-    public let config: [String: OpenClawProtocol.AnyCodable]?
 }
 
 public struct ClawHubInstalledSkillLink: Codable, Sendable {

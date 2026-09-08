@@ -2,6 +2,8 @@ import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/rep
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
+import { capLiveAssistantText } from "../live-chat-projector.js";
+import type { GatewayBroadcastOpts } from "../server-broadcast-types.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -9,7 +11,7 @@ type ChatBroadcastContext = Pick<
   GatewayRequestContext,
   "broadcast" | "nodeSendToSession" | "agentRunSeq"
 > &
-  Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
+  Partial<Pick<GatewayRequestContext, "getRuntimeConfig" | "chatRunState">>;
 
 type SideResultPayload = {
   kind: "btw";
@@ -96,30 +98,47 @@ type ChatTerminal =
   | { state: "final" | "aborted"; message?: Record<string, unknown>; stopReason?: string }
   | { state: "error"; errorMessage?: string; stopReason?: string; errorKind?: "timeout" };
 
-export function broadcastChatTerminal(params: ChatBroadcastParams & ChatTerminal): void {
+type ChatFrame = ChatTerminal | { state: "delta"; text: string };
+
+function broadcastChatFrame(
+  params: ChatBroadcastParams & ChatFrame,
+  liveText?: GatewayBroadcastOpts["liveText"],
+): void {
   const seq = nextChatSeq(params.context, params.runId);
   const payloadAgentId = parseAgentSessionKey(params.sessionKey) ? undefined : params.agentId;
-  const terminal =
-    params.state !== "error"
+  const frame =
+    params.state === "delta"
       ? {
           state: params.state,
-          message: projectChatDisplayMessage(params.message),
-          ...(params.stopReason ? { stopReason: params.stopReason } : {}),
+          deltaText: params.text,
+          replace: true,
+          message: projectChatDisplayMessage({
+            role: "assistant",
+            content: [{ type: "text", text: params.text }],
+          }),
         }
-      : {
-          state: params.state,
-          errorMessage: params.errorMessage,
-          ...(params.stopReason ? { stopReason: params.stopReason } : {}),
-          ...(params.errorKind ? { errorKind: params.errorKind } : {}),
-        };
+      : params.state !== "error"
+        ? {
+            state: params.state,
+            message: projectChatDisplayMessage(params.message),
+            ...(params.stopReason ? { stopReason: params.stopReason } : {}),
+          }
+        : {
+            state: params.state,
+            errorMessage: params.errorMessage,
+            ...(params.stopReason ? { stopReason: params.stopReason } : {}),
+            ...(params.errorKind ? { errorKind: params.errorKind } : {}),
+          };
   const payload = {
     runId: params.runId,
     sessionKey: params.sessionKey,
     ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
     seq,
-    ...terminal,
+    ...frame,
   };
+  const group = params.context.chatRunState?.runs.get(params.runId)?.liveTextGroup?.signal;
   params.context.broadcast("chat", payload, {
+    ...(liveText ? { liveText, dropIfSlow: true } : group ? { liveText: { group } } : {}),
     sessionKeys: resolveChatSessionKeys({
       context: params.context,
       sessionKey: params.sessionKey,
@@ -133,6 +152,40 @@ export function broadcastChatTerminal(params: ChatBroadcastParams & ChatTerminal
     event: "chat",
     payload,
   });
+}
+
+export function broadcastChatDelta(
+  params: ChatBroadcastParams & {
+    context: ChatBroadcastContext & Pick<GatewayRequestContext, "chatRunState">;
+    text: string;
+    isCurrent: () => boolean;
+  },
+): void {
+  if (!params.isCurrent()) {
+    return;
+  }
+  const text = capLiveAssistantText({ text: params.text });
+  const run = params.context.chatRunState.getOrCreate(params.runId);
+  run.buffer = text;
+  run.bufferIsCurrent = params.isCurrent;
+  run.bufferUpdatedAt = Date.now();
+  run.liveTextGroup ??= new AbortController();
+  // Command snapshots share the run's bounded queue and retire with its abort owner.
+  broadcastChatFrame(
+    { ...params, state: "delta", text },
+    {
+      group: run.liveTextGroup.signal,
+      isCurrent: params.isCurrent,
+      coalesce: {
+        key: JSON.stringify(["chat", params.sessionKey, params.agentId]),
+        merge: (_previous, next) => next,
+      },
+    },
+  );
+}
+
+export function broadcastChatTerminal(params: ChatBroadcastParams & ChatTerminal): void {
+  broadcastChatFrame(params);
   params.context.agentRunSeq.delete(params.runId);
 }
 

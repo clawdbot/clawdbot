@@ -1,25 +1,29 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { writeWorkspaceSkills } from "../../skills/test-support/e2e-test-helpers.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
+import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { readSkillProposalRecord } from "../../skills/workshop/store.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
+import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
 
 const commitLockState = vi.hoisted(() => ({ active: false, calls: 0 }));
+const createSkillWorkshopTool = (
+  options: Omit<Parameters<typeof createSkillWorkshopToolImpl>[0], "config" | "agentId"> & {
+    config?: OpenClawConfig;
+    agentId?: string;
+  },
+) => createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
 
 vi.mock("../../skills/workshop/target-lock.js", () => ({
-  withSkillCollectionLock: async (_workspaceDir: string, fn: () => Promise<unknown>) => await fn(),
+  withSkillCollectionLock: async (fn: () => Promise<unknown>) => await fn(),
   withSkillProposalTargetLock: async (_record: unknown, fn: () => Promise<unknown>) => await fn(),
-  withSkillProposalCommitLock: async (
-    _workspaceDir: string,
-    _record: unknown,
-    fn: () => Promise<unknown>,
-  ) => {
+  withSkillProposalCommitLock: async (_record: unknown, fn: () => Promise<unknown>) => {
     if (commitLockState.active) {
       throw new Error("skill proposal reconciliations overlapped");
     }
@@ -67,7 +71,12 @@ describe("skill_workshop list", () => {
       proposal_content: "# Missing Draft\n",
     });
     const proposalId = (created.details as { id: string }).id;
-    const record = await readSkillProposalRecord(proposalId, { env: testState.env });
+    const record = await readSkillProposalRecord(
+      proposalId,
+      { config: {}, env: testState.env },
+      {},
+      { config: {} },
+    );
     if (!record) {
       throw new Error(`expected stored proposal ${proposalId}`);
     }
@@ -130,13 +139,14 @@ describe("skill_workshop list", () => {
         proposal_content: `# Limit Proposal ${index}\n`,
       });
     }
-    await writeWorkspaceSkills(
-      workspaceDir,
-      Array.from({ length: 51 }, (_, index) => ({
+    const workshopDir = resolveWorkshopSkillsDir({}, "main", testState.env);
+    for (let index = 0; index < 51; index += 1) {
+      await writeSkill({
+        dir: path.join(workshopDir, `limit-proposal-${index}`),
         name: `limit-proposal-${index}`,
         description: `Materialized proposal ${index}`,
-      })),
-    );
+      });
+    }
 
     for (const [limit, expectedCount] of [
       [49, 49],

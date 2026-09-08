@@ -61,6 +61,16 @@ export function readTranscriptSummaryInputRevision(
   return row ? JSON.stringify(row) : undefined;
 }
 
+export function readTranscriptSummaryKeys(database: DatabaseSync): Set<string> {
+  const rows = executeSqliteQuerySync(
+    database,
+    meetingTranscriptDb(database)
+      .selectFrom("meeting_transcript_summaries")
+      .select(["session_id", "session_started_at"]),
+  ).rows;
+  return new Set(rows.map((row) => `${row.session_id}\0${row.session_started_at}`));
+}
+
 export function readRecentStoppedTranscriptSession(
   database: DatabaseSync,
   source: TranscriptSourceLocator,
@@ -191,7 +201,12 @@ function parseOptionalJsonRecord(value: string | null): Record<string, unknown> 
   return asOptionalRecord(JSON.parse(value));
 }
 
-export function sessionFromRow(row: MeetingTranscriptSessionRow): TranscriptSessionDescriptor {
+export function sessionFromRow(
+  row: Pick<
+    MeetingTranscriptSessionRow,
+    "session_id" | "source_json" | "metadata_json" | "started_at" | "title" | "stopped_at"
+  >,
+): TranscriptSessionDescriptor {
   const source = parseOptionalJsonRecord(row.source_json);
   const metadata = parseOptionalJsonRecord(row.metadata_json);
   if (!source || typeof source.providerId !== "string") {

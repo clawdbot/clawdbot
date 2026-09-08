@@ -20,6 +20,14 @@ When audio understanding is enabled (or auto-detected), OpenClaw:
 
 When transcription succeeds, `CommandBody`/`RawBody` are also set to the transcript so slash commands still work. With `--verbose`, logs show when transcription runs and when it replaces the body.
 
+For plugin callers, file transcription returns `decision.attachmentProcessing`,
+keyed by attachment index. `"completed"` means a CLI or provider completed input
+processing, including successful empty output; `"omitted"` means none completed.
+This fact is separate from usable transcript text and attachment display markers.
+An absent field in an older SDK result means processing is unknown. For Discord
+batch voice, known omitted input prevents a partial utterance from becoming a
+conversation command or active-run control; valid captured notes remain saved.
+
 ## Auto-detection (default)
 
 If you have not configured models and `tools.media.audio.enabled` is not `false`, OpenClaw auto-detects in this order and stops at the first working option:

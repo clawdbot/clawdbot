@@ -12,6 +12,11 @@ adapters before removing them. This protects existing bundled and external
 plugins while the SDK, manifest, setup, config, and agent runtime contracts
 evolve.
 
+All plugin APIs are [experimental](/plugins/sdk-overview#api-stability).
+Plugin authors should pin and test supported OpenClaw host versions. This
+stability designation does not cancel existing deprecation windows,
+compatibility adapters, or supported-upgrade migrations described below.
+
 ## Compatibility registry
 
 Plugin compatibility contracts are tracked in the core registry at

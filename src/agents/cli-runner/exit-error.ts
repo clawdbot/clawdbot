@@ -23,7 +23,7 @@ export function createCliFailoverError(
   message: string,
   reason: FailoverError["reason"],
   context: Pick<FailoverError, "provider" | "model" | "sessionId" | "lane">,
-  options?: { cause?: unknown; cliTimeout?: FailoverError["cliTimeout"]; code?: string },
+  options?: Pick<FailoverError, "cause" | "cliTimeout" | "code" | "timeout">,
 ): FailoverError {
   return new FailoverError(message, {
     reason,

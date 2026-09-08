@@ -560,6 +560,10 @@ export interface OpenAICompletionsCompat {
 export interface OpenAIResponsesCompat {
   /** Whether the provider supports the `developer` role (vs `system`). Default: true. */
   supportsDeveloperRole?: boolean;
+  /** Whether to send reasoning effort settings. Defaults to the model's known capabilities. */
+  supportsReasoningEffort?: boolean;
+  /** Provider-native reasoning efforts accepted by the model. Overrides known model defaults. */
+  supportedReasoningEfforts?: string[];
   /** Whether the model accepts the `temperature` parameter. Default: true. */
   supportsTemperature?: boolean;
   /** Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when caching is enabled. Default: true. */
@@ -719,7 +723,7 @@ export interface Model<TApi extends Api = Api> {
   /** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
   compat?: TApi extends "openai-completions"
     ? OpenAICompletionsCompat
-    : TApi extends "openai-responses"
+    : TApi extends "openai-responses" | "azure-openai-responses" | "openai-codex-responses"
       ? OpenAIResponsesCompat
       : TApi extends "anthropic-messages"
         ? AnthropicMessagesCompat

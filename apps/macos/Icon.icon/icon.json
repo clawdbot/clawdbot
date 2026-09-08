@@ -1,17 +1,17 @@
 {
   "fill" : {
-    "automatic-gradient" : "extended-srgb:0.00000,0.53333,1.00000,1.00000"
+    "solid" : "extended-srgb:0.96471,0.96078,0.95294,1.00000"
   },
   "groups" : [
     {
       "layers" : [
         {
-          "image-name" : "openclaw-mac.png",
-          "name" : "openclaw-mac",
+          "image-name" : "molty.svg",
+          "name" : "Molty",
           "position" : {
-            "scale" : 1.07,
+            "scale" : 0.86,
             "translation-in-points" : [
-              -2,
+              0,
               0
             ]
           }
@@ -19,10 +19,10 @@
       ],
       "shadow" : {
         "kind" : "neutral",
-        "opacity" : 0.5
+        "opacity" : 0.2
       },
       "translucency" : {
-        "enabled" : true,
+        "enabled" : false,
         "value" : 0.5
       }
     }

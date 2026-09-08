@@ -1,8 +1,11 @@
-// Discord plugin module implements chunk behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
-import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+import { chunkByParagraph, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
+import {
+  avoidTrailingHighSurrogateBreak,
+  chunkTextForOutbound,
+  findCodeRegions,
+} from "openclaw/plugin-sdk/text-chunking";
 
 type ChunkDiscordTextOpts = {
   /** Max characters per Discord message. Default: 2000. */
@@ -17,10 +20,9 @@ type ChunkDiscordTextOpts = {
 };
 
 type OpenFence = {
-  indent: string;
-  markerChar: string;
-  markerLen: number;
-  openLine: string;
+  marker: string;
+  closeLine: string;
+  reopenLine: string | null;
 };
 
 const DEFAULT_MAX_CHARS = 2000;
@@ -44,191 +46,145 @@ function countLines(text: string) {
   return text.split("\n").length;
 }
 
-function parseFenceLine(line: string): OpenFence | null {
+// Keep Discord's existing fence grammar. Tiny caps retain original source when a synthetic
+// marker pair cannot fit; otherwise drop an oversized language hint only on continuation fences.
+function parseFenceLine(line: string, maxChars = Number.POSITIVE_INFINITY): OpenFence | null {
   const match = line.match(FENCE_RE);
   if (!match) {
     return null;
   }
-  const indent = match[1] ?? "";
   const marker = match[2] ?? "";
-  return {
-    indent,
-    markerChar: marker[0] ?? "`",
-    markerLen: marker.length,
-    openLine: line,
-  };
+  const closeLine = (match[1] ?? "") + marker;
+  const canBalance = closeLine.length * 2 + 3 <= maxChars;
+  const reopenLine = line.length + closeLine.length + 3 <= maxChars ? line : closeLine;
+  return { marker, closeLine, reopenLine: canBalance ? reopenLine : null };
 }
 
-function closeFenceLine(openFence: OpenFence) {
-  return `${openFence.indent}${openFence.markerChar.repeat(openFence.markerLen)}`;
+function closesFence(open: OpenFence, close: OpenFence): boolean {
+  return open.marker[0] === close.marker[0] && close.marker.length >= open.marker.length;
 }
 
-function canBalanceFence(openFence: OpenFence, maxChars: number) {
-  const markerLength = closeFenceLine(openFence).length;
-  return markerLength * 2 + 3 <= maxChars;
-}
-
-// Continuation chunks reopen the fence so Discord keeps rendering the code block. Prefer the full
-// opening line (keeps the language for highlighting); degrade to a bare marker when it would not
-// leave room for the closing marker plus at least one delimiter+char of body. When even the bare
-// pair cannot fit, preserve the hard transport limit and emit the continuation without synthetic
-// fences; the original fence text is still retained in its own chunks.
-function reopenFenceLine(openFence: OpenFence, maxChars: number) {
-  const bareMarker = closeFenceLine(openFence);
-  if (!canBalanceFence(openFence, maxChars)) {
-    return null;
-  }
-  // openLine + closing marker (bareMarker + newline) + one delimiter + one body char must all fit.
-  if (openFence.openLine.length + bareMarker.length + 3 <= maxChars) {
-    return openFence.openLine;
-  }
-  return bareMarker;
-}
-
-function closeFenceIfNeeded(text: string, openFence: OpenFence | null, maxChars: number) {
-  if (!openFence || !canBalanceFence(openFence, maxChars)) {
-    return text;
-  }
-  const closeLine = closeFenceLine(openFence);
-  if (!text) {
-    return closeLine;
-  }
-  if (!text.endsWith("\n")) {
-    return `${text}\n${closeLine}`;
-  }
-  return `${text}${closeLine}`;
-}
-
-/**
- * Chunks outbound Discord text by both character count and (soft) line count,
- * while keeping fenced code blocks balanced across chunks.
- */
+type DiscordFrame = { start: number; end: number };
 function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string[] {
   const hardMaxChars = resolveDiscordChunkLimit(opts.maxChars, DEFAULT_MAX_CHARS);
   const maxLines = resolveDiscordChunkLimit(opts.maxLines, DEFAULT_MAX_LINES);
-
-  const body = text ?? "";
-  if (!body) {
+  if (!text) {
     return [];
   }
-
-  const alreadyOk = body.length <= hardMaxChars && countLines(body) <= maxLines;
-  if (alreadyOk) {
-    return [body];
+  if (text.length <= hardMaxChars && countLines(text) <= maxLines) {
+    return [text];
   }
-
-  // Reasoning rebalancing can add an opening and closing marker to each chunk.
-  // Reserve both before splitting so the rendered payload still fits Discord.
   const maxChars =
-    hardMaxChars >= MIN_REASONING_ITALICS_CHUNK_CHARS && hasReasoningItalics(body)
+    hardMaxChars >= MIN_REASONING_ITALICS_CHUNK_CHARS && hasReasoningItalics(text)
       ? hardMaxChars - REASONING_ITALICS_MARKER_CHARS
       : hardMaxChars;
-
-  const lines = body.split("\n");
+  const ranges = createDiscordRanges(text, maxChars, maxLines);
   const chunks: string[] = [];
-
-  let current = "";
-  let currentLines = 0;
-  let openFence: OpenFence | null = null;
-
-  const flush = () => {
-    if (!current) {
-      return;
-    }
-    const payload = closeFenceIfNeeded(current, openFence, maxChars);
-    if (payload.trim().length) {
-      chunks.push(payload);
-    }
-    current = "";
-    currentLines = 0;
-    if (openFence) {
-      const reopenLine = reopenFenceLine(openFence, maxChars);
-      if (reopenLine) {
-        current = reopenLine;
-        currentLines = 1;
-      }
-    }
+  let current: DiscordFrame | undefined;
+  let consumed = 0;
+  let lineStart = 0;
+  // Keep existing soft breaks based on source bytes; render measures the full payload.
+  const raw = (frame: DiscordFrame) => {
+    const prefix = ranges.fenceAt(frame.start)?.reopenLine ?? "";
+    const body = text.slice(frame.start, frame.end);
+    return prefix + (prefix ? "\n" : "") + body;
   };
-
-  for (const originalLine of lines) {
-    const fenceInfo = parseFenceLine(originalLine);
-    const wasInsideFence = openFence !== null;
-    let nextOpenFence: OpenFence | null = openFence;
-    if (fenceInfo) {
-      if (!openFence) {
-        nextOpenFence = fenceInfo;
-      } else if (
-        openFence.markerChar === fenceInfo.markerChar &&
-        fenceInfo.markerLen >= openFence.markerLen
-      ) {
-        nextOpenFence = null;
-      }
+  const render = (frame: DiscordFrame) => {
+    const body = ranges.render(frame.start, frame.end);
+    if (body === undefined) {
+      return undefined;
     }
-
-    // A flush can fire mid-line, before `openFence` advances to `nextOpenFence` below, so it closes
-    // against the still-open `openFence`. A fence-closing line that also carries trailing text would
-    // otherwise reserve 0 yet still get a closing fence appended on flush, overflowing maxChars.
-    const candidateFence = nextOpenFence ?? openFence;
-    const fenceToReserve =
-      candidateFence && canBalanceFence(candidateFence, maxChars) ? candidateFence : null;
-    const reserveChars = fenceToReserve ? closeFenceLine(fenceToReserve).length + 1 : 0;
-    const reserveLines = fenceToReserve ? 1 : 0;
-    const effectiveMaxChars = maxChars - reserveChars;
-    const effectiveMaxLines = maxLines - reserveLines;
-    const charLimit = effectiveMaxChars > 0 ? effectiveMaxChars : maxChars;
-    const lineLimit = effectiveMaxLines > 0 ? effectiveMaxLines : maxLines;
-    const reopenPrefixLen = fenceToReserve
-      ? (reopenFenceLine(fenceToReserve, maxChars)?.length ?? 0)
-      : 0;
-    const prefixLen = current.length > 0 ? current.length + 1 : 0;
-    // A mid-line flush swaps `current` to the reopen prefix; size segments against whichever prefix
-    // is larger so the reopened chunk (prefix + segment + closing marker) still fits maxChars.
-    const reopenBudget = reopenPrefixLen > 0 ? reopenPrefixLen + 1 : 0;
-    const segmentLimit = Math.max(1, charLimit - Math.max(prefixLen, reopenBudget));
-    const segments = chunkTextForOutbound(originalLine, segmentLimit, {
-      preserveWhitespace: wasInsideFence,
-    });
-
-    for (let segIndex = 0; segIndex < segments.length; segIndex++) {
-      const segment = segments[segIndex];
-      const isLineContinuation = segIndex > 0;
-      let delimiter = isLineContinuation ? "" : current.length > 0 ? "\n" : "";
-      let addition = `${delimiter}${segment}`;
-      const nextLen = current.length + addition.length;
-      const nextLines = currentLines + (isLineContinuation ? 0 : 1);
-
-      const wouldExceedChars = nextLen > charLimit;
-      const wouldExceedLines = nextLines > lineLimit;
-
-      if ((wouldExceedChars || wouldExceedLines) && current.length > 0) {
-        flush();
-        // A fence-aware flush reopens the block as the new first line. Continuation text must
-        // start on the next line or Discord interprets it as part of the fence info string.
-        delimiter = current.length > 0 ? "\n" : "";
-        addition = `${delimiter}${segment}`;
-      }
-
-      if (current.length > 0) {
-        current += addition;
-        if (!isLineContinuation || delimiter) {
-          currentLines += 1;
-        }
-      } else {
-        current = expectDefined(segment, "current Discord chunk segment");
-        currentLines = 1;
-      }
+    const prefix = ranges.fenceAt(frame.start)?.reopenLine ?? "";
+    const result = prefix + (prefix ? "\n" : "") + body;
+    const close = ranges.fenceAt(frame.end);
+    return close?.reopenLine
+      ? result + (result.endsWith("\n") ? "" : "\n") + close.closeLine
+      : result;
+  };
+  const fits = (frame: DiscordFrame) => {
+    const payload = render(frame);
+    // The line limit is soft: a balanced fence needs its opener, body and closer.
+    return (
+      payload !== undefined &&
+      payload.length <= maxChars &&
+      countLines(payload) <=
+        Math.max(
+          maxLines,
+          ranges.fenceAt(frame.start)?.reopenLine || ranges.fenceAt(frame.end)?.reopenLine ? 3 : 1,
+        )
+    );
+  };
+  const flush = (frame: DiscordFrame) => {
+    let end = ranges.overlaps(frame.start, frame.end)
+      ? ranges.cutBoundary(frame.start, frame.end)
+      : ranges.boundary(frame.start, frame.end);
+    // A rejected nonempty range needs more source before its atomic unit can be emitted.
+    if (frame.end > frame.start && end <= frame.start) {
+      return frame;
     }
-
-    openFence = nextOpenFence;
-  }
-
-  if (current.length) {
-    const payload = closeFenceIfNeeded(current, openFence, maxChars);
-    if (payload.trim().length) {
+    // A single Unicode code point can exceed a one-unit cap; retain the existing safe split.
+    const minimum = ranges.boundary(frame.start, frame.start + 1);
+    while (end > minimum && !fits({ ...frame, end })) {
+      const cut = ranges.cutBoundary(frame.start, end - 1);
+      end = cut > frame.start ? cut : minimum;
+    }
+    const payload = expectDefined(render({ ...frame, end }), "renderable Discord source range");
+    if (payload.trim()) {
       chunks.push(payload);
     }
+    consumed = end;
+    // Keep an opener or CRLF pair with the unconsumed source, never synthetic offsets.
+    return end < frame.end ? { start: end, end: frame.end } : undefined;
+  };
+  for (const line of text.split("\n")) {
+    const openFence = ranges.fenceAt(lineStart - 1);
+    const candidateFence = ranges.fenceAt(lineStart + line.length) ?? openFence;
+    const fence = candidateFence?.reopenLine ? candidateFence : null;
+    const charLimit = maxChars - (fence ? fence.closeLine.length + 1 : 0);
+    const lineLimit = Math.max(1, maxLines - (fence ? 1 : 0));
+    const content = current ? raw(current) : (ranges.fenceAt(consumed)?.reopenLine ?? "");
+    // An original closer consumes its reservation; splitting it first would turn markers into code.
+    const segmentLimit =
+      openFence?.reopenLine &&
+      openFence.closeStart === lineStart &&
+      fits({ start: lineStart, end: lineStart + line.length })
+        ? maxChars
+        : Math.max(
+            1,
+            charLimit -
+              Math.max(
+                content ? content.length + 1 : 0,
+                fence?.reopenLine ? fence.reopenLine.length + 1 : 0,
+              ),
+          );
+    let segmentStart = lineStart;
+    for (const segment of chunkTextForOutbound(line, segmentLimit, {
+      preserveWhitespace: Boolean(openFence),
+    })) {
+      const end = segmentStart + segment.length;
+      const start =
+        current?.start ?? (ranges.joins(consumed, segmentStart) ? consumed : segmentStart);
+      const candidate = { start, end };
+      // An original closing fence consumes the reservation; do not reserve a second closer.
+      const closesBlock = openFence && !ranges.fenceAt(end);
+      const exceeds = closesBlock
+        ? !fits(candidate)
+        : raw(candidate).length > charLimit ||
+          countLines(raw(candidate)) > lineLimit ||
+          (ranges.overlaps(start, end) && !fits(candidate));
+      if (current && exceeds) {
+        current = flush(current);
+        candidate.start =
+          current?.start ?? (ranges.joins(consumed, segmentStart) ? consumed : segmentStart);
+      }
+      current = raw(candidate) ? candidate : undefined;
+      segmentStart = end;
+    }
+    lineStart += line.length + 1;
   }
-
+  while (current) {
+    current = flush(current);
+  }
   return rebalanceReasoningItalics(text, chunks, hardMaxChars);
 }
 
@@ -240,171 +196,266 @@ export function chunkDiscordTextWithMode(
   if (chunkMode !== "newline") {
     return chunkDiscordText(text, opts);
   }
-  const lineChunks = chunkMarkdownTextWithMode(
+  const lineChunks = chunkByParagraph(
     text,
     resolveDiscordChunkLimit(opts.maxChars, DEFAULT_MAX_CHARS),
-    "newline",
+    { splitLongParagraphs: false },
   );
-  const chunks: string[] = [];
-  for (const line of lineChunks) {
-    const nested = chunkDiscordText(line, opts);
-    if (!nested.length && line) {
-      chunks.push(line);
-      continue;
-    }
-    chunks.push(...nested);
-  }
-  return chunks;
+  return lineChunks.flatMap((line) => {
+    const chunks = chunkDiscordText(line, opts);
+    return chunks.length || !line ? chunks : [line];
+  });
 }
 
 // Find the end of a leading fenced or inline code span. This deliberately reuses the chunker's
 // fence grammar so italics balancing cannot disagree about indentation, marker type, or length.
-function leadingCodeSpanEnd(body: string): number {
-  if (!body) {
-    return -1;
-  }
-
-  const firstNewline = body.indexOf("\n");
-  const firstLine = firstNewline === -1 ? body : body.slice(0, firstNewline);
-  const openFence = parseFenceLine(firstLine);
-  if (openFence) {
-    if (firstNewline === -1) {
-      return body.length;
-    }
-    let lineStart = firstNewline + 1;
-    while (lineStart <= body.length) {
-      const lineEnd = body.indexOf("\n", lineStart);
-      const line = lineEnd === -1 ? body.slice(lineStart) : body.slice(lineStart, lineEnd);
-      const closeFence = parseFenceLine(line);
-      const closeSuffix = closeFence
-        ? line.slice(closeFence.indent.length + closeFence.markerLen)
-        : "";
-      if (
-        closeFence?.markerChar === openFence.markerChar &&
-        closeFence.markerLen >= openFence.markerLen &&
-        /^[ \t]*_?[ \t]*$/u.test(closeSuffix)
-      ) {
-        const markerEnd = closeFence.indent.length + closeFence.markerLen;
-        const trailingSpaces = /^ */.exec(line.slice(markerEnd))?.[0].length ?? 0;
-        return lineStart + markerEnd + trailingSpaces;
-      }
-      if (lineEnd === -1) {
-        return body.length;
-      }
-      lineStart = lineEnd + 1;
-    }
-    return body.length;
-  }
-
-  if (!body.startsWith("`")) {
-    return -1;
-  }
-  const ticks = /^(?<ticks>`+)/.exec(body)?.groups?.ticks;
-  if (!ticks) {
-    return -1;
-  }
-  for (let index = ticks.length; index < body.length;) {
-    if (body[index] !== "`") {
-      index += 1;
-      continue;
-    }
-    let runEnd = index + 1;
-    while (body[runEnd] === "`") {
-      runEnd += 1;
-    }
-    if (runEnd - index === ticks.length) {
-      return runEnd;
-    }
-    index = runEnd;
-  }
-  return -1;
-}
-
 function leadingCodePrefixEnd(body: string): number {
-  let prefixEnd = leadingCodeSpanEnd(body);
-  if (prefixEnd < 0) {
-    return -1;
-  }
-  while (prefixEnd < body.length) {
-    const separator = /^\s+/u.exec(body.slice(prefixEnd))?.[0] ?? "";
+  let offset = 0;
+  let prefixEnd = -1;
+  while (offset < body.length) {
+    const rest = body.slice(offset);
+    const fence = parseFenceLine(rest.split("\n", 1)[0] ?? "");
+    const marker = fence?.marker ?? /^`+/.exec(rest)?.[0];
+    if (!marker) {
+      return prefixEnd;
+    }
+    // Fence continuations keep the legacy close rule; inline runs must match exactly,
+    // including spans across CRLF or blank lines that CommonMark treats as blocks.
+    const pattern = fence
+      ? `\\n( {0,3}${marker[0]}{${marker.length},} *)(?=[\\t ]*_?[\\t ]*(?:\\n|$))`
+      : "(?<!`)`{" + marker.length + "}(?!`)";
+    const delimiter = new RegExp(pattern, "g");
+    delimiter.lastIndex = fence ? 0 : marker.length;
+    const match = delimiter.exec(rest);
+    if (!match) {
+      return fence ? body.length : prefixEnd;
+    }
+    prefixEnd = offset + match.index + match[0].length;
+    const separator = /^\s+/u.exec(body.slice(prefixEnd))?.[0];
     if (!separator) {
-      break;
+      return prefixEnd;
     }
-    const nextStart = prefixEnd + separator.length;
-    const nextEnd = leadingCodeSpanEnd(body.slice(nextStart));
-    if (nextEnd < 0) {
-      break;
-    }
-    prefixEnd = nextStart + nextEnd;
+    offset = prefixEnd + separator.length;
   }
   return prefixEnd;
-}
-
-function hasReasoningItalicsOpen(chunk: string): boolean {
-  const trimmed = chunk.trimStart();
-  if (trimmed.startsWith("_") || /^(?:Reasoning:|Thinking\.{0,3})\n+_/u.test(trimmed)) {
-    return true;
-  }
-  const codeEnd = leadingCodePrefixEnd(trimmed);
-  return codeEnd >= 0 && trimmed.slice(codeEnd).trimStart().startsWith("_");
-}
-
-// Keep a leading code delimiter untouched; reopen reasoning italics only after its code span.
-function reopenReasoningItalicsAfterLeadingCode(body: string, codeEnd: number): string {
-  const code = body.slice(0, codeEnd);
-  const rest = body.slice(codeEnd);
-  if (!rest.trim()) {
-    return code + rest;
-  }
-  if (/^\s*_\s*$/.test(rest)) {
-    return code;
-  }
-  const whitespaceLength = rest.length - rest.trimStart().length;
-  const whitespace = rest.slice(0, whitespaceLength);
-  const restBody = rest.slice(whitespaceLength);
-  return restBody.startsWith("_") ? code + rest : `${code}${whitespace}_${restBody}`;
 }
 
 // Keep italics intact for reasoning payloads that are wrapped once with `_…_`.
 // When Discord chunking splits the message, we close italics at the end of
 // each chunk and reopen at the start of the next. Code-leading continuations reopen after code.
 function rebalanceReasoningItalics(source: string, chunks: string[], maxChars: number): string[] {
-  if (chunks.length <= 1 || maxChars < MIN_REASONING_ITALICS_CHUNK_CHARS) {
+  if (
+    chunks.length <= 1 ||
+    maxChars < MIN_REASONING_ITALICS_CHUNK_CHARS ||
+    !hasReasoningItalics(source)
+  ) {
     return chunks;
   }
+  return chunks.map((chunk, index) => {
+    const leadingWhitespace = chunk.length - chunk.trimStart().length;
+    const codeEnd = leadingCodePrefixEnd(chunk.slice(leadingWhitespace));
+    const prefixEnd = leadingWhitespace + Math.max(0, codeEnd);
+    const prefix = chunk.slice(0, prefixEnd);
+    let body = chunk.slice(prefixEnd);
+    if (index > 0) {
+      if (codeEnd >= 0 && /^\s*_\s*$/.test(body)) {
+        return prefix;
+      }
+      const content = body.trimStart();
+      if (content && !content.startsWith("_")) {
+        body = `${body.slice(0, body.length - content.length)}_${content}`;
+      }
+    }
+    if (
+      !body.trimEnd().endsWith("_") &&
+      /^(?:_|(?:Reasoning:|Thinking\.{0,3})\n+_)/u.test(body.trimStart())
+    ) {
+      body += "_";
+    }
+    return prefix + body;
+  });
+}
 
-  if (!hasReasoningItalics(source)) {
-    return chunks;
+function renderInlineCode(body: string, delimiter: string): string | undefined {
+  // A cut can shorten an interior backtick run to match the original delimiter.
+  const runs = new Set(Array.from(body.matchAll(/`+/g), (match) => match[0].length));
+  let marker = delimiter;
+  if (runs.has(marker.length) || (marker.length >= 3 && /[\r\n]/.test(body))) {
+    marker = "`";
+    while (runs.has(marker.length)) {
+      marker += "`";
+    }
   }
-
-  const adjusted = [...chunks];
-  for (let i = 0; i < adjusted.length; i++) {
-    const isLast = i === adjusted.length - 1;
-    const current = expectDefined(adjusted[i], "Discord chunk adjustment index");
-
-    // Pure-code continuations never open reasoning italics, so do not append an unmatched closer.
-    const needsClosing = !current.trimEnd().endsWith("_") && hasReasoningItalicsOpen(current);
-    if (needsClosing) {
-      adjusted[i] = `${current}_`;
-    }
-
-    if (isLast) {
-      break;
-    }
-
-    const next = expectDefined(adjusted[i + 1], "non-final Discord chunk successor");
-    const leadingWhitespaceLen = next.length - next.trimStart().length;
-    const leadingWhitespace = next.slice(0, leadingWhitespaceLen);
-    const nextBody = next.slice(leadingWhitespaceLen);
-    if (nextBody.startsWith("_")) {
-      continue;
-    }
-    const codeEnd = leadingCodePrefixEnd(nextBody);
-    adjusted[i + 1] =
-      codeEnd >= 0
-        ? `${leadingWhitespace}${reopenReasoningItalicsAfterLeadingCode(nextBody, codeEnd)}`
-        : `${leadingWhitespace}_${nextBody}`;
+  // A multiline fragment with a fence-sized opener needs a backtick in its first line,
+  // or Markdown would interpret it as a block. The range owner must cut it earlier.
+  if (
+    marker.length >= 3 &&
+    /[\r\n]/.test(body) &&
+    !body.split(/\r\n|[\r\n]/, 1)[0]?.includes("`")
+  ) {
+    return undefined;
   }
+  const normalized = body.replace(/\r\n|[\r\n]/g, " ");
+  const padding =
+    body.startsWith("`") ||
+    body.endsWith("`") ||
+    (normalized.startsWith(" ") && normalized.endsWith(" ") && /[^ ]/.test(normalized))
+      ? " "
+      : "";
+  return marker + padding + body + padding + marker;
+}
 
-  return adjusted;
+type InlineSpan = DiscordFrame & {
+  code: NonNullable<ReturnType<typeof findCodeRegions>[number]["source"]>;
+  base: number;
+  marker: string;
+  atomicTicks: boolean;
+};
+type FenceRange = DiscordFrame &
+  OpenFence & {
+    bodyStart: number;
+    closeStart: number;
+  };
+// Inline spans are collected only between Discord fences, using the existing close grammar.
+function createDiscordRanges(source: string, maxChars: number, maxLines: number) {
+  const spans: InlineSpan[] = [];
+  const fences: FenceRange[] = [];
+  let offset = 0;
+  let plainStart = 0;
+  let fence: FenceRange | undefined;
+  const collect = (end: number) => {
+    for (const span of findCodeRegions(source.slice(plainStart, end), {
+      includeSource: true,
+      syntax: "commonmark",
+    })) {
+      if (span.block) {
+        continue;
+      }
+      const start = plainStart + span.start;
+      const finish = plainStart + span.end;
+      const marker = /^`+/.exec(source.slice(start, finish))?.[0];
+      if (!marker) {
+        continue;
+      }
+      const code = expectDefined(span.source, "inline code source map");
+      const atomicTicks =
+        (renderInlineCode("`", marker)?.length ?? Infinity) + code.prefix.text.length > maxChars;
+      const pattern = atomicTicks ? /`+|\r\n|[\s\S]/gu : /\r\n|[\s\S]/gu;
+      const fits = Array.from(source.slice(start, finish).matchAll(pattern)).every(
+        ({ index, 0: raw }) => {
+          const value = code.value.slice(code.offsets[index], code.offsets[index + raw.length]);
+          return (
+            !value ||
+            (renderInlineCode(value, marker)?.length ?? Infinity) + code.prefix.text.length <=
+              maxChars
+          );
+        },
+      );
+      if (fits && (maxLines > 1 || !code.value.includes("\n"))) {
+        spans.push({ start, end: finish, code, base: plainStart, marker, atomicTicks });
+      }
+    }
+  };
+  for (const line of source.split("\n")) {
+    const info = parseFenceLine(line, maxChars);
+    if (info && !fence) {
+      collect(offset);
+      fence = {
+        start: offset,
+        bodyStart: offset + line.length + 1,
+        closeStart: source.length,
+        end: source.length,
+        ...info,
+      };
+      fences.push(fence);
+    } else if (info && fence && closesFence(fence, info)) {
+      fence.closeStart = offset;
+      fence.end = offset + line.length;
+      fence = undefined;
+      plainStart = offset + line.length + 1;
+    }
+    offset += line.length + 1;
+  }
+  if (!fence) {
+    collect(source.length);
+  }
+  const overlaps = (start: number, end: number) =>
+    spans.some((span) => span.start < end && span.end > start);
+  const joins = (end: number, start: number) =>
+    end <= start && spans.some((span) => span.start < end && end < span.end && start < span.end);
+  const boundary = (start: number, end: number) => {
+    let safe = avoidTrailingHighSurrogateBreak(source, start, end);
+    for (const span of spans) {
+      const prefix = span.code.prefix;
+      if (span.base + prefix.start < safe && safe < span.base + prefix.end) {
+        return span.base + prefix.start;
+      }
+      if (span.start < safe && safe < span.end) {
+        if (source[safe - 1] === "\r" && source[safe] === "\n") {
+          safe -= 1;
+        }
+        if (span.atomicTicks) {
+          while (source[safe - 1] === "`" && source[safe] === "`") {
+            safe -= 1;
+          }
+        }
+      }
+    }
+    return safe;
+  };
+  const render = (start: number, end: number) => {
+    let cursor = start,
+      text = "";
+    for (const span of spans) {
+      if (span.end <= start || span.start >= end) {
+        continue;
+      }
+      const prefix = span.code.prefix;
+      const prefixStart = span.base + prefix.start;
+      // Reopen only containers whose original marker was emitted in an earlier message.
+      if (start > span.base + prefix.ownerStart && cursor <= prefixStart) {
+        text += source.slice(cursor, prefixStart) + prefix.text;
+        cursor = span.base + prefix.end;
+      }
+      text += source.slice(cursor, Math.max(cursor, span.start));
+      if (span.start >= start && span.end <= end) {
+        text += source.slice(span.start, span.end);
+      } else {
+        const body = span.code.value.slice(
+          span.code.offsets[Math.max(start, span.start) - span.start],
+          span.code.offsets[Math.min(end, span.end) - span.start],
+        );
+        if (body) {
+          const value = renderInlineCode(body, span.marker);
+          if (value === undefined) {
+            return undefined;
+          }
+          text += (span.start < start ? span.code.prefix.text : "") + value;
+        }
+      }
+      cursor = Math.min(end, span.end);
+    }
+    return text + source.slice(cursor, end);
+  };
+  // A partial closing line is still inside the fence until its original text is consumed.
+  const fenceAt = (position: number) =>
+    fences.find(
+      (range) =>
+        range.bodyStart - 1 <= position &&
+        (position < range.end || (position === range.end && range.closeStart === range.end)),
+    );
+  const cutBoundary = (start: number, end: number) => {
+    const safe = boundary(start, end);
+    // Keep marker lines intact and leave an opening fence with its body.
+    for (const range of fences) {
+      if (start < range.start && range.start < safe && safe <= range.bodyStart) {
+        return range.start;
+      }
+      if (range.closeStart < safe && safe < range.end) {
+        return range.closeStart;
+      }
+    }
+    return safe;
+  };
+  return { render, overlaps, joins, boundary, fenceAt, cutBoundary };
 }

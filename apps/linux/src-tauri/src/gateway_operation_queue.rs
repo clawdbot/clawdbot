@@ -1,7 +1,8 @@
 use crate::gateway::{GatewayAction, GatewaySnapshot};
 use crate::installer::InstallChannel;
-use crate::operation_executor::OperationExecutor;
 use crate::remote_gateway::RemoteGatewayRequest;
+use std::sync::mpsc;
+use std::thread;
 use tokio::sync::oneshot;
 
 pub(crate) enum GatewayOperation {
@@ -18,7 +19,7 @@ struct QueuedGatewayOperation {
 }
 
 pub(crate) struct GatewayOperationQueue {
-    executor: OperationExecutor<QueuedGatewayOperation>,
+    sender: mpsc::Sender<QueuedGatewayOperation>,
 }
 
 impl GatewayOperationQueue {
@@ -27,19 +28,21 @@ impl GatewayOperationQueue {
         F: Fn(GatewayOperation) -> Result<GatewaySnapshot, String> + Send + Sync + 'static,
         E: Fn(&str) + Send + Sync + 'static,
     {
-        Self {
-            executor: OperationExecutor::new(
-                "openclaw-gateway-operations",
-                move |request: QueuedGatewayOperation| {
+        let (sender, receiver) = mpsc::channel::<QueuedGatewayOperation>();
+        thread::Builder::new()
+            .name("openclaw-gateway-operations".to_string())
+            .spawn(move || {
+                for request in receiver {
                     let result = sink(request.operation);
                     if let Some(reply) = request.reply {
                         let _ = reply.send(result);
                     } else if let Err(error) = result {
                         show_error(&error);
                     }
-                },
-            ),
-        }
+                }
+            })
+            .expect("gateway operation worker should start");
+        Self { sender }
     }
 
     pub(crate) fn submit_connect(&self) {
@@ -55,8 +58,8 @@ impl GatewayOperationQueue {
         operation: GatewayOperation,
     ) -> Result<GatewaySnapshot, String> {
         let (reply, receiver) = oneshot::channel();
-        self.executor
-            .submit(QueuedGatewayOperation {
+        self.sender
+            .send(QueuedGatewayOperation {
                 operation,
                 reply: Some(reply),
             })
@@ -67,7 +70,7 @@ impl GatewayOperationQueue {
     }
 
     fn submit_detached(&self, operation: GatewayOperation) {
-        let _ = self.executor.submit(QueuedGatewayOperation {
+        let _ = self.sender.send(QueuedGatewayOperation {
             operation,
             reply: None,
         });
@@ -86,6 +89,39 @@ mod tests {
     enum ObservedOperation {
         Stop,
         Connect,
+    }
+
+    #[test]
+    fn executes_every_rapid_submission_in_order() {
+        let (sender, receiver) = mpsc::channel();
+        let queue = GatewayOperationQueue::new(
+            move |operation| {
+                let observed = match operation {
+                    GatewayOperation::ConnectExplicitLocal => 0,
+                    GatewayOperation::Action(GatewayAction::Stop) => 1,
+                    _ => panic!("unexpected operation"),
+                };
+                sender.send(observed).expect("record operation");
+                Err("test operation".to_string())
+            },
+            |_| {},
+        );
+        let expected = (0..256).map(|index| index % 2).collect::<Vec<_>>();
+        for operation in &expected {
+            if *operation == 0 {
+                queue.submit_connect();
+            } else {
+                queue.submit_action(GatewayAction::Stop);
+            }
+        }
+        let observed = (0..expected.len())
+            .map(|_| {
+                receiver
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("operation should execute")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(observed, expected);
     }
 
     #[test]

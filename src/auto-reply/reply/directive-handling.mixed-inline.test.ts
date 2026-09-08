@@ -1,16 +1,15 @@
-// Tests mixed directives through the real reply admission and transaction boundary.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as authProfileStore from "../../agents/auth-profiles/store.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { loadProviderScopedThinkingCatalog } from "../../agents/model-catalog.runtime.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
+import { resolveThinkingDefault } from "../../agents/model-thinking-default.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
 import {
   onSessionLifecycleEvent,
   type SessionLifecycleEvent,
@@ -88,6 +87,10 @@ describe("mixed inline directives", () => {
     }));
   });
 
+  afterEach(() => {
+    unsubscribeLifecycle();
+    vi.restoreAllMocks();
+  });
   it("continues mixed content with the selected route's context and thinking metadata", async () => {
     const selected: ModelCatalogEntry = {
       provider: "fixture-route",
@@ -135,13 +138,18 @@ describe("mixed inline directives", () => {
     );
   });
 
-  it.each(["", "please reply "])(
-    "rejects a restricted explicit model with prefix %j without persistence",
-    async (prefix) => {
+  it.each([
+    { prefix: "", sibling: "", reason: "model-selection-rejected" },
+    { prefix: "please reply ", sibling: "", reason: "session-directive-rejected" },
+    { prefix: "", sibling: "\n/think high", reason: "session-directive-rejected" },
+    { prefix: "please reply ", sibling: "\n/think high", reason: "session-directive-rejected" },
+  ])(
+    "rejects a restricted model with prefix $prefix and sibling $sibling without persistence",
+    async ({ prefix, sibling, reason }) => {
       const sessionEntry = createSessionEntry({ thinkingLevel: "high" });
       const initial = { ...sessionEntry };
       const { result } = await applyMixedDirectives({
-        body: `${prefix}/model openai/gpt-5.6-luna -s`,
+        body: `${prefix}/model openai/REJECTED_PRIVATE_TOKEN -s${sibling}`,
         cfg: { agents: { defaults: { modelPolicy: { allow: ["anthropic/*"] } } } },
         sessionEntry,
         allowedModels: [{ provider: "anthropic", id: "claude-opus-4-6", name: "Opus" }],
@@ -149,6 +157,7 @@ describe("mixed inline directives", () => {
       expect(result).toMatchObject({
         kind: "reply",
         reply: { isError: true, text: expect.stringContaining("is not allowed") },
+        preRunRejection: reason,
       });
       expect(sessionEntry).toEqual(initial);
       expect(persistenceMocks.persist).not.toHaveBeenCalled();
@@ -183,11 +192,6 @@ describe("mixed inline directives", () => {
         expect(persistStickyModelSelectionBestEffort).not.toHaveBeenCalled();
       },
     );
-  });
-
-  afterEach(() => {
-    unsubscribeLifecycle();
-    vi.restoreAllMocks();
   });
 
   it("publishes a mixed profile-only selection only after persistence settles", async () => {
@@ -246,73 +250,40 @@ describe("mixed inline directives", () => {
     expect(lifecycleEvents).toHaveLength(1);
   });
 
-  describe.each(["", "please reply "])("model scope with prefix %j", (prefix) => {
-    it.each([
-      { scope: undefined, flag: "", owner: true, target: undefined, writes: true },
-      { scope: "session", flag: "", owner: true, target: undefined, writes: false },
-      { scope: "agent", flag: "", owner: true, target: "agent", writes: true },
-      { scope: "global", flag: "", owner: true, target: "defaults", writes: true },
-      { scope: "global", flag: " --session", owner: true, target: undefined, writes: false },
-      { scope: "session", flag: " --agent", owner: true, target: "agent", writes: true },
-      { scope: "agent", flag: " --global", owner: true, target: "defaults", writes: true },
-      { scope: "agent", flag: "", owner: false, target: undefined, writes: false },
-      { scope: "global", flag: "", owner: false, target: undefined, writes: false },
-    ] as const)(
-      "resolves scope=$scope flag=$flag owner=$owner without widening authority",
-      async ({ scope, flag, owner, target, writes }) => {
-        const { result, sessionEntry } = await applyMixedDirectives({
-          body: `${prefix}/model openai/gpt-5.6-luna${flag}`,
-          cfg: { agents: { defaults: { modelSelectionScope: scope } } },
-          senderIsOwner: owner,
-          allowedModels: [{ provider: "openai", id: "gpt-5.6-luna", name: "GPT-5.6-Luna" }],
-        });
+  it.each(["", "please reply\n"])(
+    "keeps reasoning persistence scoped to directive-only messages with prefix %j",
+    async (prefix) => {
+      const { result, sessionEntry } = await applyMixedDirectives({
+        body: `${prefix}/reasoning on`,
+        storePath: "/tmp/sessions.json",
+      });
 
-        expect(sessionEntry).toMatchObject({
-          providerOverride: "openai",
-          modelOverride: "gpt-5.6-luna",
-          modelOverrideSource: "user",
-        });
-        const acknowledgement = {
-          text: expect.stringContaining(writes ? "update requested" : "default unchanged"),
-        };
-        expect(result).toMatchObject(
-          prefix
-            ? { kind: "continue", directiveAck: acknowledgement }
-            : { kind: "reply", reply: acknowledgement },
-        );
-        if (writes) {
-          expect(persistStickyModelSelectionBestEffort).toHaveBeenCalledExactlyOnceWith({
-            agentId: "main",
-            model: "openai/gpt-5.6-luna",
-            ...(target ? { target } : {}),
-          });
-        } else {
-          expect(persistStickyModelSelectionBestEffort).not.toHaveBeenCalled();
-        }
-      },
-    );
-  });
-
-  it("commits mixed reasoning exactly once and emits one transition", async () => {
-    const { result, sessionEntry } = await applyMixedDirectives({
-      body: "please reply\n/reasoning on",
-      storePath: "/tmp/sessions.json",
-    });
-
-    expect(result).toMatchObject({
-      kind: "continue",
-      directiveAck: { text: "⚙️ Reasoning visibility enabled." },
-    });
-    expect(sessionEntry.reasoningLevel).toBe("on");
-    expect(persistenceMocks.persist).toHaveBeenCalledOnce();
-    expect(enqueueSystemEvent).toHaveBeenCalledOnce();
-  });
+      expect(result).toMatchObject(
+        prefix
+          ? {
+              kind: "continue",
+              directives: { reasoningLevel: "on" },
+              directiveAck: { text: "⚙️ Reasoning visibility enabled." },
+            }
+          : { kind: "reply", reply: { text: "⚙️ Reasoning visibility enabled." } },
+      );
+      expect(result).not.toHaveProperty("preRunRejection", expect.anything());
+      expect(sessionEntry.reasoningLevel).toBe(prefix ? undefined : "on");
+      if (prefix) {
+        expect(persistenceMocks.persist).not.toHaveBeenCalled();
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      } else {
+        expect(persistenceMocks.persist).toHaveBeenCalledOnce();
+        expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it.each([
     { mode: "off", initial: "on", expectedAck: "Reasoning visibility disabled." },
     { mode: "stream", initial: undefined, expectedAck: "Reasoning stream enabled." },
   ])(
-    "persists reasoning $mode with a channel-neutral acknowledgement",
+    "applies reasoning $mode only to this turn with a channel-neutral acknowledgement",
     async ({ mode, initial, expectedAck }) => {
       const { result, sessionEntry } = await applyMixedDirectives({
         body: `please reply\n/reasoning ${mode}`,
@@ -322,53 +293,80 @@ describe("mixed inline directives", () => {
 
       expect(result).toMatchObject({
         kind: "continue",
+        directives: { reasoningLevel: mode },
         directiveAck: { text: `⚙️ ${expectedAck}` },
       });
-      expect(sessionEntry.reasoningLevel).toBe(mode);
+      expect(sessionEntry.reasoningLevel).toBe(initial);
     },
   );
 
-  it("commits a model switch and retargets queued followups once", async () => {
-    const cfg = {
-      commands: { text: true },
-      agents: {
-        defaults: { models: { "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } } } },
-      },
-    } as OpenClawConfig;
-    const { result, sessionEntry } = await applyMixedDirectives({
-      body: "please reply /model openai/gpt-5.6-luna",
-      cfg,
-      sessionEntry: createSessionEntry({ thinkingLevel: "ultra" }),
-      storePath: "/tmp/sessions.json",
-      provider: "openai",
-      model: "gpt-5.6-sol",
-      allowedModels: [{ provider: "openai", id: "gpt-5.6-luna", name: "GPT-5.6-Luna" }],
-      senderIsOwner: true,
-    });
+  it.each([
+    { hint: "", stored: true },
+    { hint: " /think high", stored: true },
+    { hint: "", stored: false },
+    { hint: " /think high", stored: false },
+  ])(
+    "commits a model switch with stored thinking=$stored and hint $hint",
+    async ({ hint, stored }) => {
+      const cfg = {
+        commands: { text: true },
+        agents: {
+          defaults: {
+            thinkingDefault: "ultra",
+            models: { "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } } },
+          },
+        },
+      } as OpenClawConfig;
+      const { result, sessionEntry } = await applyMixedDirectives({
+        body: `please reply /model openai/gpt-5.6-luna${hint}`,
+        cfg,
+        sessionEntry: createSessionEntry(stored ? { thinkingLevel: "ultra" } : {}),
+        resolveDefaultThinkingLevel: async () =>
+          resolveThinkingDefault({ cfg, provider: "openai", model: "gpt-5.6-sol" }),
+        storePath: "/tmp/sessions.json",
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        allowedModels: [{ provider: "openai", id: "gpt-5.6-luna", name: "GPT-5.6-Luna" }],
+        senderIsOwner: true,
+      });
 
-    expect(result).toMatchObject({ kind: "continue", provider: "openai", model: "gpt-5.6-luna" });
-    expect(sessionEntry.thinkingLevel).toBe("max");
-    expect(persistenceMocks.persist).toHaveBeenCalledOnce();
-    expect(triggerSessionPatchHook).toHaveBeenCalledOnce();
-    expect(refreshQueuedFollowupSession).toHaveBeenCalledOnce();
-    expect(persistStickyModelSelectionBestEffort).toHaveBeenCalledExactlyOnceWith({
-      agentId: "main",
-      model: "openai/gpt-5.6-luna",
-    });
-    expect(enqueueSystemEvent).toHaveBeenCalledOnce();
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("Model switched to openai/gpt-5.6-luna.", {
-      sessionKey: "agent:main:dm:1",
-      contextKey: "model:openai/gpt-5.6-luna",
-    });
-    expect(refreshQueuedFollowupSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        key: "agent:main:dm:1",
-        nextProvider: "openai",
-        nextModel: "gpt-5.6-luna",
-        nextThinking: expect.objectContaining({ level: "max", agentRuntime: "codex" }),
-      }),
-    );
-  });
+      expect(result).toMatchObject({ kind: "continue", provider: "openai", model: "gpt-5.6-luna" });
+      expect(sessionEntry.thinkingLevel).toBe(stored ? "max" : undefined);
+      if (hint) {
+        expect(result).toMatchObject({ kind: "continue", directives: { thinkLevel: "high" } });
+      }
+      if (result.kind !== "continue") {
+        throw new Error("Expected the model switch to continue the task");
+      }
+      expect(result.directiveAck?.text).toContain("Model set to openai/gpt-5.6-luna");
+      expect(
+        result.directiveAck?.text?.includes("Thinking level set to max (ultra not supported"),
+      ).toBe(stored);
+      expect(persistenceMocks.persist).toHaveBeenCalledOnce();
+      expect(persistenceMocks.persist.mock.calls[0]?.[0].entry.thinkingLevel).toBe(
+        stored ? "max" : undefined,
+      );
+      expect(triggerSessionPatchHook).toHaveBeenCalledOnce();
+      expect(refreshQueuedFollowupSession).toHaveBeenCalledOnce();
+      expect(persistStickyModelSelectionBestEffort).not.toHaveBeenCalled();
+      expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+      expect(enqueueSystemEvent).toHaveBeenCalledWith("Model switched to openai/gpt-5.6-luna.", {
+        sessionKey: "agent:main:dm:1",
+        contextKey: "model:openai/gpt-5.6-luna",
+      });
+      expect(refreshQueuedFollowupSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          key: "agent:main:dm:1",
+          nextProvider: "openai",
+          nextModel: "gpt-5.6-luna",
+          nextThinking: expect.objectContaining({
+            level: stored ? "max" : undefined,
+            agentRuntime: "codex",
+          }),
+        }),
+      );
+    },
+  );
 
   it.each([
     { label: "bare", body: "please reply /model" },
@@ -764,7 +762,7 @@ describe("mixed inline directives", () => {
     expect(sessionEntry.modelOverride).toBeUndefined();
   });
 
-  it("preserves persisted and per-message queue options in one mixed transaction", async () => {
+  it("keeps mixed queue options on the current message", async () => {
     const { result, sessionEntry } = await applyMixedDirectives({
       body: "please reply\n/queue collect debounce:1500 cap:4 drop:old",
       storePath: "/tmp/sessions.json",
@@ -775,12 +773,8 @@ describe("mixed inline directives", () => {
       perMessageQueueMode: "collect",
       perMessageQueueOptions: { debounceMs: 1500, cap: 4, dropPolicy: "old" },
     });
-    expect(sessionEntry).toMatchObject({
-      queueMode: "collect",
-      queueDebounceMs: 1500,
-      queueCap: 4,
-    });
-    expect(persistenceMocks.persist).toHaveBeenCalledOnce();
+    expect(sessionEntry).toEqual(createSessionEntry());
+    expect(persistenceMocks.persist).not.toHaveBeenCalled();
   });
 
   it("keeps routed exec policy on its message without changing session placement", async () => {
@@ -826,9 +820,11 @@ describe("mixed inline directives", () => {
     expect(persistenceMocks.persist).not.toHaveBeenCalled();
   });
 
-  it("persists fast-mode and external exec placement for authorized mixed transactions", async () => {
+  it("does not persist fast-mode or exec placement from mixed transactions", async () => {
     const fast = await applyMixedDirectives({ body: "please reply\n/fast on" });
-    expect(fast.sessionEntry.fastMode).toBe(true);
+    expect(fast.result).toMatchObject({ kind: "continue", directives: { fastMode: true } });
+    expect(fast.sessionEntry.fastMode).toBeUndefined();
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
 
     const exec = await applyMixedDirectives({
       body: "please reply\n/exec host=node security=allowlist ask=always node=worker-1",
@@ -838,10 +834,8 @@ describe("mixed inline directives", () => {
       kind: "continue",
       directiveAck: { text: expect.stringContaining("Exec defaults set") },
     });
-    expect(exec.sessionEntry).toMatchObject({
-      execHost: "node",
-      execNode: "worker-1",
-    });
+    expect(exec.sessionEntry).toEqual(createSessionEntry());
+    expect(persistenceMocks.persist).not.toHaveBeenCalled();
   });
 
   it("does not persist trace directives for unauthorized mixed messages", async () => {
@@ -880,15 +874,48 @@ describe("mixed inline directives", () => {
 
       expect(result).toMatchObject({
         kind: "continue",
+        directives: { reasoningLevel: "on" },
         directiveAck: { text: expect.stringContaining(expectedAck) },
       });
-      expect(sessionEntry.reasoningLevel).toBe("on");
+      expect(result).not.toHaveProperty("preRunRejection", expect.anything());
+      expect(sessionEntry.reasoningLevel).toBeUndefined();
       expect(sessionEntry.traceLevel).toBeUndefined();
-      expect(persistenceMocks.persist).toHaveBeenCalledOnce();
+      expect(persistenceMocks.persist).not.toHaveBeenCalled();
     },
   );
 
-  it("keeps authorized exec fields when a sibling exec option is invalid", async () => {
+  it.each(["", "/verbose", "/fast status", "/trace raw"])(
+    "validates unsupported thinking despite an informational sibling %j",
+    async (sibling) => {
+      const { result, sessionEntry } = await applyMixedDirectives({
+        body: `please reply ${sibling} /think high`,
+        provider: "fixture-route",
+        model: "reasoner",
+        allowedModels: [
+          {
+            provider: "fixture-route",
+            id: "reasoner",
+            name: "Reasoner",
+            reasoning: false,
+          },
+        ],
+        gatewayClientScopes: [],
+      });
+      expect(result).toMatchObject({
+        kind: "reply",
+        reply: {
+          isError: true,
+          text: expect.stringContaining('Thinking level "high" is not supported'),
+        },
+        preRunRejection: "session-directive-rejected",
+      });
+      expect(sessionEntry).toEqual(createSessionEntry());
+      expect(persistenceMocks.persist).not.toHaveBeenCalled();
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps valid turn hints when a sibling exec option is invalid", async () => {
     const { result, sessionEntry } = await applyMixedDirectives({
       body: "please reply\n/exec host=node security=bogus\n/reasoning on",
       storePath: "/tmp/sessions.json",
@@ -896,13 +923,14 @@ describe("mixed inline directives", () => {
 
     expect(result).toMatchObject({
       kind: "continue",
+      directives: { reasoningLevel: "on" },
       directiveAck: { text: expect.stringContaining('Unrecognized exec security "bogus"') },
     });
-    expect(sessionEntry).toMatchObject({ execHost: "node", reasoningLevel: "on" });
-    expect(persistenceMocks.persist).toHaveBeenCalledOnce();
+    expect(sessionEntry).toEqual(createSessionEntry());
+    expect(persistenceMocks.persist).not.toHaveBeenCalled();
   });
 
-  it("normalizes nested informational and unauthorized siblings into one commit", async () => {
+  it("keeps informational and unauthorized siblings from persisting turn hints", async () => {
     const { result, sessionEntry } = await applyMixedDirectives({
       body: "please reply\n/trace raw\n/verbose nonsense\n/reasoning on",
       storePath: "/tmp/sessions.json",
@@ -911,11 +939,12 @@ describe("mixed inline directives", () => {
 
     expect(result).toMatchObject({
       kind: "continue",
+      directives: { reasoningLevel: "on" },
       directiveAck: { text: expect.stringContaining("/trace is restricted to owners") },
     });
-    expect(sessionEntry.reasoningLevel).toBe("on");
+    expect(sessionEntry.reasoningLevel).toBeUndefined();
     expect(sessionEntry.traceLevel).toBeUndefined();
-    expect(persistenceMocks.persist).toHaveBeenCalledOnce();
+    expect(persistenceMocks.persist).not.toHaveBeenCalled();
   });
 
   it("does not announce unchanged elevated mode as a transition", async () => {
@@ -926,70 +955,7 @@ describe("mixed inline directives", () => {
     });
 
     expect(result).toMatchObject({ kind: "continue" });
-    expect(persistenceMocks.persist).toHaveBeenCalledOnce();
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-  });
-
-  it("adopts an authoritative model lock and emits no losing side effects", async () => {
-    const sessionEntry = createSessionEntry({
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-6",
-      modelOverrideSource: "user",
-    });
-    const lockedEntry = { ...sessionEntry, updatedAt: 2, modelSelectionLocked: true };
-    persistenceMocks.persist.mockResolvedValueOnce({
-      status: "model-selection-locked",
-      entry: lockedEntry,
-    });
-
-    const { result, sessionStore } = await applyMixedDirectives({
-      body: "please reply /model openai/gpt-5.6-luna",
-      sessionEntry,
-      storePath: "/tmp/sessions.json",
-      allowedModels: [{ provider: "openai", id: "gpt-5.6-luna", name: "GPT-5.6-Luna" }],
-      senderIsOwner: true,
-    });
-
-    expect(result).toEqual({
-      kind: "reply",
-      reply: { text: MODEL_SELECTION_LOCKED_MESSAGE, isError: true },
-    });
-    expect(persistenceMocks.persist).toHaveBeenCalledWith(
-      expect.objectContaining({ requireModelSelectionUnlocked: true }),
-    );
-    expect(sessionEntry).toEqual(lockedEntry);
-    expect(sessionStore["agent:main:dm:1"]).toEqual(lockedEntry);
-    expect(lifecycleEvents).toEqual([]);
-    expect(triggerSessionPatchHook).not.toHaveBeenCalled();
-    expect(refreshQueuedFollowupSession).not.toHaveBeenCalled();
-    expect(persistStickyModelSelectionBestEffort).not.toHaveBeenCalled();
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-  });
-
-  it("reports a locked valid model instead of an ignored unauthorized sibling", async () => {
-    const sessionEntry = createSessionEntry();
-    const lockedEntry = { ...sessionEntry, updatedAt: 2, modelSelectionLocked: true };
-    persistenceMocks.persist.mockResolvedValueOnce({
-      status: "model-selection-locked",
-      entry: lockedEntry,
-    });
-
-    const { result } = await applyMixedDirectives({
-      body: "please reply\n/trace raw\n/model openai/gpt-5.6-luna",
-      sessionEntry,
-      storePath: "/tmp/sessions.json",
-      allowedModels: [{ provider: "openai", id: "gpt-5.6-luna", name: "GPT-5.6-Luna" }],
-      gatewayClientScopes: [],
-    });
-
-    expect(result).toEqual({
-      kind: "reply",
-      reply: { text: MODEL_SELECTION_LOCKED_MESSAGE, isError: true },
-    });
-    expect(sessionEntry).toEqual(lockedEntry);
-    expect(persistenceMocks.persist).toHaveBeenCalledOnce();
-    expect(triggerSessionPatchHook).not.toHaveBeenCalled();
-    expect(refreshQueuedFollowupSession).not.toHaveBeenCalled();
+    expect(persistenceMocks.persist).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 });

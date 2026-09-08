@@ -6,7 +6,10 @@ import {
 import { replaceGenericExternalRunFailureText } from "../agents/failover/user-copy.js";
 import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
-import { buildRecoverablePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
+import {
+  clearPendingFinalDeliveryAfterSuccess,
+  suppressPendingFinalDelivery,
+} from "../auto-reply/reply/dispatch-from-config.pending-final.js";
 import { isSilentReplyPayloadText } from "../auto-reply/tokens.js";
 import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
 import {
@@ -14,7 +17,7 @@ import {
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
-import { mergeSessionEntry, type SessionEntry } from "../config/sessions/types.js";
+import { mergeSessionEntry } from "../config/sessions/types.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { formatErrorMessage } from "./errors.js";
 import {
@@ -49,14 +52,6 @@ import { withSystemEventOwner } from "./system-event-ownership.js";
 import { consumeSelectedSystemEventEntries, enqueueSystemEvent } from "./system-events.js";
 
 const log = heartbeatLog;
-
-// Recovery fields a completed heartbeat delivery must clear. Mirrors the
-// canonical clearPendingFinalDeliveryAfterSuccess in dispatch-from-config.ts so
-// the send-success and duplicate-skip paths drop the exact same set; leaving any
-// behind keeps the session stuck on a delivery that already happened.
-const CLEARED_PENDING_FINAL_DELIVERY_FIELDS = {
-  pendingFinalDelivery: undefined,
-} as const;
 
 const FIRST_HEARTBEAT_ALERT_PREAMBLE =
   'First heartbeat alert: your bot runs periodic background checks and messages you only when something needs attention. Set agents.defaults.heartbeat.target: "none" to keep these internal.';
@@ -148,17 +143,6 @@ function queueHeartbeatTargetAwareness(params: {
       error: formatErrorMessage(error),
     });
   }
-}
-
-// Clear pending-final only when this run produced it: the agent run stamps
-// createdAt during the run, so createdAt >= run start means we own it. An older
-// final (e.g. one a message_tool_only run never refreshed) must keep its recovery path.
-function heartbeatRunOwnsPendingFinalDelivery(
-  entry: SessionEntry | undefined,
-  runStartedAt: number,
-): boolean {
-  const createdAt = entry?.pendingFinalDelivery?.createdAt;
-  return typeof createdAt === "number" && createdAt >= runStartedAt;
 }
 
 export function classifyHeartbeatAgentOutcome(params: {
@@ -282,6 +266,7 @@ export async function finalizeHeartbeatOutcome(params: {
   wake: ReadyHeartbeatWake;
   prepared: PreparedHeartbeatRun;
   outcome: ClassifiedHeartbeatOutcome;
+  replyPayloadSource: CompletedHeartbeatAgentRun["replyPayload"];
   maybeSendHeartbeatOk: () => Promise<boolean>;
   outboundSession: ReturnType<typeof buildOutboundSessionContext>;
   outboundIdentity: ReturnType<typeof resolveAgentOutboundIdentity>;
@@ -293,6 +278,10 @@ export async function finalizeHeartbeatOutcome(params: {
   const stateKey = params.prepared.outboundPolicySessionKey ?? sessionKey;
   const stateEntry = loadExactSessionEntryReadOnly({ storePath, sessionKey: stateKey })?.entry;
   const outcome = params.outcome;
+  const replyPayloadSource = params.replyPayloadSource;
+  const pendingFinalIdentity = replyPayloadSource
+    ? getReplyPayloadMetadata(replyPayloadSource)?.pendingFinalDeliveryCompletion
+    : undefined;
   const finish = (event: Parameters<typeof emitHeartbeatEvent>[0], consumeEvents = true) => {
     emitHeartbeatEvent({
       ...event,
@@ -371,7 +360,7 @@ export async function finalizeHeartbeatOutcome(params: {
                 identity: params.outboundIdentity,
                 threadId: delivery.threadId,
                 payloads: [
-                  copyReplyPayloadMetadata(failureReplyPayload ?? {}, {
+                  copyReplyPayloadMetadata(replyPayloadSource ?? {}, {
                     ...failureReplyPayload,
                     text: outcome.normalized.text || undefined,
                   }),
@@ -385,21 +374,8 @@ export async function finalizeHeartbeatOutcome(params: {
               return send.status === "sent" ? "sent" : "suppressed";
             }
           : undefined,
-      clearSatisfiedPendingFinalDelivery: failureReplyPayload
-        ? async () => {
-            const pendingFinalText = buildRecoverablePendingFinalDeliveryText([
-              failureReplyPayload,
-            ]);
-            if (!pendingFinalText) {
-              return;
-            }
-            await clearSatisfiedPendingFinalDelivery(
-              params.wake,
-              params.prepared,
-              pendingFinalText,
-            );
-          }
-        : undefined,
+      clearSatisfiedPendingFinalDelivery: () =>
+        clearPendingFinalDeliveryAfterSuccess(pendingFinalIdentity, { preserveActivity: true }),
       onChannelNotReady: (reason) => {
         log.info("heartbeat: channel not ready for failure notice", {
           channel: failureChannel,
@@ -419,6 +395,7 @@ export async function finalizeHeartbeatOutcome(params: {
       recordOutcome(outcome.response);
     }
     await restoreHeartbeatUpdatedAt({ storePath, sessionKey, updatedAt: previousUpdatedAt });
+    await suppressPendingFinalDelivery(replyPayloadSource, { preserveActivity: true });
     const okSent =
       "silent" in outcome && outcome.silent ? false : await params.maybeSendHeartbeatOk();
     return finish({
@@ -449,7 +426,7 @@ export async function finalizeHeartbeatOutcome(params: {
 
   if (isDuplicateMain) {
     await restoreHeartbeatUpdatedAt({ storePath, sessionKey, updatedAt: previousUpdatedAt });
-    await clearSatisfiedPendingFinalDelivery(params.wake, params.prepared);
+    await suppressPendingFinalDelivery(replyPayloadSource, { preserveActivity: true });
     return finish({
       status: "skipped",
       reason: "duplicate",
@@ -465,6 +442,7 @@ export async function finalizeHeartbeatOutcome(params: {
       : normalized.text;
   if (delivery.channel === "none" || !delivery.to) {
     recordUnconfirmedAlert(delivery.reason ?? "no-target");
+    await suppressPendingFinalDelivery(replyPayloadSource, { preserveActivity: true });
     return finish({
       status: "skipped",
       reason: delivery.reason ?? "no-target",
@@ -474,6 +452,7 @@ export async function finalizeHeartbeatOutcome(params: {
   }
   if (!visibility.showAlerts) {
     recordUnconfirmedAlert("alerts-disabled");
+    await suppressPendingFinalDelivery(replyPayloadSource, { preserveActivity: true });
     await restoreHeartbeatUpdatedAt({ storePath, sessionKey, updatedAt: previousUpdatedAt });
     return finish({
       status: "skipped",
@@ -531,7 +510,8 @@ export async function finalizeHeartbeatOutcome(params: {
     identity: params.outboundIdentity,
     threadId: delivery.threadId,
     payloads: [
-      copyReplyPayloadMetadata(replyPayload ?? {}, {
+      // Tool notifications replace content but retain the exact producer-owned delivery intent.
+      copyReplyPayloadMetadata(replyPayloadSource ?? {}, {
         ...replyPayload,
         text: deliveryText,
         mediaUrls,
@@ -553,26 +533,16 @@ export async function finalizeHeartbeatOutcome(params: {
     throw send.error;
   }
   const visibleSendSucceeded = send.status === "sent";
-  if (visibleSendSucceeded) {
-    const hasHeartbeatText = Boolean(deliveryText.trim());
-    const fallbackEntry = mergeSessionEntry(undefined, { updatedAt: startedAt });
+  await clearPendingFinalDeliveryAfterSuccess(pendingFinalIdentity, { preserveActivity: true });
+  if (visibleSendSucceeded && deliveryText.trim()) {
+    // Delivery policy owns dedupe; the exact payload intent owns recovery cleanup above.
     await patchSessionEntryCore(
       { storePath, sessionKey: stateKey },
-      (current) => {
-        // Visible structured-only sends satisfy their own pending final too;
-        // preserve old text dedupe markers and another run's recovery state.
-        const ownsPendingFinalDelivery = heartbeatRunOwnsPendingFinalDelivery(current, startedAt);
-        if (!hasHeartbeatText && !ownsPendingFinalDelivery) {
-          return null;
-        }
-        return {
-          ...(hasHeartbeatText
-            ? { lastHeartbeatText: normalized.text, lastHeartbeatSentAt: startedAt }
-            : {}),
-          ...(ownsPendingFinalDelivery ? CLEARED_PENDING_FINAL_DELIVERY_FIELDS : {}),
-        };
+      () => ({ lastHeartbeatText: normalized.text, lastHeartbeatSentAt: startedAt }),
+      {
+        fallbackEntry: mergeSessionEntry(undefined, { updatedAt: startedAt }),
+        preserveActivity: true,
       },
-      { fallbackEntry, preserveActivity: true },
     );
   }
 
@@ -591,45 +561,5 @@ export async function finalizeHeartbeatOutcome(params: {
       indicatorType: visibility.useIndicator ? resolveIndicatorType(eventStatus) : undefined,
     },
     visibleSendSucceeded,
-  );
-}
-
-// The duplicate-suppression branch returns before any send, so it never hits
-// the send-success clear. A duplicate means this run's own output was already
-// delivered within the dedupe window, so this run's pending-final is satisfied
-// and gets cleared the same way the send-success path does. We must not
-// text-match the pending against the delivered text: agent-runner stores it
-// pre-normalization (no responsePrefix), so a byte compare would leave
-// prefixed agents permanently stuck. Ownership is gated on createdAt instead,
-// so an older final this run did not produce is preserved, not erased.
-async function clearSatisfiedPendingFinalDelivery(
-  wake: ReadyHeartbeatWake,
-  prepared: PreparedHeartbeatRun,
-  expectedText?: string,
-) {
-  await patchSessionEntryCore(
-    { storePath: prepared.storePath, sessionKey: prepared.sessionKey },
-    (current, context) => {
-      if (!context.existingEntry) {
-        return null;
-      }
-      if (!current?.pendingFinalDelivery) {
-        return null;
-      }
-      if (!heartbeatRunOwnsPendingFinalDelivery(current, wake.startedAt)) {
-        return null;
-      }
-      // A terminal failure can send only the last payload while recovery owns
-      // several. Clear only when the delivered payload represents the whole final.
-      if (
-        expectedText !== undefined &&
-        (current.pendingFinalDelivery.kind !== "replayable" ||
-          current.pendingFinalDelivery.text !== expectedText)
-      ) {
-        return null;
-      }
-      return CLEARED_PENDING_FINAL_DELIVERY_FIELDS;
-    },
-    { preserveActivity: true },
   );
 }

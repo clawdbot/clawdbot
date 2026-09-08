@@ -374,17 +374,16 @@ describe("fuzz: watchClientDisconnect", () => {
         expect(s.listenerCount("close")).toBe(1);
       }
 
-      // Fire close on every unique socket; invariants: callback fires once per
-      // close, controller becomes aborted (regardless of whether it started so).
-      let expectedCallbackCalls = 0;
+      // One closed socket releases all socket watchers; later socket closes
+      // cannot repeat the callback, including with a pre-aborted controller.
       for (const s of uniqueSockets) {
         s.emit("close");
-        expectedCallbackCalls += 1;
+        expect(s.listenerCount("close")).toBe(0);
       }
       if (uniqueSockets.size > 0) {
         expect(controller.signal.aborted).toBe(true);
         if (onDisconnect) {
-          expect(onDisconnect).toHaveBeenCalledTimes(expectedCallbackCalls);
+          expect(onDisconnect).toHaveBeenCalledTimes(1);
         }
       } else {
         expect(controller.signal.aborted).toBe(preAborted);

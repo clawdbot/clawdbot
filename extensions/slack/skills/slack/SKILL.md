@@ -17,4 +17,4 @@ Use the `message` tool with `channel: "slack"`. The tool schema lists the action
 - When multiple Slack accounts are configured, pass `accountId` rather than guessing.
 - Confirm destructive deletes when the target or intent is unclear.
 
-Slack formatting, mentions, tables, charts, and interactive controls are described automatically by the current `message` tool hints. Follow those hints instead of maintaining a second action or formatting catalog here.
+Slack formatting, mentions, and available actions are described automatically by the current `message` tool hints. Follow those hints instead of maintaining a second action catalog here.

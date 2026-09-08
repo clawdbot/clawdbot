@@ -2,9 +2,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
+import * as mediaCapabilityRegistry from "../media-understanding/provider-capability-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -413,44 +414,53 @@ describe("secrets runtime provider and media surfaces", () => {
   });
 
   it("resolves shared media model request refs when capability blocks are omitted", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        tools: {
-          media: {
-            models: [
-              {
-                provider: "openai",
-                model: "gpt-4o-mini-transcribe",
-                capabilities: ["audio"],
-                request: {
-                  auth: {
-                    mode: "authorization-bearer",
-                    token: {
-                      source: "env",
-                      provider: "default",
-                      id: "MEDIA_SHARED_AUDIO_TOKEN",
+    const registrySpy = vi
+      .spyOn(mediaCapabilityRegistry, "buildMediaUnderstandingCapabilityRegistry")
+      .mockImplementation(() => {
+        throw new Error("UNEXPECTED_MEDIA_CAPABILITY_DISCOVERY");
+      });
+    try {
+      const snapshot = await prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          tools: {
+            media: {
+              models: [
+                {
+                  provider: "openai",
+                  model: "gpt-4o-mini-transcribe",
+                  capabilities: ["audio"],
+                  request: {
+                    auth: {
+                      mode: "authorization-bearer",
+                      token: {
+                        source: "env",
+                        provider: "default",
+                        id: "MEDIA_SHARED_AUDIO_TOKEN",
+                      },
                     },
                   },
                 },
-              },
-            ],
+              ],
+            },
           },
+        }),
+        env: {
+          MEDIA_SHARED_AUDIO_TOKEN: "shared-audio-token",
         },
-      }),
-      env: {
-        MEDIA_SHARED_AUDIO_TOKEN: "shared-audio-token",
-      },
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => ({ version: 1, profiles: {} }),
-    });
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => ({ version: 1, profiles: {} }),
+      });
 
-    expect(snapshot.config.tools?.media?.models?.[0]?.request?.auth).toEqual({
-      mode: "authorization-bearer",
-      token: "shared-audio-token",
-    });
-    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
-      "tools.media.models.0.request.auth.token",
-    );
+      expect(snapshot.config.tools?.media?.models?.[0]?.request?.auth).toEqual({
+        mode: "authorization-bearer",
+        token: "shared-audio-token",
+      });
+      expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
+        "tools.media.models.0.request.auth.token",
+      );
+    } finally {
+      registrySpy.mockRestore();
+    }
   });
 
   it("treats shared media model request refs as inactive when their capabilities are disabled", async () => {

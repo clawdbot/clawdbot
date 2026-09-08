@@ -96,7 +96,7 @@ const MAX_SCANNABLE_TOTAL_BYTES_PER_PACKAGE = 64 * 1024 * 1024;
 const PACKAGE_SCAN_CONCURRENCY = 4;
 const CANONICAL_NPM_PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u;
 
-const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
+const RELEASE_2026_9_1_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
   ["@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts", 1],
   ["@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs", 1],
   ["@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts", 1],
@@ -108,6 +108,11 @@ const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>(
   ["@openclaw/raft:dangerous-exec:src/gateway.ts", 1],
   ["@openclaw/signal:dangerous-exec:src/daemon.ts", 1],
   ["@openclaw/voice-call:dangerous-exec:src/tunnel.ts", 1],
+]);
+
+const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
+  ...RELEASE_2026_9_1_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+  ["@openclaw/llama-cpp-provider:dangerous-exec:src/hardware.ts", 1],
 ]);
 
 type ReviewedReleaseLayout = {
@@ -199,7 +204,15 @@ const FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT = {
 };
 
 const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurityInventoryPolicy>([
-  ["release/2026.9.1", CURRENT_SECURITY_INVENTORY_POLICY],
+  [
+    "release/2026.9.1",
+    {
+      ...CURRENT_SECURITY_INVENTORY_POLICY,
+      requiredSourceFindingCounts: RELEASE_2026_9_1_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+    },
+  ],
+  ["release/2026.9.2", CURRENT_SECURITY_INVENTORY_POLICY],
+  ["release/2026.9.3", CURRENT_SECURITY_INVENTORY_POLICY],
   [
     "extended-stable/2026.6.33",
     {

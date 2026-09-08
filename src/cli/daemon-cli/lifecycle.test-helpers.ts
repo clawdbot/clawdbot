@@ -1,4 +1,5 @@
 type RestartPostCheckContext = {
+  activationAccepted: boolean;
   json: boolean;
   stdout: NodeJS.WritableStream;
   warnings: string[];

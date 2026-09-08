@@ -233,6 +233,22 @@ describe("handleAgentEnd", () => {
     });
   });
 
+  it("names storage errors in the terminal event and run log", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      { role: "assistant", stopReason: "error", errorMessage: "database is locked", content: [] },
+      { onAgentEvent },
+    );
+    await handleAgentEnd(ctx);
+    const error =
+      "⚠️ Agent run failed: the Gateway state database was busy (SQLite: database is locked). Retry; if it repeats, check Gateway storage health.";
+    expect(firstWarnMeta(ctx)).toMatchObject({ error, rawErrorPreview: "database is locked" });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: expect.objectContaining({ phase: "error", error }),
+    });
+  });
+
   it("suppresses raw assistant error messages in user-facing lifecycle events", async () => {
     // Canary text proves provider error strings are sanitized before lifecycle
     // events reach channel integrations.

@@ -8,7 +8,11 @@ import {
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import type { HeartbeatWakeSource } from "./heartbeat-wake.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 
 const HEARTBEAT_OUTCOME_SUMMARY_MAX_CHARS = 4_000;
 const HEARTBEAT_OUTCOME_REASON_MAX_CHARS = 1_000;
@@ -18,7 +22,10 @@ const HEARTBEAT_OUTCOME_TASK_NAME_MAX_CHARS = 200;
 const HEARTBEAT_OUTCOME_MAX_TASKS = 32;
 
 type HeartbeatOutcomeTable = OpenClawAgentKyselyDatabase["heartbeat_outcomes"];
-type HeartbeatOutcomeDatabase = Pick<OpenClawAgentKyselyDatabase, "heartbeat_outcomes">;
+type HeartbeatOutcomeDatabase = Pick<
+  OpenClawAgentKyselyDatabase,
+  "heartbeat_outcomes" | "session_nodes"
+>;
 type HeartbeatOutcomeRow = Selectable<HeartbeatOutcomeTable>;
 type HeartbeatOutcomeInsert = Insertable<HeartbeatOutcomeTable>;
 
@@ -128,6 +135,18 @@ export function persistHeartbeatOutcome(params: {
   runOpenClawAgentWriteTransaction(
     ({ db }) => {
       const agentDb = getNodeSqliteKysely<HeartbeatOutcomeDatabase>(db);
+      const owner = executeSqliteQueryTakeFirstSync(
+        db,
+        agentDb
+          .selectFrom("session_nodes")
+          .select("session_key")
+          .where("session_key", "=", params.sessionKey),
+      );
+      // Transient isolated runs may have no durable base row.
+      // Without one, no later user turn can claim an outcome.
+      if (!owner) {
+        return;
+      }
       executeSqliteQuerySync(
         db,
         agentDb

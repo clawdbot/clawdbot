@@ -1,15 +1,10 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { loadSettings } from "../../app/settings.ts";
 import type { SkillWorkshopRevisionAdmissionInput } from "../../app/skill-workshop-revision-admissions.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
-import {
-  areUiSessionKeysEquivalent,
-  normalizeAgentId,
-  resolveUiSelectedSessionAgentId,
-} from "../../lib/sessions/session-key.ts";
+import { areUiSessionKeysEquivalent, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 
 function findRevisionSessionRow(
   result: SessionsListResult | null,
@@ -63,30 +58,7 @@ export async function resolveSkillWorkshopRevisionTarget(
   if (!isCurrent()) {
     return null;
   }
-  const gateway = context.gateway.snapshot;
-  const gatewayHello = gateway.hello;
-  if (input.useCurrentChatForRevisions) {
-    const sessionKey = resolveSessionKey(loadSettings().sessionKey, gatewayHello).trim();
-    if (!sessionKey) {
-      return null;
-    }
-    const targetAgentId =
-      resolveUiSelectedSessionAgentId(
-        {
-          assistantAgentId: gateway.assistantAgentId,
-          agentsList: context.agents.state.agentsList,
-          hello: gatewayHello,
-          sessionKey,
-        },
-        sessionKey,
-      ) ?? input.proposalAgentId;
-    const sessions = await loadRevisionSessionsForAgent(context, targetAgentId);
-    if (!isCurrent()) {
-      return null;
-    }
-    return revisionTarget(sessionKey, targetAgentId, findRevisionSessionRow(sessions, sessionKey));
-  }
-
+  const gatewayHello = context.gateway.snapshot.hello;
   const agentId = normalizeAgentId(input.proposalOriginAgentId ?? input.proposalAgentId);
   const sessions = await loadRevisionSessionsForAgent(context, agentId);
   if (!isCurrent()) {

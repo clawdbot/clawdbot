@@ -182,56 +182,6 @@ describe("channel ingress queue", () => {
     });
   });
 
-  it("can bound pending scans and prune stale pending rows", async () => {
-    await withTempState(async (stateDir) => {
-      let clock = 1;
-      const queue = createTestIngressQueue<{ index: number }>(stateDir, { now: () => clock++ });
-
-      await queue.enqueue("0002", { index: 2 });
-      await queue.enqueue("0001", { index: 1 });
-      await queue.enqueue("0003", { index: 3 });
-
-      expect(
-        (await queue.listPending({ limit: 2, orderBy: "id" })).map((record) => record.id),
-      ).toEqual(["0001", "0002"]);
-      expect(await queue.prune({ pendingTtlMs: 3, pendingMaxEntries: 1, now: 7 })).toBe(2);
-      expect((await queue.listPending({ limit: "all" })).map((record) => record.id)).toEqual([
-        "0003",
-      ]);
-    });
-  });
-
-  it("does not prune protected rows while enforcing max-entry limits", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue<{ index: number }>(stateDir, { now: () => 10 });
-
-      await queue.enqueue("z", { index: 1 });
-      await queue.enqueue("a", { index: 2 });
-
-      expect(await queue.prune({ pendingMaxEntries: 1, protectIds: ["a"] })).toBe(0);
-      expect(
-        (await queue.listPending({ limit: "all", orderBy: "id" })).map((row) => row.id),
-      ).toEqual(["a", "z"]);
-    });
-  });
-
-  it("prunes max-entry overflow across bounded batches", async () => {
-    await withTempState(async (stateDir) => {
-      let clock = 1;
-      const queue = createTestIngressQueue<{ index: number }>(stateDir, { now: () => clock++ });
-
-      for (let index = 0; index < 520; index += 1) {
-        await queue.enqueue(String(index).padStart(4, "0"), { index });
-      }
-
-      expect(await queue.prune({ pendingMaxEntries: 2 })).toBe(518);
-      expect((await queue.listPending({ limit: "all" })).map((row) => row.id)).toEqual([
-        "0518",
-        "0519",
-      ]);
-    });
-  });
-
   it("claims, releases, and skips blocked lanes", async () => {
     await withTempState(async (stateDir) => {
       let clock = 1;

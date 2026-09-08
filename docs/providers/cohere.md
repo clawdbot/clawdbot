@@ -58,6 +58,8 @@ openclaw models list --provider cohere
 
 Onboarding only sets Cohere as the primary model when no primary model is already configured.
 
+Onboarding preserves your model entries and leaves generated catalog rows to discovery. With `models.mode: "replace"`, it also writes the built-in catalog because that mode skips discovery.
+
 ## Environment-only setup
 
 Make `COHERE_API_KEY` available to the Gateway process, then select the Cohere model:

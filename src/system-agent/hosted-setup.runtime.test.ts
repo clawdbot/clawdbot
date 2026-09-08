@@ -19,7 +19,6 @@ describe("SystemAgentChatEngine runtime", () => {
     const wizardRuns: string[] = [];
     const engine = new SystemAgentChatEngine({
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (channel: string, prompter: WizardPrompter) => {
         wizardRuns.push(channel);
@@ -92,7 +91,6 @@ describe("SystemAgentChatEngine runtime", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       appendAuditEntry,
       deps: { loadOverview: fakeOverviewLoader() },
     });
@@ -160,7 +158,6 @@ describe("SystemAgentChatEngine runtime", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       appendAuditEntry,
       deps: { loadOverview: fakeOverviewLoader() },
     });
@@ -207,7 +204,6 @@ describe("SystemAgentChatEngine runtime", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       appendAuditEntry,
       deps: { loadOverview: fakeOverviewLoader() },
     });
@@ -294,7 +290,6 @@ describe("SystemAgentChatEngine runtime", () => {
       surface: "gateway",
       verifiedInference,
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: {
         loadOverview: fakeOverviewLoader(),
         readConfigFileSnapshot: vi.fn(async () => {
@@ -327,7 +322,6 @@ describe("SystemAgentChatEngine runtime", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
     });
 
@@ -344,7 +338,6 @@ describe("SystemAgentChatEngine runtime", () => {
     const engine = new SystemAgentChatEngine({
       surface: "cli",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runGatewaySetupWizard: async (prompter) => {
         await prompter.text({ message: "Gateway token", sensitive: true });
@@ -381,7 +374,6 @@ describe("SystemAgentChatEngine runtime", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       appendAuditEntry,
       deps: { loadOverview: fakeOverviewLoader() },
     });
@@ -400,7 +392,6 @@ describe("SystemAgentChatEngine runtime", () => {
     const engine = new SystemAgentChatEngine({
       surface: "cli",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runSearchSetupWizard: async (prompter) => {
         await prompter.text({ message: "Provider API key", sensitive: true });
@@ -429,7 +420,6 @@ describe("SystemAgentChatEngine runtime", () => {
     });
     const engine = new SystemAgentChatEngine({
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
     });
 
@@ -447,7 +437,6 @@ describe("SystemAgentChatEngine runtime", () => {
     });
     const engine = new SystemAgentChatEngine({
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async () => {},
       appendAuditEntry,
@@ -504,7 +493,6 @@ describe("SystemAgentChatEngine runtime", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
     });
 
@@ -580,7 +568,6 @@ describe("SystemAgentChatEngine runtime", () => {
       surface: "gateway",
       verifiedInference,
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: {
         loadOverview: fakeOverviewLoader(),
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
@@ -655,7 +642,6 @@ describe("SystemAgentChatEngine runtime", () => {
       surface: "gateway",
       verifiedInference,
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: {
         loadOverview: fakeOverviewLoader(),
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
@@ -698,7 +684,6 @@ describe("hosted channel post-write hooks", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
     });
 

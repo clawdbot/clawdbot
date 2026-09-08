@@ -90,6 +90,7 @@ const hoisted = vi.hoisted(() => {
     return normalized || null;
   });
   const cleanupFailedAcpSpawnMock = vi.fn();
+  const closeRuntimeOnFailureMock = vi.fn();
   const registerSubagentRunMock = vi.fn();
   const countActiveRunsForSessionMock = vi.fn();
   const getSubagentRunByChildSessionKeyMock = vi.fn();
@@ -182,6 +183,7 @@ const hoisted = vi.hoisted(() => {
     areHeartbeatsEnabledMock,
     normalizeChannelIdMock,
     cleanupFailedAcpSpawnMock,
+    closeRuntimeOnFailureMock,
     registerSubagentRunMock,
     countActiveRunsForSessionMock,
     getSubagentRunByChildSessionKeyMock,
@@ -710,6 +712,7 @@ describe("spawnAcpDirect", () => {
     replaceSpawnConfig(createDefaultSpawnConfig());
     hoisted.areHeartbeatsEnabledMock.mockReset().mockReturnValue(true);
     hoisted.cleanupFailedAcpSpawnMock.mockReset().mockResolvedValue(undefined);
+    hoisted.closeRuntimeOnFailureMock.mockReset().mockResolvedValue(undefined);
     hoisted.registerSubagentRunMock.mockReset();
     hoisted.countActiveRunsForSessionMock.mockReset().mockReturnValue(0);
     hoisted.getSubagentRunByChildSessionKeyMock.mockReset().mockReturnValue(null);
@@ -751,6 +754,7 @@ describe("spawnAcpDirect", () => {
       const runtimeSessionName = `${args.sessionKey}:runtime`;
       const cwd = typeof args.cwd === "string" ? args.cwd : undefined;
       return {
+        closeRuntimeOnFailure: hoisted.closeRuntimeOnFailureMock,
         runtime: {
           close: vi.fn().mockResolvedValue(undefined),
         },
@@ -3807,11 +3811,8 @@ describe("spawnAcpDirect", () => {
     expect(relayHandle.notifyStarted).not.toHaveBeenCalled();
     expect(hoisted.cleanupFailedAcpSpawnMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        runtimeCloseHandle: expect.objectContaining({
-          handle: expect.objectContaining({
-            backend: "acpx",
-          }),
-        }),
+        sessionEntry: expect.objectContaining({ sessionId: expect.any(String) }),
+        closeRuntimeOnFailure: hoisted.closeRuntimeOnFailureMock,
       }),
     );
   });

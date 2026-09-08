@@ -4,12 +4,13 @@
  * observability decisions shared across embedded-agent hot paths.
  */
 import type { TSchema } from "typebox";
-import type { MessagePresentationAction } from "../../interactive/payload.js";
+import type { FailoverReason as AgentRuntimeFailoverReason } from "../../../packages/gateway-protocol/src/failover-reasons.js";
 import type {
   ModelApi,
   ProviderModelRouteRuntimePolicy,
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
+import type { ReplyPayload as AgentRuntimeReplyPayload } from "../../shared/reply-payload.types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { ProviderModelAuthSourceClassification } from "../provider-model-auth-source-plan.js";
 import type { AgentTool } from "../runtime/index.js";
@@ -32,25 +33,6 @@ type AgentRuntimeThinkLevel =
 type AgentRuntimePromptMode = "full" | "minimal" | "none";
 /** Trigger source that can alter provider system prompt contributions. */
 type AgentRuntimePromptTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
-
-/** Normalized failure reason used by model fallback classification. */
-type AgentRuntimeFailoverReason =
-  | "auth"
-  | "auth_permanent"
-  | "format"
-  | "rate_limit"
-  | "overloaded"
-  | "billing"
-  | "server_error"
-  | "timeout"
-  | "tls_certificate"
-  | "context_overflow"
-  | "model_not_found"
-  | "session_expired"
-  | "empty_response"
-  | "no_error_details"
-  | "unclassified"
-  | "unknown";
 
 /** Provider model descriptor consumed by runtime-plan hooks. */
 type AgentRuntimeModel = {
@@ -98,194 +80,6 @@ type AgentRuntimeProviderHandle = {
 type PreparedAgentRuntimeProviderHandle = AgentRuntimeProviderHandle & {
   modelId: string | null;
   prepared: true;
-};
-
-type AgentRuntimeInteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
-
-/** Portable action control exposed to agent runtime reply payloads. */
-type AgentRuntimeMessagePresentationButton = {
-  /** User-visible button label. */
-  label: string;
-  /** Typed action sent when pressed. */
-  action?: MessagePresentationAction;
-  /** @deprecated Use action. */
-  value?: string;
-  /** @deprecated Use an action with type "url". */
-  url?: string;
-  /** @deprecated Use an action with type "web-app". */
-  webApp?: { url: string };
-  /** @deprecated Use an action with type "web-app". */
-  web_app?: { url: string };
-  /** Higher values are kept first when channel action limits require dropping controls. */
-  priority?: number;
-  /** Disabled action hint; channels without disabled-state support render fallback text. */
-  disabled?: boolean;
-  /** Optional visual style hint for renderers that support styled actions. */
-  style?: AgentRuntimeInteractiveButtonStyle;
-};
-
-/** Portable select/menu option exposed to agent runtime reply payloads. */
-type AgentRuntimeMessagePresentationOption = {
-  /** User-visible option label. */
-  label: string;
-  /** Typed action sent when selected. */
-  action?: Extract<MessagePresentationAction, { type: "command" | "callback" | "model-picker" }>;
-  /** @deprecated Use action. */
-  value?: string;
-};
-
-type AgentRuntimeLegacyInteractiveReply = {
-  blocks: Array<
-    | { type: "text"; text: string }
-    | { type: "buttons"; buttons: AgentRuntimeMessagePresentationButton[] }
-    | {
-        type: "select";
-        placeholder?: string;
-        options: AgentRuntimeMessagePresentationOption[];
-      }
-  >;
-};
-
-/** Portable reply presentation severity/style hint. */
-type AgentRuntimeMessagePresentationTone = "info" | "success" | "warning" | "danger" | "neutral";
-
-type AgentRuntimeMessagePresentationChartBlock =
-  | {
-      type: "chart";
-      chartType: "pie";
-      title: string;
-      segments: Array<{ label: string; value: number }>;
-    }
-  | {
-      type: "chart";
-      chartType: "bar" | "area" | "line";
-      title: string;
-      categories: string[];
-      series: Array<{ name: string; values: number[] }>;
-      xLabel?: string;
-      yLabel?: string;
-    };
-
-type AgentRuntimeMessagePresentationTableCell = string | number;
-
-type AgentRuntimeMessagePresentationTableBlock = {
-  type: "table";
-  caption: string;
-  headers: string[];
-  rows: AgentRuntimeMessagePresentationTableCell[][];
-  rowHeaderColumnIndex?: number;
-};
-
-/** Portable structured reply block rendered or downgraded by channels. */
-type AgentRuntimeMessagePresentationBlock =
-  | {
-      type: "text";
-      text: string;
-    }
-  | {
-      type: "context";
-      text: string;
-    }
-  | {
-      type: "divider";
-    }
-  | {
-      type: "buttons";
-      buttons: AgentRuntimeMessagePresentationButton[];
-    }
-  | {
-      type: "select";
-      placeholder?: string;
-      options: AgentRuntimeMessagePresentationOption[];
-    }
-  | AgentRuntimeMessagePresentationChartBlock
-  | AgentRuntimeMessagePresentationTableBlock;
-
-/** Portable structured reply presentation for channel adapters. */
-type AgentRuntimeMessagePresentation = {
-  /** Optional short heading rendered before blocks when supported. */
-  title?: string;
-  /** Optional severity/status tone for renderers that support toned presentations. */
-  tone?: AgentRuntimeMessagePresentationTone;
-  /** Ordered portable blocks rendered or downgraded by channel adapters. */
-  blocks: AgentRuntimeMessagePresentationBlock[];
-};
-
-/** Delivery pin options attached to runtime reply payloads. */
-type AgentRuntimeReplyPayloadDeliveryPin = {
-  enabled: boolean;
-  notify?: boolean;
-  required?: boolean;
-};
-
-/** Delivery instructions attached to runtime reply payloads. */
-type AgentRuntimeReplyPayloadDelivery = {
-  pin?: boolean | AgentRuntimeReplyPayloadDeliveryPin;
-};
-
-type AgentRuntimeReplyPayloadLocation = {
-  latitude: number;
-  longitude: number;
-  accuracy?: number;
-  name?: string;
-  address?: string;
-};
-
-/** Portable reply payload emitted by agent runtimes before channel rendering. */
-type AgentRuntimeReplyPayload = {
-  text?: string;
-  fallbackText?: {
-    text: string;
-    replacesPayloadIndex?: number;
-  };
-  mediaUrl?: string;
-  mediaUrls?: string[];
-  attachments?: Array<{
-    type?: "image" | "audio" | "video" | "file";
-    path?: string;
-    url?: string;
-    mediaUrl?: string;
-    filePath?: string;
-    mimeType?: string;
-    name?: string;
-    sizeBytes?: number;
-    durationMs?: number;
-    width?: number;
-    height?: number;
-    trustedLocalMedia?: boolean;
-  }>;
-  trustedLocalMedia?: boolean;
-  sensitiveMedia?: boolean;
-  presentation?: AgentRuntimeMessagePresentation;
-  presentationTextMode?: "fallback";
-  delivery?: AgentRuntimeReplyPayloadDelivery;
-  /**
-   * @deprecated Use presentation.
-   */
-  interactive?: AgentRuntimeLegacyInteractiveReply;
-  btw?: {
-    question: string;
-  };
-  replyToId?: string;
-  replyToTag?: boolean;
-  replyToCurrent?: boolean;
-  audioAsVoice?: boolean;
-  videoAsNote?: boolean;
-  location?: AgentRuntimeReplyPayloadLocation;
-  spokenText?: string;
-  ttsSupplement?: {
-    spokenText: string;
-    visibleTextAlreadyDelivered?: boolean;
-  };
-  isError?: boolean;
-  isReasoning?: boolean;
-  /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
-  isCommentary?: boolean;
-  isReasoningSnapshot?: boolean;
-  isCompactionNotice?: boolean;
-  isFallbackNotice?: boolean;
-  isStatusNotice?: boolean;
-  channelData?: Record<string, unknown>;
 };
 
 /** Stable section IDs for provider system prompt overrides. */

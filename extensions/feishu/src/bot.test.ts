@@ -1,4 +1,5 @@
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 // Feishu tests cover bot plugin behavior.
 import type {
@@ -21,7 +22,7 @@ import {
 } from "./bot.test-support.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
-import { setFeishuRuntime } from "./runtime.js";
+import { getFeishuRuntime, setFeishuRuntime } from "./runtime.js";
 import { setFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
 
 const failedFinalReceipt = {
@@ -1852,6 +1853,111 @@ describe("handleFeishuMessage command authorization", () => {
     await dispatchMessage({ cfg, event: event("msg-loop-2"), botOpenId: "ou-loop-self" });
 
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not charge an abandoned bot turn twice against the shared conversation budget", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    const cfg = createFeishuTestConfig(
+      {
+        allowBots: true,
+        groupPolicy: "open",
+        groups: { "oc-burst-retry": { requireMention: false } },
+      },
+      {
+        channels: {
+          defaults: {
+            botLoopProtection: {
+              maxEventsPerWindow: 100,
+              maxConversationBotEvents: 4,
+              windowSeconds: 60,
+              cooldownSeconds: 60,
+            },
+          },
+        },
+      },
+    );
+    currentRuntimeConfig = cfg;
+    const completed: string[] = [];
+    let failBeforeAdoption = true;
+    mockDispatchReplyFromConfig.mockImplementation(
+      async (params: {
+        ctx: { MessageSid: string };
+        replyOptions?: { turnAdoptionLifecycle?: { onAdopted: () => void | Promise<void> } };
+      }) => {
+        if (params.ctx.MessageSid === "burst-retry-b1" && failBeforeAdoption) {
+          failBeforeAdoption = false;
+          throw new Error("transient pre-adoption failure");
+        }
+        await params.replyOptions?.turnAdoptionLifecycle?.onAdopted();
+        completed.push(params.ctx.MessageSid);
+        return { queuedFinal: false, counts: { final: 1 } };
+      },
+    );
+    const core = getFeishuRuntime().channel;
+    let drain = async () => {};
+    const channelRuntime: PluginRuntime["channel"] = {
+      ...core,
+      commands: { ...core.commands, isControlCommandMessage: () => false },
+      debounce: {
+        resolveInboundDebounceMs: () => 0,
+        createInboundDebouncer: (options) => {
+          const debouncer = createInboundDebouncer(options);
+          drain = debouncer.drain;
+          return debouncer;
+        },
+      },
+    };
+    const abandoned = vi.fn();
+    const handler = createFeishuMessageReceiveHandler({
+      cfg,
+      channelRuntime,
+      accountId: "default",
+      runtime: createRuntimeEnv(),
+      chatHistories: new Map(),
+      handleMessage: handleFeishuMessage,
+      getBotOpenId: () => "ou-burst-self",
+      resolveDebounceText: () => "ping",
+      hasProcessedMessage: async () => false,
+      resolveIngressLifecycle: () => ({
+        abortSignal: new AbortController().signal,
+        onAdopted: async () => {},
+        onDeferred: () => {},
+        onAdoptionFinalizing: () => {},
+        onAbandoned: abandoned,
+      }),
+    });
+    const receive = async (id: string, sender: string) => {
+      await handler(
+        createFeishuTestEvent({
+          messageId: `burst-retry-${id}`,
+          senderOpenId: sender,
+          senderType: "bot",
+          chatId: "oc-burst-retry",
+          chatType: "group",
+          text: `@_openclaw ${id}`,
+          message: {
+            mentions: [{ key: "@_openclaw", id: { open_id: "ou-burst-self" }, name: "OpenClaw" }],
+          },
+        }),
+      );
+      await drain();
+    };
+    await receive("a1", "ou-burst-a");
+    await receive("a2", "ou-burst-a");
+    await receive("b1", "ou-burst-b");
+    expect(completed).toEqual(["burst-retry-a1", "burst-retry-a2"]);
+    expect(abandoned).toHaveBeenCalled();
+    // The real receive handler releases its logical claim on abandonment.
+    await receive("b1", "ou-burst-b");
+    await receive("b2", "ou-burst-b");
+    expect(completed).toEqual([
+      "burst-retry-a1",
+      "burst-retry-a2",
+      "burst-retry-b1",
+      "burst-retry-b2",
+    ]);
+    await receive("b3", "ou-burst-b");
+    expect(completed).toHaveLength(4);
   });
 
   it("keeps Feishu group policy bound to the chat while preserving speaker identity", async () => {
@@ -3743,11 +3849,13 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
 
     const call = mockCallArg<{
       event?: FeishuMessageEvent;
+      preparedContent?: string;
       messageDedupeKey?: string;
     }>(handleMessage, 0, 0);
-    expect(call.event?.message.content).toBe(JSON.stringify({ text: "first\nsecond" }));
+    expect(call.event?.message.content).toBe(last.message.content);
+    expect(call.preparedContent).toBe("first\nsecond");
     expect(call.messageDedupeKey).toBe(resolveFeishuMessageDedupeKey(last));
-    expect(resolveFeishuMessageDedupeKey(call.event as FeishuMessageEvent)).not.toBe(
+    expect(resolveFeishuMessageDedupeKey(call.event as FeishuMessageEvent)).toBe(
       call.messageDedupeKey,
     );
   });

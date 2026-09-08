@@ -363,9 +363,9 @@ vi.mock("../agents/model-auth.js", () => ({
     mocks.resolveApiKeyForProviderCore as typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore,
 }));
 
-vi.mock("../agents/auth-profiles/store.js", () => ({
+vi.mock("../agents/auth-profiles/store-runtime.js", () => ({
   updateAuthProfileStoreWithLock:
-    mocks.updateAuthProfileStoreWithLock as typeof import("../agents/auth-profiles/store.js").updateAuthProfileStoreWithLock,
+    mocks.updateAuthProfileStoreWithLock as typeof import("../agents/auth-profiles/store-runtime.js").updateAuthProfileStoreWithLock,
 }));
 
 vi.mock("../agents/memory-search.js", () => ({

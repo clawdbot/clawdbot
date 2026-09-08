@@ -223,49 +223,71 @@ function extractChatHistoryCanvasPreview(message: Record<string, unknown>) {
   return undefined;
 }
 
-function appendCanvasBlockToAssistantHistoryMessage(params: {
-  message: unknown;
-  preview: ReturnType<typeof extractCanvasFromText>;
+type ChatCanvasPreview = {
+  preview: NonNullable<ReturnType<typeof extractCanvasFromText>>;
   rawText: string | null;
-}): unknown {
-  const preview = params.preview;
-  if (!preview || !params.message || typeof params.message !== "object") {
-    return params.message;
+};
+
+export type ChatCanvasBlock = ChatCanvasPreview & { type: "canvas" };
+
+export function extractChatToolResultCanvasPreview(
+  message: unknown,
+): ChatCanvasPreview | undefined {
+  const entry = readRecord(message);
+  if (!entry) {
+    return undefined;
   }
-  const entry = params.message as Record<string, unknown>;
-  const baseContent = Array.isArray(entry.content)
-    ? [...entry.content]
-    : typeof entry.content === "string"
-      ? [{ type: "text", text: entry.content }]
-      : typeof entry.text === "string"
-        ? [{ type: "text", text: entry.text }]
-        : [];
-  const alreadyPresent = baseContent.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const typed = block as { type?: unknown; preview?: unknown };
-    return (
-      typed.type === "canvas" &&
-      typed.preview &&
-      typeof typed.preview === "object" &&
-      (((typed.preview as { viewId?: unknown }).viewId &&
-        (typed.preview as { viewId?: unknown }).viewId === preview.viewId) ||
-        ((typed.preview as { url?: unknown }).url &&
-          (typed.preview as { url?: unknown }).url === preview.url))
-    );
-  });
-  if (!alreadyPresent) {
-    baseContent.push({
-      type: "canvas",
-      preview,
-      rawText: params.rawText,
+  const detailsPreview = extractChatHistoryCanvasPreview(entry);
+  const text = detailsPreview ? undefined : extractChatHistoryBlockText(entry);
+  const preview = detailsPreview ?? extractCanvasFromText(text);
+  return preview ? { preview, rawText: detailsPreview ? null : (text ?? null) } : undefined;
+}
+
+export function appendChatCanvasBlocks<T>(
+  content: readonly T[],
+  previews: readonly ChatCanvasPreview[],
+): Array<T | ChatCanvasBlock> {
+  const baseContent: Array<T | ChatCanvasBlock> = [...content];
+  for (const { preview, rawText } of previews) {
+    // Only retained blocks participate: rejecting an id collision must not
+    // reserve that preview's different URL for subsequent previews.
+    const alreadyPresent = baseContent.some((block) => {
+      if (!block || typeof block !== "object") {
+        return false;
+      }
+      const typed = block as { type?: unknown; preview?: unknown };
+      return (
+        typed.type === "canvas" &&
+        typed.preview &&
+        typeof typed.preview === "object" &&
+        (((typed.preview as { viewId?: unknown }).viewId &&
+          (typed.preview as { viewId?: unknown }).viewId === preview.viewId) ||
+          ((typed.preview as { url?: unknown }).url &&
+            (typed.preview as { url?: unknown }).url === preview.url))
+      );
     });
+    if (!alreadyPresent) {
+      baseContent.push({ type: "canvas", preview, rawText });
+    }
   }
-  return {
-    ...entry,
-    content: baseContent,
-  };
+  return baseContent;
+}
+
+export function appendChatCanvasBlocksToMessage(
+  message: Record<string, unknown> | undefined,
+  previews: readonly ChatCanvasPreview[],
+): Record<string, unknown> | undefined {
+  if (!message || previews.length === 0) {
+    return message;
+  }
+  const content = Array.isArray(message.content)
+    ? message.content
+    : typeof message.content === "string"
+      ? [{ type: "text", text: message.content }]
+      : typeof message.text === "string"
+        ? [{ type: "text", text: message.text }]
+        : [];
+  return { ...message, content: appendChatCanvasBlocks(content, previews) };
 }
 
 function messageContainsToolHistoryContent(message: unknown): boolean {
@@ -300,10 +322,7 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
   let changed = false;
   let lastAssistantIndex = -1;
   let lastRenderableAssistantIndex = -1;
-  const pending: Array<{
-    preview: NonNullable<ReturnType<typeof extractCanvasFromText>>;
-    rawText: string | null;
-  }> = [];
+  const pending: ChatCanvasPreview[] = [];
   for (let index = 0; index < next.length; index++) {
     const message = next[index];
     if (!message || typeof message !== "object") {
@@ -316,15 +335,7 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
       if (!messageContainsToolHistoryContent(entry)) {
         lastRenderableAssistantIndex = index;
         if (pending.length > 0) {
-          let target = next[index];
-          for (const item of pending) {
-            target = appendCanvasBlockToAssistantHistoryMessage({
-              message: target,
-              preview: item.preview,
-              rawText: item.rawText,
-            });
-          }
-          next[index] = target;
+          next[index] = appendChatCanvasBlocksToMessage(entry, pending);
           pending.length = 0;
           changed = true;
         }
@@ -334,36 +345,17 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
     if (!messageContainsToolHistoryContent(entry)) {
       continue;
     }
-    const toolName =
-      typeof entry.toolName === "string"
-        ? entry.toolName
-        : typeof entry.tool_name === "string"
-          ? entry.tool_name
-          : undefined;
-    const text = extractChatHistoryBlockText(entry);
-    const detailsPreview = extractChatHistoryCanvasPreview(entry);
-    const preview = detailsPreview ?? extractCanvasFromText(text, toolName);
+    const preview = extractChatToolResultCanvasPreview(entry);
     if (!preview) {
       continue;
     }
-    pending.push({
-      preview,
-      rawText: detailsPreview ? null : (text ?? null),
-    });
+    pending.push(preview);
   }
   if (pending.length > 0) {
     const targetIndex =
       lastRenderableAssistantIndex >= 0 ? lastRenderableAssistantIndex : lastAssistantIndex;
     if (targetIndex >= 0) {
-      let target = next[targetIndex];
-      for (const item of pending) {
-        target = appendCanvasBlockToAssistantHistoryMessage({
-          message: target,
-          preview: item.preview,
-          rawText: item.rawText,
-        });
-      }
-      next[targetIndex] = target;
+      next[targetIndex] = appendChatCanvasBlocksToMessage(readRecord(next[targetIndex]), pending);
       changed = true;
     }
   }

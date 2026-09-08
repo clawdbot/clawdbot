@@ -132,6 +132,17 @@ describe("managed worktree path state migrations", () => {
       expect(result.changes).toContain(
         "Canonicalized 2 managed worktree paths for symlinked state directories",
       );
+      expect(
+        result.stepReceipts.find((receipt) => receipt.id === "managed-worktrees"),
+      ).toMatchObject({
+        source: [
+          { kind: "sqlite", path: database.path },
+          ...[live.id, removed.id]
+            .toSorted()
+            .map((id) => ({ kind: "owner", id: `core:managed-worktree:${id}` })),
+        ],
+        outcome: "completed",
+      });
       expect(getRegistryWorktree(env, live.id)?.path).toBe(live.path);
       expect(getRegistryWorktree(env, removed.id)?.path).toBe(
         path.join(canonicalRoot, live.repoFingerprint, removed.name),

@@ -1,5 +1,6 @@
 // Shared outbound target test fixtures provide deterministic channel plugins,
 // target parsing, and session-route behavior.
+import { parseTelegramTargetForTest } from "../../../test/helpers/infra/telegram-targets.js";
 import type {
   ChannelMessagingAdapter,
   ChannelOutboundAdapter,
@@ -57,31 +58,6 @@ function createGenericResolveTarget(
     }
     return { ok: true, to: normalized };
   };
-}
-
-export function parseTelegramTargetForTest(raw: string): {
-  chatId: string;
-  messageThreadId?: number;
-  chatType: "direct" | "group" | "unknown";
-} {
-  const trimmed = raw.trim();
-  const withoutPrefix = trimmed.replace(/^telegram:/i, "").trim();
-  const topicMatch = withoutPrefix.match(/^(.*):topic:(\d+)$/i);
-  const colonMatch = withoutPrefix.match(/^(-?\d+):(\d+)$/i);
-  const chatId = topicMatch?.[1]?.trim() || colonMatch?.[1] || withoutPrefix;
-  const messageThreadId = topicMatch?.[2]
-    ? Number.parseInt(topicMatch[2], 10)
-    : colonMatch?.[2]
-      ? Number.parseInt(colonMatch[2], 10)
-      : undefined;
-  const numericId = chatId.startsWith("-") ? chatId.slice(1) : chatId;
-  const chatType =
-    /^\d+$/.test(numericId) && !chatId.startsWith("-100")
-      ? "direct"
-      : chatId.startsWith("-")
-        ? "group"
-        : "unknown";
-  return { chatId, messageThreadId, chatType };
 }
 
 export const telegramMessagingForTest: ChannelMessagingAdapter = {

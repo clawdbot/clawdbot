@@ -1,6 +1,7 @@
 // Detects Windows console/OEM code pages and decodes console output encodings.
 import { spawnSync } from "node:child_process";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import { getWindowsCmdExePath, queryWindowsRegistryValue } from "./windows-install-roots.js";
 
 const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
@@ -93,6 +94,7 @@ export function resolveWindowsConsoleEncoding(): string | null {
   }
   try {
     const result = spawnSync(getWindowsCmdExePath(), ["/d", "/s", "/c", "chcp"], {
+      env: resolveDiagnosticProcessEnv(),
       windowsHide: true,
       encoding: "utf8",
       killSignal: "SIGKILL",
@@ -122,6 +124,7 @@ function resolveWindowsSystemEncoding(): string | null {
       "powershell.exe",
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Text.Encoding]::Default.CodePage"],
       {
+        env: resolveDiagnosticProcessEnv(),
         windowsHide: true,
         encoding: "utf8",
         killSignal: "SIGKILL",

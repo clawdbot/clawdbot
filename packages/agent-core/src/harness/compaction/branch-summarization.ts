@@ -131,18 +131,18 @@ export function prepareBranchEntries(
       // preserve older branch context better than dropping the whole prefix.
       if (entry.type === "compaction" || entry.type === "branch_summary") {
         if (totalTokens < tokenBudget * 0.9) {
-          messages.unshift(message);
+          messages.push(message);
           totalTokens += tokens;
         }
       }
       break;
     }
 
-    messages.unshift(message);
+    messages.push(message);
     totalTokens += tokens;
   }
 
-  return { messages, fileOps, totalTokens };
+  return { messages: messages.toReversed(), fileOps, totalTokens };
 }
 
 const BRANCH_SUMMARY_PREAMBLE = `The user explored a different conversation branch before returning here.

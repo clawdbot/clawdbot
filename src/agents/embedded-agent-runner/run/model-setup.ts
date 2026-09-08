@@ -43,6 +43,7 @@ function prepareNativeSessionRuntime(
       config: runParams.config,
       agentId: admission.agentId,
       sessionKey: admission.sessionKey,
+      storePath: admission.storePath,
       sessionEntry: admission.entry,
       assertCurrent: () => {
         runParams.abortSignal?.throwIfAborted();

@@ -38,6 +38,8 @@ export type ChatTranscriptSession = {
     header?: TranscriptHeader | null,
   ): TemplateResult;
   syncMessageRows(messageRowKeysById: ReadonlyMap<string, string>): void;
+  /** Returns the sampled loaded message at or preceding the viewport midpoint. */
+  activeMessageId(messageIds: readonly string[]): string | null;
   revealMessage(messageId: string): boolean;
   setContentReady(ready: boolean): void;
   handleFocusIn(event: FocusEvent): void;

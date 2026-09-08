@@ -9,15 +9,22 @@ import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveHookMappings } from "../hooks-mapping.js";
 import { createHooksConfig } from "../hooks-test-helpers.js";
 import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";
+import type { HookAgentCompletion, HookAgentDispatchResult } from "../hooks.types.js";
+import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import { createHookRequest, createResponse } from "../server-http.test-harness.js";
-import {
-  createHooksRequestHandler,
-  type HookAgentDispatchResult,
-} from "./hooks-request-handler.js";
+import { createHooksRequestHandler } from "./hooks-request-handler.js";
 
 const { readJsonBodyMock } = vi.hoisted(() => ({
   readJsonBodyMock: vi.fn(),
 }));
+
+function completedDispatch(runId: string): HookAgentDispatchResult {
+  return {
+    ok: true,
+    runId,
+    completion: Promise.resolve({ status: "ok", replyDisposition: "empty" }),
+  };
+}
 
 vi.mock("../hooks.js", async () => {
   const actual = await vi.importActual<typeof import("../hooks.js")>("../hooks.js");
@@ -57,10 +64,7 @@ function createFanOutHandler(params?: {
   );
   const dispatchAgentHook = vi.fn(
     params?.dispatchAgentHook ??
-      ((value: HookAgentDispatchPayload) => ({
-        ok: true as const,
-        runId: `run:${value.sessionKey}`,
-      })),
+      ((value: HookAgentDispatchPayload) => completedDispatch(`run:${value.sessionKey}`)),
   );
   const logHooks = {
     warn: vi.fn(),
@@ -152,7 +156,7 @@ describe("hook fan-out dispatch", () => {
         if (failM2 && value.sessionKey === "hook:gmail:m2") {
           return { ok: false as const, statusCode: 502 as const, error: "admission failed" };
         }
-        return { ok: true as const, runId: `run:${value.sessionKey}` };
+        return completedDispatch(`run:${value.sessionKey}`);
       },
     });
     const payload = { messages: [gmailMessage("m1"), gmailMessage("m2"), gmailMessage("m3")] };
@@ -185,7 +189,7 @@ describe("hook fan-out dispatch", () => {
       dispatchAgentHook: (value) =>
         value.sessionKey === "hook:gmail:slow"
           ? hang
-          : { ok: true as const, runId: `run:${value.sessionKey}` },
+          : completedDispatch(`run:${value.sessionKey}`),
     });
     const payload = { messages: [gmailMessage("fast"), gmailMessage("slow")] };
 
@@ -197,7 +201,7 @@ describe("hook fan-out dispatch", () => {
 
     // The pending admission settles in the background; the redelivered batch
     // replays both items without a duplicate dispatch.
-    releaseHang({ ok: true, runId: "run:hook:gmail:slow" });
+    releaseHang(completedDispatch("run:hook:gmail:slow"));
     const retryResponse = await postGmailPayload(handler, payload);
     expect(retryResponse.res.statusCode).toBe(200);
     expect(dispatchAgentHook).toHaveBeenCalledTimes(2);
@@ -209,7 +213,7 @@ describe("hook fan-out dispatch", () => {
     // both instead of dispatching a third run.
     let runSeq = 0;
     const { handler, dispatchAgentHook } = createFanOutHandler({
-      dispatchAgentHook: () => ({ ok: true as const, runId: `run-${runSeq++}` }),
+      dispatchAgentHook: () => completedDispatch(`run-${runSeq++}`),
     });
     const payload = { messages: [gmailMessage("twin"), gmailMessage("twin")] };
 
@@ -380,5 +384,252 @@ describe("hook fan-out dispatch", () => {
     const response = createResponse();
     await handler(req, response.res);
     expect(readJsonBodyMock).toHaveBeenLastCalledWith(expect.anything(), canonical.maxBodyBytes);
+  });
+
+  test("waits for direct agent completion when explicitly requested", async () => {
+    let resolveCompletion!: (value: {
+      status: "ok";
+      replyDisposition: "silent";
+      delivered: boolean;
+      deliveryAttempted: boolean;
+    }) => void;
+    const completion = new Promise<{
+      status: "ok";
+      replyDisposition: "silent";
+      delivered: boolean;
+      deliveryAttempted: boolean;
+    }>((resolve) => {
+      resolveCompletion = resolve;
+    });
+    const { handler, dispatchAgentHook } = createFanOutHandler({
+      hooksConfig: createHooksConfig(),
+      dispatchAgentHook: () => ({ ok: true, runId: "run:direct", completion }),
+    });
+    readJsonBodyMock.mockResolvedValueOnce({
+      ok: true,
+      value: { message: "direct", waitForCompletion: true },
+    });
+    const req = createHookRequest({ url: "/hooks/agent" });
+    const response = createResponse();
+
+    const handling = handler(req, response.res);
+    await vi.waitFor(() => expect(dispatchAgentHook).toHaveBeenCalledTimes(1));
+    expect(response.getBody()).toBe("");
+
+    resolveCompletion({
+      status: "ok",
+      replyDisposition: "silent",
+      delivered: true,
+      deliveryAttempted: true,
+    });
+    await handling;
+    expect(JSON.parse(response.getBody())).toEqual({
+      ok: true,
+      runId: "run:direct",
+      completion: {
+        status: "ok",
+        replyDisposition: "silent",
+        delivered: true,
+        deliveryAttempted: true,
+      },
+    });
+  });
+
+  test("keeps direct completion observation outside dispatch identity", async () => {
+    let resolveAdmission!: (value: HookAgentDispatchResult) => void;
+    const admission = new Promise<HookAgentDispatchResult>((resolve) => {
+      resolveAdmission = resolve;
+    });
+    let resolveCompletion!: (value: {
+      status: "ok";
+      replyDisposition: "silent";
+      delivered: boolean;
+    }) => void;
+    const completion = new Promise<{
+      status: "ok";
+      replyDisposition: "silent";
+      delivered: boolean;
+    }>((resolve) => {
+      resolveCompletion = resolve;
+    });
+    const { handler, dispatchAgentHook } = createFanOutHandler({
+      hooksConfig: createHooksConfig(),
+      dispatchAgentHook: () => admission,
+    });
+    const startRequest = (waitForCompletion: boolean) => {
+      readJsonBodyMock.mockResolvedValueOnce({
+        ok: true,
+        value: {
+          message: "direct",
+          idempotencyKey: "shared-request",
+          waitForCompletion,
+        },
+      });
+      const req = createHookRequest({ url: "/hooks/agent" });
+      const response = createResponse();
+      return { response, handling: handler(req, response.res) };
+    };
+
+    const admittedOnly = startRequest(false);
+    const waiting = startRequest(true);
+    await vi.waitFor(() => expect(dispatchAgentHook).toHaveBeenCalledTimes(1));
+
+    resolveAdmission({ ok: true, runId: "run:shared", completion });
+    await admittedOnly.handling;
+    expect(JSON.parse(admittedOnly.response.getBody())).toEqual({
+      ok: true,
+      runId: "run:shared",
+    });
+    expect(waiting.response.getBody()).toBe("");
+
+    resolveCompletion({ status: "ok", replyDisposition: "silent", delivered: true });
+    await waiting.handling;
+    expect(JSON.parse(waiting.response.getBody())).toEqual({
+      ok: true,
+      runId: "run:shared",
+      completion: { status: "ok", replyDisposition: "silent", delivered: true },
+    });
+
+    const replay = startRequest(true);
+    await replay.handling;
+    expect(JSON.parse(replay.response.getBody())).toEqual({
+      ok: true,
+      runId: "run:shared",
+      completion: { status: "ok", replyDisposition: "silent", delivered: true },
+    });
+    expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps an active admitted replay owner under terminal cache pressure", async () => {
+    let resolveActiveCompletion!: (value: HookAgentCompletion) => void;
+    const activeCompletion = new Promise<HookAgentCompletion>((resolve) => {
+      resolveActiveCompletion = resolve;
+    });
+    let activeDispatches = 0;
+    const { handler, dispatchAgentHook } = createFanOutHandler({
+      hooksConfig: createHooksConfig(),
+      dispatchAgentHook: (value) => {
+        if (value.idempotencyKey === "active-owner") {
+          activeDispatches += 1;
+          return { ok: true, runId: "run:active", completion: activeCompletion };
+        }
+        return completedDispatch(`run:${value.idempotencyKey}`);
+      },
+    });
+    const startRequest = (idempotencyKey: string, waitForCompletion = false) => {
+      readJsonBodyMock.mockResolvedValueOnce({
+        ok: true,
+        value: { message: "direct", idempotencyKey, waitForCompletion },
+      });
+      const req = createHookRequest({ url: "/hooks/agent" });
+      const response = createResponse();
+      return { response, handling: handler(req, response.res) };
+    };
+
+    await startRequest("active-owner").handling;
+
+    for (let index = 0; index < DEDUPE_MAX; index += 1) {
+      await startRequest(`pressure-${index}`).handling;
+    }
+    await Promise.resolve();
+
+    const replay = startRequest("active-owner", true);
+    await Promise.resolve();
+    expect(replay.response.getBody()).toBe("");
+    expect(activeDispatches).toBe(1);
+    resolveActiveCompletion({ status: "ok", replyDisposition: "silent" });
+    await replay.handling;
+
+    expect(JSON.parse(replay.response.getBody())).toEqual({
+      ok: true,
+      runId: "run:active",
+      completion: { status: "ok", replyDisposition: "silent" },
+    });
+    expect(dispatchAgentHook).toHaveBeenCalledTimes(DEDUPE_MAX + 1);
+  });
+
+  test("starts replay TTL when active completion settles", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-05T00:00:00.000Z"));
+    try {
+      let resolveCompletion!: (value: HookAgentCompletion) => void;
+      const completion = new Promise<HookAgentCompletion>((resolve) => {
+        resolveCompletion = resolve;
+      });
+      let dispatches = 0;
+      const { handler } = createFanOutHandler({
+        hooksConfig: createHooksConfig(),
+        dispatchAgentHook: () => {
+          dispatches += 1;
+          return dispatches === 1
+            ? { ok: true, runId: "run:active", completion }
+            : completedDispatch("run:duplicate");
+        },
+      });
+      const startRequest = () => {
+        readJsonBodyMock.mockResolvedValueOnce({
+          ok: true,
+          value: { message: "direct", idempotencyKey: "delayed-admission" },
+        });
+        const req = createHookRequest({ url: "/hooks/agent" });
+        const response = createResponse();
+        return { response, handling: handler(req, response.res) };
+      };
+
+      await startRequest().handling;
+
+      await vi.advanceTimersByTimeAsync(DEDUPE_TTL_MS + 1);
+      const activeReplay = startRequest();
+      await activeReplay.handling;
+      expect(JSON.parse(activeReplay.response.getBody())).toEqual({
+        ok: true,
+        runId: "run:active",
+      });
+      expect(dispatches).toBe(1);
+
+      resolveCompletion({ status: "ok", replyDisposition: "empty" });
+      await vi.advanceTimersByTimeAsync(0);
+
+      await vi.advanceTimersByTimeAsync(DEDUPE_TTL_MS);
+      const terminalReplay = startRequest();
+      await terminalReplay.handling;
+      expect(JSON.parse(terminalReplay.response.getBody())).toEqual({
+        ok: true,
+        runId: "run:active",
+      });
+      expect(dispatches).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      const expired = startRequest();
+      await expired.handling;
+      expect(JSON.parse(expired.response.getBody())).toEqual({
+        ok: true,
+        runId: "run:duplicate",
+      });
+      expect(dispatches).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("rejects non-boolean direct completion observation", async () => {
+    const { handler, dispatchAgentHook } = createFanOutHandler({
+      hooksConfig: createHooksConfig(),
+    });
+    readJsonBodyMock.mockResolvedValueOnce({
+      ok: true,
+      value: { message: "direct", waitForCompletion: "yes" },
+    });
+    const req = createHookRequest({ url: "/hooks/agent" });
+    const response = createResponse();
+
+    await handler(req, response.res);
+
+    expect(response.res.statusCode).toBe(400);
+    expect(JSON.parse(response.getBody())).toEqual({
+      ok: false,
+      error: "waitForCompletion must be boolean",
+    });
+    expect(dispatchAgentHook).not.toHaveBeenCalled();
   });
 });

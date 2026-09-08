@@ -21,6 +21,7 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 type AutomationAction = "list" | "get" | "update" | "run" | "remove";
 const actions = ["list", "get", "update", "run", "remove"] as const;
 const automationName = "Telegram-created reminder";
@@ -248,7 +249,9 @@ suite.define(() => {
         await suite.withPage(
           {
             locale: "en-US",
-            recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } },
+            ...(captureUiProof
+              ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } } }
+              : {}),
             viewport: { width: 1280, height: 900 },
             serviceWorkers: "block",
           },
@@ -270,7 +273,9 @@ suite.define(() => {
               await page
                 .locator(".agent-chat__composer-combobox textarea")
                 .fill(`${action} the Telegram-created reminder. [automation-proof:${marker}]`);
-              await page.screenshot({ path: path.join(proofDir, `${marker}-request.png`) });
+              if (captureUiProof) {
+                await page.screenshot({ path: path.join(proofDir, `${marker}-request.png`) });
+              }
               await page.getByRole("button", { name: "Send message" }).click();
               await expect.poll(() => provider.results.has(marker), { timeout: 60_000 }).toBe(true);
               const result = readResult(provider.results.get(marker) ?? "null");
@@ -314,7 +319,9 @@ suite.define(() => {
                 .getByText(new RegExp(`^${marker}:`, "u"))
                 .first()
                 .waitFor();
-              await page.screenshot({ path: path.join(proofDir, `${marker}-result.png`) });
+              if (captureUiProof) {
+                await page.screenshot({ path: path.join(proofDir, `${marker}-result.png`) });
+              }
               adminResults[action] = "succeeded";
             }
           },

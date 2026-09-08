@@ -1,5 +1,7 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isEmbeddedMode, setEmbeddedMode } from "../../../infra/embedded-mode.js";
 import {
@@ -117,6 +119,60 @@ function prepare(input: {
 }
 
 describe("prepareEmbeddedAttemptClientTools", () => {
+  it("keeps authoritative client slots in source order across delayed hooks", async () => {
+    const previousRegistry = getGlobalPluginRegistry();
+    const firstHook = createDeferredCore();
+    const pending: Promise<unknown>[] = [];
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_tool_call",
+          matcher: ["first_tool"],
+          handler: async () => {
+            await firstHook.promise;
+          },
+        },
+      ]),
+    );
+    try {
+      const prepared = prepare({
+        codeModeControlsEnabledForRun: false,
+        attemptConfig: CATALOGS_DISABLED_CONFIG,
+        toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+        catalogRef: createToolSearchCatalogRef(),
+        clientTools: [clientTool("first_tool"), clientTool("second_tool")],
+      });
+      const tools = prepared.clientToolDefs.map((definition) => wrapToolDefinition(definition));
+      const firstTool = expectDefined(tools[0], "first client tool");
+      const secondTool = expectDefined(tools[1], "second client tool");
+      const first = firstTool.execute("first-call", { value: 1 });
+      pending.push(Promise.allSettled([first]));
+      const second = secondTool.execute("second-call", { value: 2 });
+      pending.push(Promise.allSettled([second]));
+      await withTestTimeout(second, 2_000, "second client tool did not finish");
+      expect(prepared.clientToolCallSlots).toEqual([
+        { toolCallId: "first-call", name: "first_tool", completed: false },
+        { toolCallId: "second-call", name: "second_tool", completed: true, params: { value: 2 } },
+      ]);
+      firstHook.resolve();
+      await withTestTimeout(first, 2_000, "first client tool did not finish");
+      expect(prepared.clientToolCallSlots).toEqual([
+        { toolCallId: "first-call", name: "first_tool", completed: true, params: { value: 1 } },
+        { toolCallId: "second-call", name: "second_tool", completed: true, params: { value: 2 } },
+      ]);
+    } finally {
+      firstHook.resolve();
+      try {
+        await withTestTimeout(Promise.all(pending), 2_000, "client cleanup did not settle");
+      } finally {
+        resetGlobalHookRunner();
+        if (previousRegistry) {
+          initializeGlobalHookRunner(previousRegistry);
+        }
+      }
+    }
+  }, 10_000);
+
   it.each(["execute", "prepare"] as const)(
     "removes an adapted MCP tool's pending approval when its permission generation ends during %s",
     async (executionPath) => {

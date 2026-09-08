@@ -1,9 +1,10 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import type { AuditRunInspectResult } from "../../../packages/gateway-protocol/src/schema/audit-run.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   decisionDisplay,
@@ -87,8 +88,20 @@ async function newContext(options: { video?: boolean } = {}): Promise<BrowserCon
   });
 }
 
-async function screenshot(page: Page, name: string) {
+async function screenshot(
+  page: Page,
+  name: string,
+  content = page.getByRole("heading", { name: "Identity and authority" }),
+) {
   if (!captureUiProof) {
+    return;
+  }
+  if (page.video()) {
+    await content.scrollIntoViewIfNeeded();
+    await writeFile(
+      path.join(proofDir, name),
+      await takeControlUiViewportScreenshot(page, page.locator(".run-inspector"), [content]),
+    );
     return;
   }
   await page.screenshot({
@@ -479,7 +492,11 @@ suite.define(() => {
       await detail.getByText("decision_fact_display_unverified", { exact: true }).waitFor();
       await detail.getByText("decision.display_provenance", { exact: true }).waitFor();
       expect(await detail.getByText("Verified producer", { exact: true }).count()).toBe(0);
-      await screenshot(page, "18-unverified-receipt-privacy.png");
+      await screenshot(
+        page,
+        "18-unverified-receipt-privacy.png",
+        detail.getByText("decision_fact_display_unverified", { exact: true }),
+      );
     } finally {
       await suite.closeBrowserContext(context);
     }

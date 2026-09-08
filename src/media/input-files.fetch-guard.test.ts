@@ -368,6 +368,43 @@ describe("HEIC input image normalization", () => {
 });
 
 describe("guarded input file URL fetches", () => {
+  it.each(["image", "file"] as const)(
+    "does not start %s processing after cancellation during fetch release",
+    async (kind) => {
+      const controller = new AbortController();
+      const reason = new Error("HTTP request ended during download cleanup");
+      const source = { type: "url" as const, url: "https://example.com/input" };
+      const release = mockUrlFetchResponse({
+        source,
+        fetchedContentType: kind === "image" ? "image/png" : "application/pdf",
+        fetchedBody:
+          kind === "image"
+            ? Buffer.from(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2N4j8AAAAASUVORK5CYII=",
+                "base64",
+              )
+            : Buffer.from("%PDF-1.4\n"),
+      });
+      release?.mockImplementationOnce(async () => controller.abort(reason));
+
+      const extraction =
+        kind === "image"
+          ? extractImageContentFromSource(
+              source,
+              createImageSourceLimits(["image/png"], true),
+              controller.signal,
+            )
+          : extractFileContentFromSource({
+              source,
+              limits: createFileSourceLimits(["application/pdf"], true),
+              signal: controller.signal,
+            });
+      await expect(extraction).rejects.toBe(reason);
+      expect(kind === "image" ? detectMimeMock : extractPdfContentMock).not.toHaveBeenCalled();
+      expect(release).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("releases a rejected fetch without waiting for its capture tee", async () => {
     const response = new Response("server error", { status: 503 });
     const capture = response.clone();

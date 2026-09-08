@@ -149,31 +149,20 @@ function buildInterSessionPromptPrefix(inputProvenance: InputProvenance | undefi
   return [header, INTER_SESSION_PROMPT_EXPLANATION].join("\n");
 }
 
-function removeFirstInterSessionPromptPrefix(text: string): string {
+export function stripInterSessionPromptPrefixForDisplay(text: string): string {
   const index = text.indexOf(INTER_SESSION_PROMPT_PREFIX_BASE);
   if (index === -1) {
     return text;
   }
   const headerEnd = text.indexOf("\n", index);
-  if (headerEnd === -1) {
-    return [
-      text.slice(0, index).trimEnd(),
-      text.slice(index + INTER_SESSION_PROMPT_PREFIX_BASE.length).trimStart(),
-    ]
-      .filter(Boolean)
-      .join("\n");
+  const bodyStart =
+    headerEnd === -1 ? index + INTER_SESSION_PROMPT_PREFIX_BASE.length : headerEnd + 1;
+  let body = text.slice(bodyStart);
+  if (headerEnd !== -1 && body.startsWith(INTER_SESSION_PROMPT_EXPLANATION)) {
+    // Only the generated explanation owns a following separator newline.
+    body = body.slice(INTER_SESSION_PROMPT_EXPLANATION.length).replace(/^\r?\n/u, "");
   }
-  const explanationStart = headerEnd + 1;
-  const explanationEnd = text.startsWith(INTER_SESSION_PROMPT_EXPLANATION, explanationStart)
-    ? explanationStart + INTER_SESSION_PROMPT_EXPLANATION.length
-    : explanationStart;
-  return [text.slice(0, index).trimEnd(), text.slice(explanationEnd).trimStart()]
-    .filter(Boolean)
-    .join("\n");
-}
-
-export function stripInterSessionPromptPrefixForDisplay(text: string): string {
-  return removeFirstInterSessionPromptPrefix(text);
+  return [text.slice(0, index).trimEnd(), body].filter(Boolean).join("\n");
 }
 
 // Idempotently moves the generated provenance envelope to the top of prompt
@@ -192,6 +181,6 @@ export function annotateInterSessionPromptText(
   if (text === prefix || text.startsWith(`${prefix}\n`)) {
     return text;
   }
-  const body = removeFirstInterSessionPromptPrefix(text);
+  const body = stripInterSessionPromptPrefixForDisplay(text);
   return `${prefix}\n${body}`;
 }

@@ -1,6 +1,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Fire-and-forget hook tests cover async hook execution without blocking callers.
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { fireAndForgetBoundedHook, fireAndForgetHook } from "./fire-and-forget.js";
 
 function requireFirstLog(logger: ReturnType<typeof vi.fn>): string {
@@ -48,58 +49,71 @@ describe("fireAndForgetHook", () => {
 });
 
 describe("fireAndForgetBoundedHook", () => {
-  it("limits queued fire-and-forget hooks", async () => {
-    const logger = vi.fn();
-    let resolveFirst: (() => void) | undefined;
-    const first = new Promise<void>((resolve) => {
-      resolveFirst = resolve;
-    });
-    const starts: string[] = [];
+  it.each(["resolve", "reject"] as const)(
+    "holds queue capacity until timed-out hooks %s",
+    async (settlement) => {
+      vi.useFakeTimers();
+      const logger = vi.fn();
+      const first = createDeferred();
+      const starts: string[] = [];
+      try {
+        fireAndForgetBoundedHook(
+          function (this: unknown) {
+            expect(this).toBeUndefined();
+            starts.push("first");
+            return first.promise;
+          },
+          "hook failed",
+          logger,
+          { maxConcurrency: 1, maxQueue: 1, timeoutMs: 10_000 },
+        );
+        fireAndForgetBoundedHook(
+          async () => {
+            starts.push("second");
+          },
+          "hook failed",
+          logger,
+          { maxConcurrency: 1, maxQueue: 1, timeoutMs: 10_000 },
+        );
+        fireAndForgetBoundedHook(
+          async () => {
+            starts.push("third");
+          },
+          "hook failed",
+          logger,
+          { maxConcurrency: 1, maxQueue: 1, timeoutMs: 10_000 },
+        );
 
-    fireAndForgetBoundedHook(
-      async () => {
-        starts.push("first");
-        await first;
-      },
-      "hook failed",
-      logger,
-      { maxConcurrency: 1, maxQueue: 1, timeoutMs: 10_000 },
-    );
-    fireAndForgetBoundedHook(
-      async () => {
-        starts.push("second");
-      },
-      "hook failed",
-      logger,
-      { maxConcurrency: 1, maxQueue: 1, timeoutMs: 10_000 },
-    );
-    fireAndForgetBoundedHook(
-      async () => {
-        starts.push("third");
-      },
-      "hook failed",
-      logger,
-      { maxConcurrency: 1, maxQueue: 1, timeoutMs: 10_000 },
-    );
-
-    await vi.waitFor(() => {
-      expect(starts).toEqual(["first"]);
-    });
-    expect(logger).toHaveBeenCalledWith("hook failed: queue full; dropping hook");
-
-    resolveFirst?.();
-    await vi.waitFor(() => {
-      expect(starts).toEqual(["first", "second"]);
-    });
-  });
+        expect(starts).toEqual([]);
+        expect(logger).toHaveBeenCalledWith("hook failed: queue full; dropping hook");
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(starts).toEqual(["first"]);
+        expect(logger).toHaveBeenCalledWith("hook failed: timed out after 10000ms");
+        if (settlement === "reject") {
+          first.reject(new Error("late hook failure"));
+        } else {
+          first.resolve();
+        }
+        await vi.advanceTimersByTimeAsync(0);
+        expect(starts).toEqual(["first", "second"]);
+        expect(logger).toHaveBeenCalledTimes(2);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        first.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("caps oversized hook timeout timers", async () => {
     vi.useFakeTimers();
+    const pending = createDeferred();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
-      const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
       const logger = vi.fn();
 
-      fireAndForgetBoundedHook(async () => new Promise(() => {}), "hook failed", logger, {
+      fireAndForgetBoundedHook(() => pending.promise, "hook failed", logger, {
         timeoutMs: Number.MAX_SAFE_INTEGER,
       });
 
@@ -107,6 +121,9 @@ describe("fireAndForgetBoundedHook", () => {
       await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
       expect(logger).toHaveBeenCalledWith(`hook failed: timed out after ${MAX_TIMER_TIMEOUT_MS}ms`);
     } finally {
+      pending.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      timeoutSpy.mockRestore();
       vi.useRealTimers();
     }
   });

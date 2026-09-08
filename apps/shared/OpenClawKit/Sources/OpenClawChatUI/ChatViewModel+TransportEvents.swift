@@ -69,22 +69,14 @@ extension OpenClawChatViewModel {
         case let .questionResolved(resolved):
             self.resolveQuestionEvent(resolved)
             self.reconcileQuestionsAfterEvent()
-        case .routeChanged:
-            // A replacement route may be a different Gateway, so a cached
-            // known-absent store must not authorize the legacy plan fallback
-            // against a new Gateway that dual-emits both sources.
+        case .routeChanged, .seqGap:
+            if case .routeChanged = evt {
+                self.applyProgressCard(nil)
+            }
+            // Apple transports publish replacement sockets through either event.
+            // Old known-absent state must not authorize legacy plans on the new Gateway.
             self.progressCardStoreAvailable = nil
-            self.clearProgressCard()
-            self.swarmEnabled = false
-            self.modelAvailabilityIsSessionScoped = false
-            self.resetSwarmProgress()
-            Task { [weak self] in await self?.refreshSwarmCapability() }
-            self.invalidateComposerCapabilities()
-            Task { [weak self] in await self?.loadComposerCapabilities(force: true) }
-            let session = self.currentSessionSnapshot()
-            Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
-            Task { [weak self] in await self?.refreshSubagentActivities(sessionSnapshot: session) }
-        case .seqGap:
+            self.invalidateProgressCardTarget()
             self.modelAvailabilityIsSessionScoped = false
             let session = self.currentSessionSnapshot()
             Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
@@ -227,13 +219,9 @@ extension OpenClawChatViewModel {
 
         if isTerminal, ownsCurrentRun, let runID {
             let wasSelectedRun = self.liveUsageRunID == runID
-            if self.pendingRuns.contains(runID) {
-                self.retirePendingRun(
-                    runID,
-                    hapticEvent: phase == "error" ? .runFailed : .runCompleted)
-            } else {
-                self.retireTerminalRun(runID)
-            }
+            self.retirePendingRun(
+                runID,
+                hapticEvent: phase == "error" ? .runFailed : .runCompleted)
             if wasSelectedRun {
                 self.pendingToolCallsById = [:]
                 self.updateStreamingAssistantText(nil)
@@ -788,14 +776,14 @@ extension OpenClawChatViewModel {
 
         if phase == "start" {
             guard let sequence = evt.seq else { return }
-            _ = self.applyLiveRunLifecycle(runID: evt.runId, sequence: sequence, terminal: false)
+            _ = self.acceptLiveRunSequence(runID: evt.runId, sequence: sequence)
             return
         }
         guard isTerminalPhase || isFailure || aborted || isSuccessfulStatus else { return }
         let acceptedLifecycle = if isLegacySessionStream {
             true
         } else if let sequence = evt.seq {
-            self.applyLiveRunLifecycle(runID: evt.runId, sequence: sequence, terminal: true)
+            self.acceptLiveRunSequence(runID: evt.runId, sequence: sequence)
         } else {
             isPendingRun || isAdvertisedRun || isSelectedRun
         }
@@ -806,7 +794,8 @@ extension OpenClawChatViewModel {
             self.retirePendingRun(
                 evt.runId,
                 hapticEvent: isFailure || aborted ? .runFailed : .runCompleted)
-        } else if evt.seq == nil {
+        } else if !isLegacySessionStream || evt.seq == nil {
+            // Sequenced legacy streams carry a session ID.
             self.retireTerminalRun(evt.runId)
         }
         guard isSelectedRun || isLegacySessionStream else {

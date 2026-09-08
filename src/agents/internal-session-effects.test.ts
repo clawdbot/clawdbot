@@ -73,6 +73,7 @@ describe("internal session effects", () => {
 
           await persistSessionResetLifecycle({
             agentId: "main",
+            workspaceDir: dir,
             cleanupPreviousTranscript: true,
             nextEntry: {
               ...previousEntry,

@@ -5,6 +5,7 @@
  */
 import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { formatInlineCodeSpan } from "../shared/markdown-code.js";
 import {
@@ -666,6 +667,16 @@ function compactRawCommand(raw: string, maxLength = 120): string {
 
 export type ToolDetailMode = "explain" | "raw";
 
+/** Treat agent-authored titles as bounded, redacted display text, never an outcome. */
+export function resolveExecTitle(args: unknown): string | undefined {
+  const title = asRecord(args)?.title;
+  if (typeof title !== "string") {
+    return undefined;
+  }
+  const text = sanitizeTerminalText(title.replace(/\s+/gu, " ")).trim();
+  return sliceUtf16Safe(redactToolPayloadText(text), 0, 120) || undefined;
+}
+
 export function resolveExecDetail(
   args: unknown,
   options?: { detailMode?: ToolDetailMode },
@@ -673,6 +684,18 @@ export function resolveExecDetail(
   const record = asRecord(args);
   if (!record) {
     return undefined;
+  }
+
+  const title = options?.detailMode === "raw" ? undefined : resolveExecTitle(record);
+  if (title) {
+    return title;
+  }
+  if (typeof record.code === "string" && record.code.trim()) {
+    return options?.detailMode === "raw"
+      ? compactRawCommand(record.code)
+      : record.language === "typescript"
+        ? "run TypeScript"
+        : "run JavaScript";
   }
 
   const raw = typeof record.command === "string" ? record.command.trim() : undefined;

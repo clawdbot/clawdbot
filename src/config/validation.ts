@@ -21,6 +21,7 @@ import {
   collectChannelDmPolicyMetadata,
   collectChannelSchemaMetadataWithOwnership,
 } from "./channel-config-metadata.js";
+import { resolveChannelSchemaSelection } from "./channel-schema-selection.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
 import {
@@ -56,6 +57,7 @@ type ValidateConfigWithPluginsResult =
 
 type ValidateConfigWithPluginsParams = {
   env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
   pluginValidation?: "full" | "skip" | "core-only";
   /** Runtime preserves inactive-owner startup; strict mode checks all declared targets for explicit validation and writes. */
   semanticValidation?: "runtime" | "strict";
@@ -138,17 +140,14 @@ function validateConfigObjectWithPluginMode(
   const contextBudgetConfig = migrateLegacyContextBudgetConfig(raw).config;
   const migrated = migratePersistedImplicitMainRoster(contextBudgetConfig, {
     env: params?.env,
+    homedir: params?.homedir,
   }).config as OpenClawConfig;
   let manifestRegistry = params?.pluginMetadataSnapshot?.manifestRegistry;
   const result = validateConfigObjectWithPluginsBase(migrated, {
+    ...params,
     applyDefaults,
-    env: params?.env,
     pluginValidation: params?.pluginValidation ?? "full",
     semanticValidation: params?.semanticValidation ?? "runtime",
-    pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
-    loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
-    sourceRaw: params?.sourceRaw,
-    preservedLegacyRootKeys: params?.preservedLegacyRootKeys,
     onManifestRegistryResolved: (registry) => {
       manifestRegistry = registry;
     },
@@ -208,6 +207,7 @@ function validateConfigObjectWithPluginsBase(
     sourceRaw: opts.sourceRaw,
     preservedLegacyRootKeys: opts.preservedLegacyRootKeys,
     env: opts.env,
+    homedir: opts.homedir,
   });
   if (!base.ok) {
     return { ok: false, issues: base.issues, warnings: [] };
@@ -231,6 +231,8 @@ function validateConfigObjectWithPluginsBase(
   }
   const config = opts.applyDefaults
     ? materializeRuntimeConfig(parsedConfig, {
+        env: opts.env,
+        homedir: opts.homedir,
         manifestRegistry:
           registryInfo?.registry ??
           (opts.pluginValidation === "core-only" ? { plugins: [] } : undefined),
@@ -359,7 +361,8 @@ function validateConfigObjectWithPluginsBase(
           (entry) => [entry.channelId, { schema: entry.schema, origin: "bundled" }] as const,
         ),
       );
-      for (const entry of collectChannelSchemaMetadataWithOwnership(info.registry)) {
+      const selection = resolveChannelSchemaSelection(info.registry, parsedConfig, opts.env);
+      for (const entry of collectChannelSchemaMetadataWithOwnership(info.registry, selection)) {
         const current = info.channelSchemas.get(entry.id);
         if (entry.configSchema) {
           info.channelSchemas.set(entry.id, {

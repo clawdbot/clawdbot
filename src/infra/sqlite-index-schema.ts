@@ -3,6 +3,8 @@ import {
   assertSqliteIntegrity,
   assertSqliteTableIntegrity,
   isTerminalSqliteIntegrityError,
+  runSqliteIntegrityOperationSync,
+  type SqliteIntegrityOperation,
 } from "./sqlite-integrity.js";
 import {
   collectSqliteNamedIndexContract,
@@ -40,9 +42,20 @@ export function verifyAndRepairCanonicalSqliteIndexes(
   schemaSql: string,
   options: Omit<RepairCanonicalSqliteIndexesOptions, "verifyPhysicalIntegrity"> = {},
 ): string[] {
+  return runSqliteIntegrityOperationSync(
+    verifyAndRepairCanonicalSqliteIndexSteps(db, databaseLabel, schemaSql, options),
+  );
+}
+
+export function* verifyAndRepairCanonicalSqliteIndexSteps(
+  db: DatabaseSync,
+  databaseLabel: string,
+  schemaSql: string,
+  options: Omit<RepairCanonicalSqliteIndexesOptions, "verifyPhysicalIntegrity"> = {},
+): SqliteIntegrityOperation<string[]> {
   let integrityFailure: Error | undefined;
   try {
-    assertSqliteIntegrity(db, databaseLabel);
+    yield { database: db, databaseLabel };
   } catch (error) {
     if (!(error instanceof Error) || !isTerminalSqliteIntegrityError(error)) {
       throw error;

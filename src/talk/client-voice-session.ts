@@ -14,10 +14,7 @@ import {
   onTrustedToolExecutionEvent,
   type TrustedToolExecutionEvent,
 } from "../infra/diagnostic-events.js";
-import {
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-} from "../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import {
   deactivateClientVoiceConfirmationSession,
   noteClientVoiceConfirmationUtterance,
@@ -37,7 +34,7 @@ import {
   parseStoredVoiceSessionRecord as parseStoredRecord,
   readVoiceSessionRecord as readRecord,
   readVoiceSessionRecordInTransaction as readRecordInTransaction,
-  VOICE_SESSION_CACHE_SCOPE as CACHE_SCOPE,
+  readVoiceSessionRecordRows,
   VOICE_SESSION_RECORD_VERSION as RECORD_VERSION,
   VOICE_SESSION_STALE_AFTER_MS as STALE_AFTER_MS,
   writeVoiceSessionRecordInTransaction as writeRecordInTransaction,
@@ -396,15 +393,12 @@ export function resolveClientVoiceSessionOrigin(params: {
   return record.origin;
 }
 
-/** Resolve the newest open client-owned call for legacy tool-call clients. */
+/** Resolve the unique open client-owned call for legacy tool-call clients. */
 export function resolveOpenClientVoiceSessionId(params: {
   agentId: string;
   sessionKey: string;
 }): string | undefined {
-  const database = openOpenClawAgentDatabase({ agentId: params.agentId });
-  const rows = database.db
-    .prepare("SELECT value_json FROM cache_entries WHERE scope = ? ORDER BY updated_at DESC")
-    .all(CACHE_SCOPE) as Array<{ value_json?: unknown }>;
+  const rows = readVoiceSessionRecordRows(params.agentId);
   let match: string | undefined;
   for (const row of rows) {
     const record = parseStoredRecord(row.value_json);
@@ -713,10 +707,7 @@ export async function closeStaleClientVoiceSessions(params: {
   // A new voice session remains a retry point, but channel I/O is detached so a
   // stalled adapter cannot block stale-session recovery.
   mutationDigestDeliveryOwner.retryAgent(params.agentId, params.config);
-  const database = openOpenClawAgentDatabase({ agentId: params.agentId });
-  const rows = database.db
-    .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND updated_at <= ?")
-    .all(CACHE_SCOPE, now - STALE_AFTER_MS) as Array<{ value_json?: unknown }>;
+  const rows = readVoiceSessionRecordRows(params.agentId, now - STALE_AFTER_MS);
   const stale = rows.flatMap((row) => {
     const record = parseStoredRecord(row.value_json);
     return record &&

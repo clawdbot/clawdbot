@@ -4,12 +4,12 @@ import {
   createLazyRuntimeModule,
   createLazyRuntimeSurface,
 } from "openclaw/plugin-sdk/lazy-runtime";
-import { findCatalogTemplate } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
-  cloneFirstTemplateModel,
+  buildFirstTemplateModel,
+  findCatalogTemplate,
   matchesExactOrPrefix,
-  type ProviderPlugin,
-} from "openclaw/plugin-sdk/provider-model-shared";
+} from "openclaw/plugin-sdk/provider-model-metadata";
+import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import { resolveOpenAITransportTurnState } from "./transport-policy.js";
@@ -125,4 +125,4 @@ export function buildOpenAISyntheticCatalogEntry(
   };
 }
 
-export { cloneFirstTemplateModel, findCatalogTemplate, matchesExactOrPrefix };
+export { buildFirstTemplateModel, findCatalogTemplate, matchesExactOrPrefix };

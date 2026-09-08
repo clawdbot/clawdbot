@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import codexPlugin from "../../extensions/codex/index.js";
@@ -20,6 +21,10 @@ import {
   WITHOUT_OPENAI_ENV_AUTH,
 } from "../../src/gateway/server-methods/models-list-result.openai-routes.test-support.js";
 import type { GatewayRequestContext } from "../../src/gateway/server-methods/types.js";
+import {
+  resolveNativePluginModelAuth,
+  resolveNativePluginModelConfig,
+} from "../../src/plugins/loader-runtime-load.js";
 import { loadManifestMetadataSnapshot } from "../../src/plugins/manifest-contract-eligibility.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 import {
@@ -154,7 +159,11 @@ describe("models.list native account catalog", () => {
                 rootDir: fileURLToPath(new URL("../../extensions/codex/", import.meta.url)),
                 config,
                 pluginConfig: config.plugins?.entries?.codex?.config,
-                runtime: { config: { current: () => config } } as never,
+                runtime: createPluginRuntimeMock({
+                  config: { current: () => config },
+                  modelAuth: resolveNativePluginModelAuth(),
+                  modelConfig: resolveNativePluginModelConfig(),
+                }),
                 registerAgentHarness: (harness) => harnesses.push(harness),
               }),
             );

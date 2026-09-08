@@ -15,68 +15,9 @@ import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import { signalWorkerTurnClaimClosed } from "./placement-turn-claims.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
+import { claimWorkerPlacement } from "./worker-turn-rpc.test-support.js";
 
 type WorkerEnvironmentServiceOptions = support.WorkerEnvironmentServiceOptions;
-
-function claimWorkerPlacement(params: {
-  environmentId: string;
-  ownerEpoch: number;
-  runId?: string;
-  sessionId: string;
-}): { claim: WorkerSessionTurnClaim; store: ReturnType<typeof createWorkerSessionPlacementStore> } {
-  const store = createWorkerSessionPlacementStore({
-    database: support.testState.stateDb,
-    now: () => support.testState.nowMs,
-  });
-  const identity = {
-    sessionId: params.sessionId,
-    agentId: "main",
-    sessionKey: `agent:main:${params.sessionId}`,
-  };
-  let placement = store.startDispatch(identity);
-  placement = store.transition({
-    sessionId: params.sessionId,
-    from: "requested",
-    to: "provisioning",
-    expectedGeneration: placement.generation,
-    patch: { environmentId: params.environmentId },
-  });
-  placement = store.transition({
-    sessionId: params.sessionId,
-    from: "provisioning",
-    to: "syncing",
-    expectedGeneration: placement.generation,
-    patch: { workerBundleHash: support.BUNDLE_HASH },
-  });
-  placement = store.transition({
-    sessionId: params.sessionId,
-    from: "syncing",
-    to: "starting",
-    expectedGeneration: placement.generation,
-    patch: {
-      workspaceBaseManifestRef: `manifest-${params.sessionId}`,
-      remoteWorkspaceDir: `/workspace/${params.sessionId}`,
-    },
-  });
-  store.transition({
-    sessionId: params.sessionId,
-    from: "starting",
-    to: "active",
-    expectedGeneration: placement.generation,
-    patch: { activeOwnerEpoch: params.ownerEpoch },
-  });
-  const claim = store.claimTurn({
-    ...identity,
-    claimId: `claim-${params.sessionId}`,
-    runId: params.runId ?? "run-1",
-    owner: {
-      kind: "worker",
-      environmentId: params.environmentId,
-      ownerEpoch: params.ownerEpoch,
-    },
-  });
-  return { claim, store };
-}
 
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -689,34 +630,6 @@ describe("worker environment service", () => {
       claim: identity.turnClaim,
       liveSeq: 1,
     });
-  });
-
-  it("does not ACK a transcript commit after its worker claim is fenced", async () => {
-    let finishCommit: (() => void) | undefined;
-    const commitBlocked = new Promise<void>((resolve) => {
-      finishCommit = resolve;
-    });
-    const applyTranscriptCommit = support.successfulTranscriptCommit(
-      "entry-placement-race",
-      () => commitBlocked,
-    );
-    const { identity, placementStore, workerService } = support.placementHarness(
-      "worker-placement-race",
-      "session-placement-race",
-      { applyTranscriptCommit },
-    );
-
-    const commit = workerService.commitTranscript(
-      identity,
-      support.transcriptRequest(identity, "commit before claim fence"),
-    );
-    await support.waitForFast(() => expect(applyTranscriptCommit).toHaveBeenCalledOnce());
-    placementStore.validateWorkerTurn.mockReturnValue(false);
-    finishCommit?.();
-
-    await expect(commit).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
-    expect(placementStore.validateWorkerTurn).toHaveBeenCalledTimes(2);
-    expect(placementStore.updateAckCursors).not.toHaveBeenCalled();
   });
 
   it("advances the transcript cursor when a stale-base commit consumes its sequence", async () => {

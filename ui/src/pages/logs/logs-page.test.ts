@@ -69,6 +69,130 @@ describe("LogsPage lifecycle", () => {
   afterEach(() => {
     document.body.replaceChildren();
     vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it.each([{ lines: [] }, { lines: ["initial log"] }])(
+    "retains one initial request across snapshot updates with result $lines",
+    async ({ lines }) => {
+      const pending = deferred<{ cursor: number; file: string; lines: string[] }>();
+      const request = vi.fn(
+        (_method: string, _params: unknown, _options: { signal: AbortSignal }) => pending.promise,
+      );
+      const client = { request } as unknown as GatewayBrowserClient;
+      const page = document.createElement("openclaw-logs-page") as TestLogsPage;
+      const context = contextWithClient(client);
+      page.context = context;
+      document.body.append(page);
+      await page.updateComplete;
+
+      context.gateway.publish({ client, phase: "connected" } as ApplicationGatewaySnapshot);
+      expect(request).toHaveBeenCalledOnce();
+      const signal = request.mock.calls[0]![2].signal;
+      context.gateway.publish({ ...context.gateway.snapshot });
+      expect(request).toHaveBeenCalledOnce();
+      expect(signal.aborted).toBe(false);
+
+      pending.resolve({ cursor: 100, file: "/tmp/initial.log", lines });
+      await vi.waitFor(() => expect(page.logsStatus.hasLoaded).toBe(true));
+      expect(page.logsEntries.map((entry) => entry.raw)).toEqual(lines);
+      context.gateway.publish({ ...context.gateway.snapshot });
+      expect(request).toHaveBeenCalledOnce();
+
+      request.mockResolvedValueOnce({ cursor: 110, file: "/tmp/initial.log", lines: ["poll"] });
+      await page.loadLogs({ quiet: true });
+      expect(request.mock.calls[1]![1]).toMatchObject({ cursor: 100 });
+      expect(page.logsEntries.map((entry) => entry.raw)).toEqual([...lines, "poll"]);
+
+      request.mockResolvedValueOnce({ cursor: 120, file: "/tmp/initial.log", lines: ["manual"] });
+      await page.updateComplete;
+      page.querySelector<HTMLButtonElement>(".settings-section__actions button")!.click();
+      await vi.waitFor(() =>
+        expect(page.logsEntries.map((entry) => entry.raw)).toEqual(["manual"]),
+      );
+      expect(request).toHaveBeenCalledTimes(3);
+      expect(request.mock.calls[2]![1]).toMatchObject({ cursor: undefined });
+    },
+  );
+
+  it.each(["reconnect", "source replacement", "client replacement", "detach/reattach"])(
+    "replaces an unfinished initial request on %s but not on a later snapshot",
+    async (transition) => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const replies: Array<ReturnType<typeof deferred<{ cursor: number; lines: string[] }>>> = [];
+      const request = vi.fn(
+        (_method: string, _params: unknown, _options: { signal: AbortSignal }) => {
+          const reply = deferred<{ cursor: number; lines: string[] }>();
+          replies.push(reply);
+          return reply.promise;
+        },
+      );
+      const client = { request } as unknown as GatewayBrowserClient;
+      const page = document.createElement("openclaw-logs-page") as TestLogsPage;
+      let context = contextWithClient(client, true);
+      page.context = context;
+      document.body.append(page);
+      await page.updateComplete;
+      expect(request).toHaveBeenCalledOnce();
+      const firstSignal = request.mock.calls[0]![2].signal;
+
+      if (transition === "reconnect") {
+        context.gateway.publish({ client, phase: "reconnecting" } as ApplicationGatewaySnapshot);
+        context.gateway.publish({ client, phase: "connected" } as ApplicationGatewaySnapshot);
+      } else if (transition === "client replacement") {
+        context.gateway.publish({
+          ...context.gateway.snapshot,
+          client: { request } as unknown as GatewayBrowserClient,
+        });
+      } else if (transition === "detach/reattach") {
+        page.remove();
+        expect(firstSignal.aborted).toBe(true);
+        document.body.append(page);
+      } else {
+        context = contextWithClient(client, true);
+        page.context = context;
+        page.requestUpdate();
+      }
+      await page.updateComplete;
+      expect(firstSignal.aborted).toBe(true);
+      expect(request).toHaveBeenCalledTimes(2);
+      context.gateway.publish({ ...context.gateway.snapshot });
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(request.mock.calls[1]![2].signal.aborted).toBe(false);
+
+      replies[1]!.resolve({ cursor: 2, lines: ["current"] });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(page.logsEntries.map((entry) => entry.raw)).toEqual(["current"]);
+      expect(page.querySelector(".log-message")?.textContent).toBe("current");
+      const scheduleScroll = vi.spyOn(page.streamFollow, "schedule");
+      replies[0]!.resolve({ cursor: 1, lines: ["stale"] });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(page.logsEntries.map((entry) => entry.raw)).toEqual(["current"]);
+      expect(page.querySelectorAll(".log-row")).toHaveLength(1);
+      expect(page.querySelector(".log-message")?.textContent).toBe("current");
+      expect(scheduleScroll).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps an initial error visible across snapshots until retry succeeds", async () => {
+    const request = vi.fn().mockRejectedValueOnce(new Error("logs unavailable"));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const page = document.createElement("openclaw-logs-page") as TestLogsPage;
+    const context = contextWithClient(client, true);
+    page.context = context;
+    document.body.append(page);
+    await vi.waitFor(() => expect(page.logsStatus.error).toBe("logs unavailable"));
+    await page.updateComplete;
+    expect(page.textContent).not.toContain("No log entries.");
+
+    context.gateway.publish({ ...context.gateway.snapshot });
+    expect(request).toHaveBeenCalledOnce();
+    expect(page.logsStatus.hasLoaded).toBe(false);
+    request.mockResolvedValueOnce({ cursor: 1, file: "/tmp/retry.log", lines: ["recovered"] });
+    page.querySelector<HTMLButtonElement>(".logs-refresh-status button")!.click();
+    await vi.waitFor(() => expect(page.logsStatus.hasLoaded).toBe(true));
+    expect(page.logsStatus.error).toBeNull();
+    expect(page.logsEntries.map((entry) => entry.raw)).toEqual(["recovered"]);
   });
 
   it("does not schedule scroll work after disconnect", async () => {
@@ -191,21 +315,25 @@ describe("LogsPage lifecycle", () => {
 
   it("serializes quiet polls so an older cursor cannot overwrite a newer one", async () => {
     const pending = deferred<{ cursor: number; lines: string[]; reset: boolean }>();
-    const request = vi.fn(() => pending.promise);
+    const request = vi
+      .fn(() => pending.promise)
+      .mockResolvedValueOnce({
+        cursor: 1,
+        lines: ["seed"],
+        reset: true,
+      });
     const client = {
       request,
     } as unknown as GatewayBrowserClient;
     const page = document.createElement("openclaw-logs-page") as TestLogsPage;
     const context = contextWithClient(client, true);
     page.context = context;
-    page.logsEntries = [{ raw: "seed" }];
     document.body.append(page);
-    await page.updateComplete;
-    page.logsEntries = [];
+    await vi.waitFor(() => expect(page.logsStatus.hasLoaded).toBe(true));
 
     const first = page.loadLogs({ quiet: true });
     const second = page.loadLogs({ quiet: true });
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
     expect(await second).toBe(false);
 
     pending.resolve({ cursor: 2, lines: ["fresh"], reset: true });
@@ -231,12 +359,9 @@ describe("LogsPage lifecycle", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const page = document.createElement("openclaw-logs-page") as TestLogsPage;
     page.context = contextWithClient(client, true);
-    page.logsEntries = [{ raw: "seed" }];
     document.body.append(page);
-    await page.updateComplete;
-    page.logsEntries = [];
+    await vi.waitFor(() => expect(page.logsStatus.hasLoaded).toBe(true));
 
-    await page.loadLogs({ reset: true });
     await page.loadLogs();
 
     expect(request).toHaveBeenCalledTimes(3);
@@ -256,13 +381,11 @@ describe("LogsPage lifecycle", () => {
     const page = document.createElement("openclaw-logs-page") as TestLogsPage;
     const context = contextWithClient(client);
     page.context = context;
-    page.logsEntries = [{ raw: "seed" }];
     document.body.append(page);
     await page.updateComplete;
     context.gateway.publish({ client, phase: "connected" } as ApplicationGatewaySnapshot);
-    page.logsEntries = [];
+    await vi.waitFor(() => expect(page.logsStatus.hasLoaded).toBe(true));
 
-    await page.loadLogs({ reset: true });
     await page.loadLogs({ reset: true });
     expect(page.logsEntries).toHaveLength(1);
     expect(page.logsStatus).toEqual({

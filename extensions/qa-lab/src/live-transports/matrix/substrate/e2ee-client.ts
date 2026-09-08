@@ -102,7 +102,7 @@ function enforceMatrixQaPluginStateLimit(
 
 function createMatrixQaPluginStateSyncKeyedStore<T>(
   options: OpenKeyedStoreOptions,
-): PluginStateSyncKeyedStore<T> {
+): PluginStateSyncKeyedStore<T> & Required<Pick<PluginStateSyncKeyedStore<T>, "lookupMany">> {
   const rows = resolveMatrixQaPluginStateRows(options);
   const resolveExpiresAt = (ttlMs?: number) => {
     const effectiveTtlMs = ttlMs ?? options.defaultTtlMs;
@@ -139,6 +139,11 @@ function createMatrixQaPluginStateSyncKeyedStore<T>(
     lookup(key) {
       pruneMatrixQaExpiredPluginState(rows);
       return rows.get(key)?.value as T | undefined;
+    },
+    lookupMany(keys) {
+      pruneMatrixQaExpiredPluginState(rows);
+      // SAFETY: This namespace contains only values registered with the store's T contract.
+      return keys.map((key) => ({ ok: true, value: rows.get(key)?.value as T | undefined }));
     },
     consume(key) {
       pruneMatrixQaExpiredPluginState(rows);
@@ -179,6 +184,7 @@ function createMatrixQaPluginStateKeyedStore<T>(
     registerIfAbsent: async (...args) => syncStore.registerIfAbsent(...args),
     update: async (...args) => syncStore.update?.(...args) ?? false,
     lookup: async (...args) => syncStore.lookup(...args),
+    lookupMany: async (...args) => syncStore.lookupMany(...args),
     consume: async (...args) => syncStore.consume(...args),
     delete: async (...args) => syncStore.delete(...args),
     entries: async () => syncStore.entries(),

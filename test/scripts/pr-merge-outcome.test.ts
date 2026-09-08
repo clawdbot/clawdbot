@@ -41,10 +41,10 @@ const supportsNoLazyFetch =
   spawnSync("git", ["--no-lazy-fetch", "--version"], { env: gitEnv }).status === 0;
 
 function createFixtureGit(repo: string) {
-  const git = (args: string[], input?: string, cwd = repo) =>
+  const git = (args: string[], input?: string, cwd = repo, env?: NodeJS.ProcessEnv) =>
     execFileSync("git", ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], {
       cwd,
-      env: gitEnv,
+      env: { ...gitEnv, ...env },
       input,
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
@@ -54,8 +54,25 @@ function createFixtureGit(repo: string) {
     const b = git(["hash-object", "-w", "--stdin"], sibling);
     return git(["mktree"], `100644 blob ${a}\towner.txt\n100644 blob ${b}\tsibling.txt\n`);
   };
-  const commit = (contents: string, parents: string[], message = "Fixture commit\n") =>
-    git(["commit-tree", contents, ...parents.flatMap((parent) => ["-p", parent])], message);
+  const commit = (
+    contents: string,
+    parents: string[],
+    message = "Fixture commit\n",
+    author?: { name: string; email: string },
+  ) =>
+    git(
+      ["commit-tree", contents, ...parents.flatMap((parent) => ["-p", parent])],
+      message,
+      repo,
+      author
+        ? {
+            GIT_AUTHOR_NAME: author.name,
+            GIT_AUTHOR_EMAIL: author.email,
+            GIT_COMMITTER_NAME: author.name,
+            GIT_COMMITTER_EMAIL: author.email,
+          }
+        : undefined,
+    );
   return { git, tree, commit };
 }
 
@@ -78,6 +95,7 @@ function fixture(
   sourceMessage?: string,
   sourceVersions: Array<[string, string?]> = [["after\n"]],
   promisor = false,
+  sourceAuthor?: { name: string; email: string },
 ) {
   const root = realpathSync(temps.make("pr-merge-outcome-"));
   const remote = join(root, "remote.git");
@@ -96,7 +114,7 @@ function fixture(
   const sourceCommits: string[] = [];
   let head = base;
   for (const [owner, sibling] of sourceVersions) {
-    head = commit(tree(owner, sibling), [head], sourceMessage);
+    head = commit(tree(owner, sibling), [head], sourceMessage, sourceAuthor);
     sourceCommits.push(head);
   }
   git(["update-ref", "refs/heads/topic", head]);
@@ -586,7 +604,10 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
   it("snapshots corrected squash prose once and retains source and server coauthors", () => {
     const source = "Co-authored-by: Source <source@example.com>";
     const server = "Co-authored-by: Server <server@example.com>";
-    const f = fixture(`Repair\n\n${source}`);
+    const f = fixture(`Repair\n\n${source}`, undefined, false, {
+      name: "Server",
+      email: "server@example.com",
+    });
     const body = join(f.repo, "operator body.md");
     writeFileSync(body, "Partial repair. Related: #42.\n");
     f.save({
@@ -1426,7 +1447,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     const run = f.run();
     expect(run.status, run.output).toBe(0);
     expect(f.record().phase).toBe("complete");
-    expect(f.state().reads).toBe(5);
+    expect(f.state().observationReads).toBe(5);
     expect(f.state().settlementSleeps).toEqual([]);
     expect(f.state().mutations).toBe(1);
     expect(f.state().posts).toBe(1);

@@ -107,6 +107,7 @@ export function renderNewSessionPlaceControls({
     worktreeAvailable: place.worktreeAvailable(),
     headBranch: branches?.headBranch,
     baseRef: place.baseRef,
+    repository: Boolean(place.remoteRepository),
   });
   const gatewayLabel = gateway.gatewayName
     ? t("newSession.gatewayNamed", { name: gateway.gatewayName })
@@ -182,7 +183,11 @@ export function renderNewSessionPlaceControls({
             ),
           projectAddAvailable:
             !nativeTerminal &&
-            canCallGatewayMethod(context?.gateway.snapshot, "projects.add", "operator.write"),
+            canCallGatewayMethod(
+              context?.gateway.snapshot,
+              place.remotePlacement ? "sessions.create" : "projects.add",
+              "operator.write",
+            ),
           remoteProjects: browser.projectSearchResult?.projects ?? [],
           selectedRemoteProject: browser.remoteProject,
           projectSearchCredentialMissing: browser.projectSearchResult?.credential === "missing",
@@ -194,11 +199,7 @@ export function renderNewSessionPlaceControls({
           pendingPlacement,
           ...browser.popoverCallbacks("project"),
           browserOpen: browser.browserOpen,
-          browserListing: browser.browserListing,
-          browserLoading: browser.browserLoading,
-          browserError: browser.browserError,
-          browserPathDraft: browser.browserPathDraft,
-          usableBrowserPath: browser.usableBrowserPath(),
+          browser: browser.browser,
           registerProjectPath: browser.browserProjectPath,
           registeringProject: browser.browserRegistering,
           onSelectProject: (projectId) => place.selectProjectId(projectId),
@@ -207,10 +208,6 @@ export function renderNewSessionPlaceControls({
           onApplyFolder: (folder) => place.applyFolder(folder),
           onBrowse: () =>
             browser.selectGatewayBrowser(place.folder.trim() || place.workspacePath()),
-          onBrowserPathDraftChange: (value) => {
-            browser.browserPathDraft = value;
-          },
-          onBrowserNavigate: (path) => browser.loadBrowser(path),
           onBrowserBack: () => browser.showRoot(),
           onRegisterProject: (path) => void browser.registerBrowserProject(path),
           onClose: () => browser.close(),
@@ -220,6 +217,7 @@ export function renderNewSessionPlaceControls({
       ? renderCheckoutChip({
           state: checkoutState,
           remotePlacement: place.remotePlacement,
+          repository: Boolean(place.remoteRepository),
           folderLabel: projectState.label,
           worktree: place.worktree,
           worktreeAvailable: place.worktreeAvailable(),

@@ -137,9 +137,6 @@ export class MemoryImportPage extends OpenClawLightDomElement {
 
   override updated() {
     const snapshot = this.context.gateway.snapshot;
-    if (!this.context.agents.state.agentsList) {
-      void this.context.agents.ensureList();
-    }
     if (
       this.pendingImport &&
       (snapshot.phase !== "connected" ||
@@ -210,7 +207,9 @@ export class MemoryImportPage extends OpenClawLightDomElement {
   }
 
   private refresh(): Promise<void> {
-    return this.planTask.run();
+    return this.currentAgentId()
+      ? this.planTask.run()
+      : this.context.agents.ensureList().then(() => undefined);
   }
 
   private selectAgent(agentId: string) {
@@ -517,8 +516,8 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       agents: listSelectableAgents(agentsList?.agents ?? []),
       selectedAgentId: agentId,
       plan: this.plan,
-      loading: this.loading,
-      error: this.error,
+      loading: this.loading || this.context.agents.state.agentsLoading,
+      error: (agentId ? null : this.context.agents.state.agentsError) ?? this.error,
       applyError: this.applyError,
       replaceExisting: this.replaceExisting,
       selectedByProvider: this.selectedByProvider,

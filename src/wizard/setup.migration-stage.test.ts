@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
+import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
 import type { MigrationPlan } from "../plugins/types.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import type { SetupMigrationPromotionContinuation } from "./setup.migration-promotion.js";

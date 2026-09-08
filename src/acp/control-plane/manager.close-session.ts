@@ -3,7 +3,7 @@ import {
   identityHasStableSessionId,
   resolveSessionIdentityFromMeta,
 } from "@openclaw/acp-core/runtime/session-identity";
-import { toAcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
+import { toAcpRuntimeError } from "../runtime/errors.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
 import {
@@ -75,15 +75,10 @@ export async function runManagerCloseSession(params: {
         agentId,
         meta,
       });
-      await withAcpRuntimeErrorBoundary({
-        run: async () =>
-          await ensuredRuntime.close({
-            handle,
-            reason: input.reason,
-            discardPersistentState: input.discardPersistentState,
-          }),
-        fallbackCode: "ACP_TURN_FAILED",
-        fallbackMessage: "ACP close failed before completion.",
+      await ensuredRuntime.close({
+        handle,
+        reason: input.reason,
+        discardPersistentState: input.discardPersistentState,
       });
       runtimeClosed = true;
       params.runtimeHandles.clear(params);
@@ -123,7 +118,6 @@ export async function runManagerCloseSession(params: {
     }
   }
 
-  let metaCleared = false;
   if (input.discardPersistentState && !input.clearMeta) {
     await discardPersistedManagerRuntimeState({
       cfg: input.cfg,
@@ -133,20 +127,15 @@ export async function runManagerCloseSession(params: {
     });
   }
 
-  if (input.clearMeta) {
+  const metaCleared = Boolean(input.clearMeta);
+  if (metaCleared) {
     await params.writeSessionMeta({
       cfg: input.cfg,
       sessionKey,
       agentId,
-      mutate: (_current, entry) => {
-        if (!entry) {
-          return null;
-        }
-        return null;
-      },
+      mutate: () => null,
       failOnError: true,
     });
-    metaCleared = true;
   }
 
   return {

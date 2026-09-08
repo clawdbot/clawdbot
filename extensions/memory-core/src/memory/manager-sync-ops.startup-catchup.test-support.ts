@@ -368,7 +368,7 @@ export class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
 
   embeddingCachePrunes = 0;
 
-  protected pruneEmbeddingCacheIfNeeded(): void {
+  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {
     this.embeddingCachePrunes += 1;
   }
 

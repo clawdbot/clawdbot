@@ -49,6 +49,9 @@ function resolveContext(
   meta: Record<string, unknown> | undefined,
 ): LogContext {
   const metadataContext = parseMetaName(meta?.name);
+  if (meta?.name === value["0"]) {
+    return metadataContext;
+  }
   const positionalContext = parseMetaName(value["0"]);
   return {
     subsystem: metadataContext.subsystem ?? positionalContext.subsystem,

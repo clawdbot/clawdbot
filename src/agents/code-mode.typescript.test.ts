@@ -61,6 +61,34 @@ describe("Code Mode TypeScript execution", () => {
     resetCodeModeTestState();
   });
 
+  it.each([
+    {
+      name: "runtime error after erased declarations",
+      code: "type Ignored = string;\ninterface IgnoredToo {\n  value: number;\n}\nconst value: number = 1;\n(value as unknown as () => void)();",
+      location: /openclaw-code-mode:generated\.js:\d+:\d+/,
+      cause: "TypeError",
+    },
+    {
+      name: "compiler syntax error",
+      code: "type Ignored = string;\nconst value: number = ;",
+      location: /openclaw-code-mode:user\.ts:2:\d+/,
+      cause: "Expression expected",
+    },
+  ])("identifies the source of a $name", async ({ code, location, cause }) => {
+    const { ctx, config, catalogRef, tools } = createCodeModeHarness();
+    applyCodeModeCatalog({ ...ctx, config, catalogRef, tools });
+    const result = await runUntilCompleted({
+      execTool: expectDefined(tools[0], "exec"),
+      waitTool: expectDefined(tools[1], "wait"),
+      code,
+      language: "typescript",
+    });
+    expect(result).toMatchObject({ status: "failed", error: expect.stringContaining(cause) });
+    expect(String(result.error)).toMatch(location);
+    expect(String(result.error)).not.toContain("openclaw-code-mode:user.js");
+    expect(String(result.error)).not.toContain("controller.js");
+  });
+
   it("supports TypeScript source transform", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({

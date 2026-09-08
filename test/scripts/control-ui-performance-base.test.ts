@@ -12,6 +12,7 @@ it("compares real UI builds with canonical compression and keeps artifacts after
   const temporaryRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ui-budget-proof-")));
   const root = path.join(temporaryRoot, "repo");
   const scratch = path.join(temporaryRoot, "scratch");
+  const identityCapture = path.join(temporaryRoot, "build-identities.jsonl");
   const write = (file: string, text: string) => {
     const target = path.join(root, file);
     fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -58,7 +59,7 @@ it("compares real UI builds with canonical compression and keeps artifacts after
     }
     write("scripts/tsx.mjs", `await import(${JSON.stringify(tsxImport)});\n`);
     write(".gitignore", "node_modules\ndist/\n");
-    write("package.json", '{"name":"ui-budget-proof","type":"module"}');
+    write("package.json", '{"name":"ui-budget-proof","version":"1.0.0","type":"module"}');
     write("pnpm-workspace.yaml", 'packages: ["ui", "packages/*"]\n');
     write("ui/package.json", '{"name":"ui-budget-proof-ui","type":"module"}');
     write("ui/index.html", '<script type="module" src="/main.js"></script>');
@@ -81,11 +82,21 @@ it("compares real UI builds with canonical compression and keeps artifacts after
       }),
     );
     const config = `
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { brotliCompressSync } from "node:zlib";
 import { gzip } from "pako";
 const outDir = path.resolve(import.meta.dirname, "../dist/control-ui");
+function recordBuildIdentity() {
+  const identityCapture = process.env.OPENCLAW_TEST_BUILD_IDENTITY_CAPTURE;
+  if (!identityCapture) return;
+  fs.appendFileSync(identityCapture, JSON.stringify({
+    identity: ["GIT_COMMIT", "OPENCLAW_BUILD_TIMESTAMP", "GIT_BRANCH", "OPENCLAW_CONTROL_UI_BUILD_ID", "OPENCLAW_CONTROL_UI_RELEASE_BUILD"].map((key) => process.env[key]),
+    gitDisabled: !fs.existsSync(process.env.GIT_DIR ?? "") && spawnSync("git", ["rev-parse", "HEAD"]).status !== 0,
+    packageVersion: JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, "../package.json"), "utf8")).version,
+  }) + "\\n");
+}
 export function createControlUiPrecompressedAssetVariants(fileName, source) {
   return [
     { fileName: fileName + ".gz", source: gzip(source, { level: 0, legacyHash: true }) },
@@ -94,7 +105,7 @@ export function createControlUiPrecompressedAssetVariants(fileName, source) {
 }
 export default {
   build: { outDir, emptyOutDir: true },
-  plugins: [{ name: "fixture-precompression", writeBundle(_options, bundle) {
+  plugins: [{ name: "fixture-precompression", buildStart: recordBuildIdentity, writeBundle(_options, bundle) {
     for (const output of Object.values(bundle)) {
       if (!/\\.(css|js)$/.test(output.fileName)) continue;
       for (const variant of createControlUiPrecompressedAssetVariants(output.fileName, fs.readFileSync(path.join(outDir, output.fileName)))) {
@@ -110,10 +121,12 @@ export default {
     git("add", ".");
     git("commit", "--quiet", "-m", "base");
     const base = git("rev-parse", "HEAD");
+    write("package.json", '{"name":"ui-budget-proof","version":"1.0.1","type":"module"}');
     write("ui/vite.config.ts", config.replace("level: 0", "level: 9"));
 
-    const runComparison = () =>
-      spawnSync(
+    const runComparison = () => {
+      fs.rmSync(identityCapture, { force: true });
+      return spawnSync(
         process.execPath,
         [
           "--import",
@@ -123,11 +136,18 @@ export default {
         ],
         {
           cwd: root,
-          env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch },
+          env: {
+            ...process.env,
+            OPENCLAW_TEST_BUILD_IDENTITY_CAPTURE: identityCapture,
+            TMPDIR: scratch,
+            TMP: scratch,
+            TEMP: scratch,
+          },
           encoding: "utf8",
           timeout: 30_000,
         },
       );
+    };
     for (const [count, expectedExit] of [
       [1_001, 0],
       [1_400, 1],
@@ -136,6 +156,7 @@ export default {
       git("add", ".");
       git("commit", "--quiet", "-m", `candidate ${count}`);
       const head = git("rev-parse", "HEAD");
+      expect(head).not.toBe(base);
       const result = runComparison();
       const output = `${result.stdout}${result.stderr}`;
       expect(result.status, output).toBe(expectedExit);
@@ -143,6 +164,19 @@ export default {
       expect(output).toContain("Pako ");
       expect(output).toMatch(/startup CSS gzip vs base: \d+ B -> \d+ B \(\+\d+ B/u);
       expect(output.includes("startup CSS gzip growth:")).toBe(expectedExit !== 0);
+      const identities = fs
+        .readFileSync(identityCapture, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)) as Array<{
+        gitDisabled: boolean;
+        identity: unknown;
+        packageVersion: string;
+      }>;
+      expect(identities).toHaveLength(2);
+      expect(identities.map(({ packageVersion }) => packageVersion)).toEqual(["1.0.1", "1.0.0"]);
+      expect(identities[0]?.identity).toEqual(identities[1]?.identity);
+      expect(identities.every(({ gitDisabled }) => gitDisabled)).toBe(true);
       expect(fs.existsSync(path.join(root, "dist/control-ui/index.html"))).toBe(true);
       expect(
         fs.readdirSync(scratch).filter((name) => name.startsWith("openclaw-ui-performance-base-")),

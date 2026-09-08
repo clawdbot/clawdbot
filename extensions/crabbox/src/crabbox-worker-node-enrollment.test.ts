@@ -281,25 +281,19 @@ echo 123
   return { code, output: Buffer.concat(output).toString("utf8") };
 }
 
+async function expectSetupPhases(result: ReturnType<typeof enroll>) {
+  const completed = await result;
+  expect(completed.code).toBe(0);
+  const lines = completed.output.trim().split("\n");
+  // Crabbox consumes these stream markers; successful bootstrap emits no other data.
+  expect(lines.every((line) => /^CRABBOX_PHASE:[a-z.-]{1,80}$/.test(line))).toBe(true);
+  return lines.map((line) => line.slice("CRABBOX_PHASE:".length));
+}
+
 async function readLaunch(stateDir: string) {
   const target = path.join(stateDir, "launch.json");
-  // Child startup follows the test deadline, not waitFor's shorter polling deadline.
-  const watcher = fs.watch(stateDir, { persistent: false });
-  cleanups.push(() => watcher.close());
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const inspect = () => {
-        if (fs.existsSync(target)) {
-          resolve();
-        }
-      };
-      watcher.on("change", inspect);
-      watcher.once("error", reject);
-      inspect();
-    });
-  } finally {
-    watcher.close();
-  }
+  // File watchers can miss a fast atomic rename before their subscription is ready.
+  await expect.poll(() => fs.existsSync(target), { timeout: 30_000 }).toBe(true);
   return JSON.parse(fs.readFileSync(target, "utf8")) as {
     build: string;
     cli: string;
@@ -333,10 +327,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       ...worker.nodeBootstrap,
       packageRelativePath: `worker-artifacts/${worker.nodeBootstrap.sha256}.tgz`,
     };
-    await expect(enroll(home, nodeBootstrap, undefined, true, workerBundle)).resolves.toEqual({
-      code: 0,
-      output: "",
-    });
+    await expectSetupPhases(enroll(home, nodeBootstrap, undefined, true, workerBundle));
     const archivePath = path.join(
       home,
       ".openclaw-worker",
@@ -369,10 +360,21 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       ...worker.nodeBootstrap,
       packageRelativePath: `worker-artifacts/${worker.nodeBootstrap.sha256}.tgz`,
     };
-    await expect(enroll(home, nodeBootstrap, undefined, true, workerBundle)).resolves.toEqual({
-      code: 0,
-      output: "",
-    });
+    expect(
+      await expectSetupPhases(enroll(home, nodeBootstrap, undefined, true, workerBundle)),
+    ).toEqual([
+      "openclaw-bootstrap-preparation",
+      "openclaw-bootstrap-download-connection",
+      "openclaw-bootstrap-download-http-response",
+      "openclaw-bootstrap-download-body",
+      "openclaw-bootstrap-download-connection",
+      "openclaw-bootstrap-download-http-response",
+      "openclaw-bootstrap-download-body",
+      "openclaw-bootstrap-installation",
+      "openclaw-bootstrap-runtime-verification",
+      "openclaw-bootstrap-worker-archive-publication",
+      "openclaw-bootstrap-complete",
+    ]);
     expect(fs.existsSync(path.join(home, ".openclaw"))).toBe(false);
     expect(fs.readdirSync(path.join(home, ".openclaw-worker", "node-runtimes"))).toEqual([
       nodeBootstrap.sha256,
@@ -408,12 +410,24 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     expect(fs.readFileSync(path.join(preparedPackage, workerBundle.packageRelativePath))).toEqual(
       workerBytes,
     );
-    await expect(enroll(home, nodeBootstrap, undefined, true, workerBundle)).resolves.toEqual({
-      code: 0,
-      output: "",
-    });
+    expect(
+      await expectSetupPhases(enroll(home, nodeBootstrap, undefined, true, workerBundle)),
+    ).toEqual([
+      "openclaw-bootstrap-preparation",
+      "openclaw-bootstrap-runtime-verification",
+      "openclaw-bootstrap-worker-archive-verification",
+      "openclaw-bootstrap-worker-archive-publication",
+      "openclaw-bootstrap-complete",
+    ]);
     expect(worker.authorizations).toEqual([`Bearer ${workerBundle.token}`]);
-    await expect(enroll(home, nodeBootstrap)).resolves.toEqual({ code: 0, output: "" });
+    expect(await expectSetupPhases(enroll(home, nodeBootstrap))).toEqual([
+      "openclaw-bootstrap-preparation",
+      "openclaw-bootstrap-runtime-verification",
+      "openclaw-bootstrap-activation",
+      "openclaw-bootstrap-plugin-activation",
+      "openclaw-bootstrap-node-launch",
+      "openclaw-bootstrap-complete",
+    ]);
     const launch = await readLaunch(stateDir);
     expect(launch).toMatchObject({
       build: "first",
@@ -437,7 +451,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     expect(authorizations).toEqual([`Bearer ${nodeBootstrap.token}`]);
     stop();
     fs.rmSync(path.join(stateDir, "launch.json"));
-    await expect(enroll(home, nodeBootstrap)).resolves.toEqual({ code: 0, output: "" });
+    await expectSetupPhases(enroll(home, nodeBootstrap));
     expect((await readLaunch(stateDir)).cli).toBe(launch.cli);
     expect(authorizations).toHaveLength(1);
   }, 30_000);
@@ -445,12 +459,12 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
   it("selects new source bytes even when the public version has not changed", async () => {
     const { home, stateDir, stop } = testHome();
     const first = await serveArtifact(await packageFixture("first"));
-    await expect(enroll(home, first.nodeBootstrap)).resolves.toEqual({ code: 0, output: "" });
+    await expectSetupPhases(enroll(home, first.nodeBootstrap));
     const oldLaunch = await readLaunch(stateDir);
     stop();
     fs.rmSync(path.join(stateDir, "launch.json"));
     const second = await serveArtifact(await packageFixture("second"));
-    await expect(enroll(home, second.nodeBootstrap)).resolves.toEqual({ code: 0, output: "" });
+    await expectSetupPhases(enroll(home, second.nodeBootstrap));
     const launch = await readLaunch(stateDir);
     expect(launch.build).toBe("second");
     expect(launch.cli).not.toBe(oldLaunch.cli);
@@ -461,10 +475,10 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     async () => {
       const { home, stateDir } = testHome();
       const { nodeBootstrap, authorizations } = await serveArtifact(await packageFixture("first"));
-      await expect(enroll(home, nodeBootstrap)).resolves.toEqual({ code: 0, output: "" });
+      await expectSetupPhases(enroll(home, nodeBootstrap));
       await readLaunch(stateDir);
       const pid = fs.readFileSync(path.join(stateDir, "node.pid"), "utf8");
-      await expect(enroll(home, nodeBootstrap)).resolves.toEqual({ code: 0, output: "" });
+      await expectSetupPhases(enroll(home, nodeBootstrap));
       expect(fs.readFileSync(path.join(stateDir, "node.pid"), "utf8")).toBe(pid);
       expect(authorizations).toHaveLength(1);
       const rejected = await enroll(home, { ...nodeBootstrap, sha256: "b".repeat(64) });
@@ -527,7 +541,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       ),
     });
     expect(authorizations).toHaveLength(0);
-    await expect(enroll(home, nodeBootstrap)).resolves.toEqual({ code: 0, output: "" });
+    await expectSetupPhases(enroll(home, nodeBootstrap));
     expect((await readLaunch(stateDir)).build).toBe("tls");
     expect(authorizations).toEqual([`Bearer ${nodeBootstrap.token}`]);
   }, 30_000);
@@ -546,10 +560,7 @@ describe.runIf(hasBashMapfile)("Crabbox desktop node bootstrap", () => {
     async ({ enabled, runtimeDir }) => {
       const { home, stateDir } = testHome();
       const { nodeBootstrap } = await serveArtifact(await packageFixture("desktop"));
-      await expect(enroll(home, nodeBootstrap, { enabled, runtimeDir })).resolves.toEqual({
-        code: 0,
-        output: "",
-      });
+      await expectSetupPhases(enroll(home, nodeBootstrap, { enabled, runtimeDir }));
       const launch = await readLaunch(stateDir);
       expect(launch.enabledPlugins).toEqual(enabled ? ["demo", "cua-computer"] : ["demo"]);
       expect(launch.environment).toEqual(

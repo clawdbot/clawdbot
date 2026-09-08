@@ -17,7 +17,6 @@ import {
 import * as slotSelection from "../plugins/slot-selection.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { VERSION } from "../version.js";
 import {
   applyExclusiveSlotSelectionMock,
   clearPluginRegistryLoadCacheMock,
@@ -52,6 +51,13 @@ import { runPluginInstallCommand } from "./plugins-install-command.js";
 
 // Default-selector assertions describe a stable build; beta cases set their own identity.
 const coreVersion = vi.hoisted(() => ({ value: "2026.8.1" }));
+const resolveNpmSpecMetadataMock = vi.hoisted(() =>
+  vi.fn<typeof import("../infra/install-source-utils.js").resolveNpmSpecMetadata>(),
+);
+vi.mock("../infra/install-source-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/install-source-utils.js")>()),
+  resolveNpmSpecMetadata: resolveNpmSpecMetadataMock,
+}));
 vi.mock("../version.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../version.js")>()),
   get VERSION() {
@@ -66,8 +72,16 @@ const ORIGINAL_STDIN_TTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY
 const ORIGINAL_STDOUT_TTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 const PROFILE_STATE_ROOT = "/tmp/openclaw-ledger-profile";
 
-function expectedNpmInstallSpec(spec: string): string {
-  return VERSION.includes("-beta.") ? `${spec.replace(/@latest$/, "")}@${VERSION}` : spec;
+function mockNpmChannelMetadata(name: string, beta?: string, latest?: string): void {
+  resolveNpmSpecMetadataMock.mockImplementation(async ({ spec }) => {
+    if (spec !== `${name}@beta` && spec !== `${name}@latest`) {
+      throw new Error(`Unexpected npm metadata request: ${spec}`);
+    }
+    const version = spec === `${name}@beta` ? beta : latest;
+    return version
+      ? { ok: true, metadata: { name, version, resolvedSpec: `${name}@${version}` } }
+      : { ok: false, error: `Package not found on npm: ${spec}` };
+  });
 }
 
 const OFFICIAL_EXTERNAL_NPM_INSTALLS_WITHOUT_INTEGRITY = listOfficialExternalPluginCatalogEntries()
@@ -610,6 +624,9 @@ function primeBlockedHookConfigMutation(config = {} as OpenClawConfig): void {
 describe("plugins cli install", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
+    resolveNpmSpecMetadataMock.mockReset().mockImplementation(async ({ spec }) => {
+      throw new Error(`Unexpected npm metadata request: ${spec}`);
+    });
   });
 
   afterEach(() => {
@@ -2053,21 +2070,73 @@ describe("plugins cli install", () => {
 
   it.each(
     [
-      { version: "2026.8.1", channel: "beta", installSelector: "beta" },
-      { version: "2026.8.1-beta.4", channel: undefined, installSelector: "2026.8.1-beta.4" },
-      { version: "2026.8.1-beta.4", channel: "stable", installSelector: "2026.8.1-beta.4" },
-      { version: "2026.7.33", channel: "extended-stable", installSelector: "2026.7.33" },
-    ].flatMap(({ version, channel, installSelector }) =>
+      {
+        version: "2026.8.1",
+        channel: "beta",
+        beta: "2026.8.2-beta.1",
+        latest: "2026.8.1",
+        installSelector: "2026.8.2-beta.1",
+      },
+      {
+        version: "2026.8.1",
+        channel: "beta",
+        beta: "2026.8.1-beta.4",
+        latest: "2026.8.1",
+        installSelector: "2026.8.1",
+      },
+      {
+        version: "2026.8.1",
+        channel: "beta",
+        beta: undefined,
+        latest: "2026.8.1",
+        installSelector: "2026.8.1",
+      },
+      {
+        version: "2026.8.1-beta.4",
+        channel: undefined,
+        beta: "2026.8.2-beta.1",
+        latest: "2026.8.1",
+        installSelector: "2026.8.2-beta.1",
+      },
+      {
+        version: "2026.8.1-beta.4",
+        channel: "stable",
+        beta: "2026.8.2-beta.1",
+        latest: "2026.8.1",
+        installSelector: "2026.8.2-beta.1",
+      },
+      {
+        version: "2026.7.33",
+        channel: "extended-stable",
+        beta: undefined,
+        latest: undefined,
+        installSelector: "2026.7.33",
+      },
+      {
+        version: "2026.8.1",
+        channel: "stable",
+        beta: undefined,
+        latest: undefined,
+        installSelector: undefined,
+      },
+      {
+        version: "2026.8.1-beta.4",
+        channel: "dev",
+        beta: undefined,
+        latest: undefined,
+        installSelector: undefined,
+      },
+    ].flatMap(({ version, channel, beta, latest, installSelector }) =>
       [
         "brave",
         "@openclaw/brave-plugin",
         "@openclaw/brave-plugin@latest",
         "npm:@openclaw/brave-plugin@latest",
-      ].map((arg) => ({ version, channel, installSelector, arg })),
+      ].map((arg) => ({ version, channel, beta, latest, installSelector, arg })),
     ),
   )(
-    "installs $installSelector for $arg on core $version with channel $channel",
-    async ({ version, channel, installSelector, arg }) => {
+    "installs $installSelector for $arg on core $version with channel $channel (beta=$beta, latest=$latest)",
+    async ({ version, channel, beta, latest, installSelector, arg }) => {
       coreVersion.value = version;
       primeSuccessfulPluginPersistence("brave");
       pluginCliConfigMock.mockReturnValue({
@@ -2075,41 +2144,46 @@ describe("plugins cli install", () => {
         ...(channel ? { update: { channel } } : {}),
       } as OpenClawConfig);
       findBundledPluginSourceMock.mockReturnValue(undefined);
+      mockNpmChannelMetadata("@openclaw/brave-plugin", beta, latest);
       installPluginFromNpmSpecMock.mockResolvedValue(createNpmPluginInstallResult("brave"));
 
       await runCapabilityAcceptedPluginsInstallCommand(["plugins", "install", arg]);
 
-      expect(npmInstallCall().spec).toBe(`@openclaw/brave-plugin@${installSelector}`);
-      expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
-      // The record keeps the operator's selector so a later channel change is
-      // not silently pinned to the beta dist-tag.
-      expect(persistedInstallRecord("brave").spec).toBe(
-        arg.endsWith("@latest") ? "@openclaw/brave-plugin@latest" : "@openclaw/brave-plugin",
+      const recordSpec = arg.endsWith("@latest")
+        ? "@openclaw/brave-plugin@latest"
+        : "@openclaw/brave-plugin";
+      expect(npmInstallCall().spec).toBe(
+        installSelector ? `@openclaw/brave-plugin@${installSelector}` : recordSpec,
       );
+      expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
+      expect(persistedInstallRecord("brave").spec).toBe(recordSpec);
+      expect(resolveNpmSpecMetadataMock).toHaveBeenCalledTimes(beta || latest ? 2 : 0);
     },
   );
 
-  it("does not install the stable release when no beta artifact is published", async () => {
+  it("does not retry a selected beta release when its artifact is unavailable", async () => {
     primeSuccessfulPluginPersistence("brave");
     pluginCliConfigMock.mockReturnValue({
       ...createEmptyPluginConfig(),
       update: { channel: "beta" },
     } as OpenClawConfig);
     findBundledPluginSourceMock.mockReturnValue(undefined);
+    mockNpmChannelMetadata("@openclaw/brave-plugin", "2026.8.2-beta.1", "2026.8.1");
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: false,
-      error: "npm error code ETARGET No matching version found for @openclaw/brave-plugin@beta",
+      error:
+        "npm error code ETARGET No matching version found for @openclaw/brave-plugin@2026.8.2-beta.1",
       code: "npm_package_not_found",
     });
 
     await expect(runPluginsCommand(["plugins", "install", "brave"])).rejects.toThrow("__exit__:1");
 
-    expect(npmInstallCall(0).spec).toBe("@openclaw/brave-plugin@beta");
+    expect(npmInstallCall(0).spec).toBe("@openclaw/brave-plugin@2026.8.2-beta.1");
     expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
     expect(installHooksFromNpmSpecMock).not.toHaveBeenCalled();
     expect(configWriteMock).not.toHaveBeenCalled();
     expect(runtimeErrors.at(-1)).toContain(
-      "No @openclaw/brave-plugin@beta release is published for this gateway",
+      "No @openclaw/brave-plugin@2026.8.2-beta.1 release is published for this gateway",
     );
   });
 
@@ -2195,12 +2269,20 @@ describe("plugins cli install", () => {
     ...OFFICIAL_EXTERNAL_NPM_INSTALLS_WITHOUT_INTEGRITY.map((entry) => ({
       ...entry,
       version: "2026.8.1",
+      installVersion: undefined,
     })),
-    { ...OFFICIAL_EXTERNAL_NPM_INSTALLS_WITHOUT_INTEGRITY[0]!, version: "2026.8.1-beta.4" },
+    {
+      ...OFFICIAL_EXTERNAL_NPM_INSTALLS_WITHOUT_INTEGRITY[0]!,
+      version: "2026.8.1-beta.4",
+      installVersion: "2026.8.2-beta.1",
+    },
   ])(
     "keeps official external npm installs trusted without integrity for $pluginId on $version",
-    async ({ pluginId, npmSpec, version }) => {
+    async ({ pluginId, npmSpec, version, installVersion }) => {
       coreVersion.value = version;
+      if (installVersion) {
+        mockNpmChannelMetadata(npmSpec.replace(/@latest$/, ""), "2026.8.2-beta.1", "2026.8.1");
+      }
       await withTempDir("openclaw-official-plugin-install-", async (cwd) => {
         const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
         try {
@@ -2214,7 +2296,9 @@ describe("plugins cli install", () => {
             lookup: { kind: "pluginId", value: pluginId },
           });
           expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
-          expect(npmInstallCall().spec).toBe(expectedNpmInstallSpec(npmSpec));
+          expect(npmInstallCall().spec).toBe(
+            installVersion ? `${npmSpec.replace(/@latest$/, "")}@${installVersion}` : npmSpec,
+          );
           expect(npmInstallCall().expectedPluginId).toBe(pluginId);
           expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
           expect(npmInstallCall().expectedIntegrity).toBeUndefined();
@@ -2426,13 +2510,14 @@ describe("plugins cli install", () => {
 
   it.each([
     { version: "2026.8.1", selector: "latest", installSelector: "latest" },
-    { version: "2026.8.1-beta.4", selector: "latest", installSelector: "2026.8.1-beta.4" },
+    { version: "2026.8.1-beta.4", selector: "latest", installSelector: "2026.8.2-beta.1" },
     { version: "2026.8.1-beta.4", selector: "next", installSelector: "next" },
     { version: "2026.8.1-beta.4", selector: "2026.6.1", installSelector: "2026.6.1" },
   ])(
     "trusts catalog npm @$selector on core $version",
     async ({ version, selector, installSelector }) => {
       coreVersion.value = version;
+      mockNpmChannelMetadata("@wecom/wecom-openclaw-plugin", "2026.8.2-beta.1", "2026.8.1");
       primeSuccessfulPluginPersistence("wecom-openclaw-plugin");
       findBundledPluginSourceMock.mockReturnValue(undefined);
       installPluginFromNpmSpecMock.mockResolvedValue(

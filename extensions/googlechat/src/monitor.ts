@@ -76,6 +76,7 @@ function resolveGoogleChatBotLoopProtection(params: {
   appUserId: string;
   accountId: string;
   conversationId: string;
+  eventId?: string;
   config?: ChannelBotLoopProtectionFacts["config"];
   defaultsConfig?: ChannelBotLoopProtectionFacts["defaultsConfig"];
   eventTime?: string;
@@ -93,6 +94,7 @@ function resolveGoogleChatBotLoopProtection(params: {
     conversationId: params.conversationId,
     senderId: params.senderId,
     receiverId: params.appUserId,
+    eventId: params.eventId,
     config: params.config,
     defaultsConfig: params.defaultsConfig,
     defaultEnabled: true,
@@ -269,6 +271,7 @@ async function processMessageWithPipeline(params: {
     appUserId,
     accountId: account.accountId,
     conversationId: spaceId,
+    eventId: message.name,
     config: resolveGoogleChatBotLoopProtectionConfig({
       accountConfig: account.config.botLoopProtection,
       groupConfig: groupBotLoopProtection,

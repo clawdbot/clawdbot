@@ -445,17 +445,26 @@ describe("canonical CLI history", () => {
     }
   });
 
-  it.each(["auth-profile", "auth-epoch"] as const)(
+  it.each(["auth-profile", "auth-epoch", "auth-unknown"] as const)(
     "does not raw-reseed %s invalidations even when opted in",
     async (reason) => {
-      const { params } = await createSession(["previous account context"]);
-      await expect(
-        loadCliSessionReseedMessages({
-          ...params,
-          allowRawTranscriptReseed: true,
-          rawTranscriptReseedReason: reason,
-        }),
-      ).resolves.toEqual([]);
+      const { params, manager } = await createSession(["previous account context"]);
+      for (const compacted of [false, true]) {
+        if (compacted) {
+          manager.appendCompaction("previous account summary", "msg-0", 1000);
+          manager.flushPendingPersistence();
+        }
+        for (const sessionManager of [undefined, manager]) {
+          await expect(
+            loadCliSessionReseedMessages({
+              ...params,
+              sessionManager,
+              allowRawTranscriptReseed: true,
+              rawTranscriptReseedReason: reason,
+            }),
+          ).resolves.toEqual([]);
+        }
+      }
     },
   );
 

@@ -8,7 +8,7 @@ import { resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import type { PluginCapabilityConsentReview } from "../plugins/capability-summary.js";
 import {
   attachPluginInstallOwnerMigrations,
-  resolvePluginInstallTransactionSink,
+  resolvePluginInstallTransactionRequest,
   type PluginInstallTransaction,
 } from "../plugins/install-transaction.js";
 import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
@@ -209,7 +209,9 @@ function primePluginUpdate(
   installOwnerMigrations?: Readonly<Record<string, string>>,
 ): void {
   updateNpmInstalledPluginsMock.mockImplementation(async (params: unknown) => {
-    resolvePluginInstallTransactionSink(params as object)?.push(...(transactions ?? []));
+    resolvePluginInstallTransactionRequest(params as object)?.transactionSink?.push(
+      ...(transactions ?? []),
+    );
     const result = {
       config,
       changed,
@@ -477,7 +479,7 @@ describe("plugins cli update", () => {
     primePluginUpdate(cfg);
     const transaction = { commit: vi.fn(async () => {}), rollback: vi.fn(async () => {}) };
     updateNpmInstalledHookPacksMock.mockImplementation(async (params) => {
-      resolvePluginInstallTransactionSink(params)?.push(transaction);
+      resolvePluginInstallTransactionRequest(params)?.transactionSink?.push(transaction);
       return {
         config: nextConfig,
         changed: true,
@@ -522,7 +524,7 @@ describe("plugins cli update", () => {
     });
     const events: string[] = [];
     updateNpmInstalledHookPacksMock.mockImplementation(async (params) => {
-      resolvePluginInstallTransactionSink(params)?.push({
+      resolvePluginInstallTransactionRequest(params)?.transactionSink?.push({
         commit: async () => {
           events.push("commit");
           if (failure === "backup cleanup") {

@@ -843,7 +843,7 @@ describe("handleDiscordMessageAction", () => {
       expect.objectContaining({
         action: "sendMessage",
         to: "channel:123",
-        content: "",
+        content: undefined,
         embeds,
       }),
       cfg,
