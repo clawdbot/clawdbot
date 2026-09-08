@@ -164,6 +164,12 @@ export type SessionTranscriptReadScope = Omit<SessionTranscriptRuntimeScope, "se
   sessionKey?: string;
   /** Entry already loaded by hot callers; avoids rereading the session store. */
   sessionEntry?: Partial<Pick<SessionEntry, "sessionId">>;
+  /**
+   * Optional byte budget enforced before parsing transcript event rows. When set,
+   * the reader sums event_json lengths via SQL and rejects with a typed error
+   * before materializing parsed entries, mirroring the file-path stat-size guard.
+   */
+  maxEventBytes?: number;
 };
 
 export interface SessionTranscriptReadTarget {

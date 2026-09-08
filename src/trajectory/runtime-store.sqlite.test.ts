@@ -389,6 +389,117 @@ describe("SQLite trajectory runtime store", () => {
   }
 });
 
+describe("SQLite trajectory runtime reader byte and count budgets", () => {
+  let tempDir: string;
+  let storePath: string;
+
+  beforeEach(async () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trajectory-sqlite-"));
+    storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:session-1", storePath },
+      { sessionId: "session-1", updatedAt: 10 },
+    );
+  });
+
+  afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("rejects oversized SQLite runtime store rows before parsing them", () => {
+    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
+      createTrajectoryEvent({ seq: 1, type: "budget-row-1", payloadSize: 256 }),
+      createTrajectoryEvent({ seq: 2, type: "budget-row-2", payloadSize: 256 }),
+    ]);
+
+    expect(() =>
+      loadSqliteTrajectoryRuntimeEventRowsSync({
+        sessionId: "session-1",
+        storePath,
+        maxEventBytes: 64,
+      }),
+    ).toThrow(/runtime store is too large to export/u);
+  });
+
+  it("rejects SQLite runtime store event count before parsing rows", () => {
+    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
+      createTrajectoryEvent({ seq: 1, type: "count-row-1" }),
+      createTrajectoryEvent({ seq: 2, type: "count-row-2" }),
+    ]);
+
+    expect(() =>
+      loadSqliteTrajectoryRuntimeEventRowsSync({
+        sessionId: "session-1",
+        storePath,
+        maxEventCount: 1,
+      }),
+    ).toThrow(/runtime store has too many events to export/u);
+  });
+
+  it("accepts a SQLite runtime event-count budget equal to the row count and rejects one over", () => {
+    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
+      createTrajectoryEvent({ seq: 1, type: "boundary-row-1" }),
+      createTrajectoryEvent({ seq: 2, type: "boundary-row-2" }),
+    ]);
+
+    expect(
+      loadSqliteTrajectoryRuntimeEventRowsSync({
+        sessionId: "session-1",
+        storePath,
+        maxEventCount: 2,
+      }).length,
+    ).toBe(2);
+    expect(() =>
+      loadSqliteTrajectoryRuntimeEventRowsSync({
+        sessionId: "session-1",
+        storePath,
+        maxEventCount: 1,
+      }),
+    ).toThrow(/runtime store has too many events to export/u);
+  });
+
+  it("counts JSONL row separators in the runtime byte budget", () => {
+    const events: TrajectoryEvent[] = [];
+    const ROWS = 50;
+    for (let i = 0; i < ROWS; i += 1) {
+      events.push({
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "runtime",
+        type: "sqlite-runtime",
+        ts: "2026-04-01T05:46:41.000Z",
+        seq: i + 1,
+        sourceSeq: i + 1,
+        sessionId: "session-1",
+        data: { payload: "s" },
+      });
+    }
+    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [...events]);
+    const rawSum = events.reduce(
+      (total, event) => total + Buffer.byteLength(JSON.stringify(event), "utf8"),
+      0,
+    );
+    const jsonlSize = rawSum + ROWS - 1;
+    expect(() =>
+      loadSqliteTrajectoryRuntimeEventRowsSync({
+        sessionId: "session-1",
+        storePath,
+        maxEventBytes: rawSum,
+      }),
+    ).toThrow(/runtime store is too large to export/u);
+    expect(
+      loadSqliteTrajectoryRuntimeEventRowsSync({
+        sessionId: "session-1",
+        storePath,
+        maxEventBytes: jsonlSize,
+      }).length,
+    ).toBe(ROWS);
+  });
+});
+
 function createTrajectoryEvent(options: {
   payloadSize?: number;
   runId?: string;
@@ -413,3 +524,129 @@ function createTrajectoryEvent(options: {
     data: { payload: "x".repeat(options.payloadSize ?? 120) },
   };
 }
+
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+
+/**
+ * Insert a competing oversized row via a second writable connection. Called
+ * between the production reader's budget aggregate and payload SELECT by
+ * intercepting the reader connection's prepare() — the same test-local native
+ * statement instrumentation pattern this suite uses for materialization checks.
+ */
+function createCompetingRowInjector(
+  dbPath: string,
+  sessionId: string,
+): { inject: () => void; close: () => void } {
+  const writerDb = openNodeSqliteDatabase(dbPath);
+  const competingEvent = createTrajectoryEvent({
+    seq: 2,
+    type: "competing-row",
+    payloadSize: 256,
+  });
+  const competingJson = JSON.stringify(competingEvent);
+  const insert = writerDb.prepare(
+    "INSERT INTO trajectory_runtime_events (session_id, seq, run_id, event_json, created_at) VALUES (?, ?, ?, ?, ?)",
+  );
+  return {
+    inject: () => insert.run(sessionId, 2, competingEvent.runId ?? null, competingJson, Date.now()),
+    close: () => writerDb.close(),
+  };
+}
+
+describe("SQLite trajectory runtime reader snapshot consistency", () => {
+  let tempDir: string;
+  let storePath: string;
+  let dbPath: string;
+
+  beforeEach(async () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trajectory-sqlite-snapshot-"));
+    storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:session-1", storePath },
+      { sessionId: "session-1", updatedAt: 10 },
+    );
+    dbPath = path.join(tempDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+  });
+
+  afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("keeps the production reader's budget aggregate and payload SELECT in one deferred snapshot so a competing writer cannot cross the budget", () => {
+    // Seed one row within a tight byte budget.
+    const event = createTrajectoryEvent({ seq: 1, type: "snapshot-row-1", payloadSize: 100 });
+    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [event]);
+    const rowBytes = Buffer.byteLength(JSON.stringify(event), "utf8");
+
+    // Borrow the process-cached agent database so the production reader reuses
+    // this connection (withOpenClawAgentDatabaseReadOnly borrows when not in a
+    // transaction). Spying on its prepare() lets us detect the payload SELECT
+    // and inject a competing row between admission and materialization — the
+    // same native-statement instrumentation pattern used by the trim test above.
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: dbPath });
+    const injector = createCompetingRowInjector(dbPath, "session-1");
+    const prepare = database.db.prepare.bind(database.db);
+    let injected = false;
+    const prepareSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      // The payload SELECT fetches "seq" and "event_json" with an ORDER BY;
+      // the budget aggregate uses SUM(OCTET_LENGTH). Inject exactly once,
+      // after the budget check passes and before rows are iterated.
+      if (!injected && sql.includes(`"seq", "event_json"`)) {
+        injector.inject();
+        injected = true;
+      }
+      return statement;
+    });
+
+    try {
+      // Call the production reader with a budget that exactly fits the seeded
+      // row. The deferred transaction snapshot prevents the competing row
+      // (inserted between admission and materialization) from being visible.
+      const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
+        sessionId: "session-1",
+        storePath,
+        maxEventBytes: rowBytes,
+      });
+
+      expect(rows.map((row) => row.event.type)).toEqual(["snapshot-row-1"]);
+      expect(injected).toBe(true);
+    } finally {
+      prepareSpy.mockRestore();
+      injector.close();
+    }
+  });
+
+  it("admits a within-budget two-row read at the exact byte boundary via the production reader", () => {
+    const event = createTrajectoryEvent({ seq: 1, type: "admit-row-1", payloadSize: 100 });
+    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [event]);
+    const rowBytes = Buffer.byteLength(JSON.stringify(event), "utf8");
+
+    const secondEvent = createTrajectoryEvent({
+      seq: 2,
+      type: "admit-row-2",
+      payloadSize: 100,
+    });
+    const writerDb = openNodeSqliteDatabase(dbPath);
+    writerDb
+      .prepare(
+        "INSERT INTO trajectory_runtime_events (session_id, seq, run_id, event_json, created_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run("session-1", 1, secondEvent.runId ?? null, JSON.stringify(secondEvent), Date.now());
+    writerDb.close();
+
+    const secondRowBytes = Buffer.byteLength(JSON.stringify(secondEvent), "utf8");
+    const totalBudget = rowBytes + 1 + secondRowBytes; // 2 rows + 1 JSONL separator
+
+    const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
+      sessionId: "session-1",
+      storePath,
+      maxEventBytes: totalBudget,
+    });
+
+    expect(rows.length).toBe(2);
+    expect(rows.map((row) => row.event.type)).toEqual(["admit-row-1", "admit-row-2"]);
+  });
+});
