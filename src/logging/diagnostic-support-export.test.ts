@@ -6,7 +6,7 @@ import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
-  resetDiagnosticStabilityBundleForTest,
+  uninstallDiagnosticStabilityFatalHook,
   writeDiagnosticStabilityBundleSync,
 } from "./diagnostic-stability-bundle.js";
 import {
@@ -35,14 +35,14 @@ describe("diagnostic support export", () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-support-export-"));
     resetDiagnosticEventsForTest();
     resetDiagnosticStabilityRecorderForTest();
-    resetDiagnosticStabilityBundleForTest();
+    uninstallDiagnosticStabilityFatalHook();
   });
 
   afterEach(() => {
     stopDiagnosticStabilityRecorder();
     resetDiagnosticEventsForTest();
     resetDiagnosticStabilityRecorderForTest();
-    resetDiagnosticStabilityBundleForTest();
+    uninstallDiagnosticStabilityFatalHook();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 

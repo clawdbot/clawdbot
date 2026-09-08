@@ -4,8 +4,14 @@ import { detectMime } from "@openclaw/media-core/mime";
 
 const BASE64_SNIFF_PREFIX_CHARS = 256;
 
-/** Sniffs a MIME type from a small base64 prefix after validating the full payload. */
-export async function sniffMimeFromBase64(base64: string): Promise<string | undefined> {
+/** Detects MIME from a bounded base64 prefix and optional caller metadata. */
+export async function sniffMimeFromBase64(
+  base64: string,
+  hints: Pick<
+    Parameters<typeof detectMime>[0],
+    "headerMime" | "filePath" | "additionalMimeHints"
+  > = {},
+): Promise<string | undefined> {
   const canonical = canonicalizeBase64(base64);
   if (!canonical) {
     return undefined;
@@ -14,15 +20,6 @@ export async function sniffMimeFromBase64(base64: string): Promise<string | unde
   const take = Math.min(BASE64_SNIFF_PREFIX_CHARS, canonical.length);
   const sliceLength = take - (take % 4);
   // Keep the existing minimum so short magic-byte prefixes are not treated as complete media.
-  if (sliceLength < 8) {
-    return undefined;
-  }
-
-  try {
-    const canonicalPrefix = canonical.slice(0, sliceLength);
-    const head = Buffer.from(canonicalPrefix, "base64");
-    return await detectMime({ buffer: head });
-  } catch {
-    return undefined;
-  }
+  const head = sliceLength < 8 ? undefined : Buffer.from(canonical.slice(0, sliceLength), "base64");
+  return await detectMime({ ...hints, buffer: head });
 }

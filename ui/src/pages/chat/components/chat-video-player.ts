@@ -168,11 +168,13 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
           onExpand,
           visualMode: "preview-with-favicon",
         })}
-        ${preparing
-          ? html`<div class="chat-assistant-attachment-card__reason chat-media-preparing">
-              ${t("chat.mediaPlayer.preparing")}
-            </div>`
-          : null}
+        ${
+          preparing
+            ? html`<div class="chat-assistant-attachment-card__reason chat-media-preparing">
+                ${t("chat.mediaPlayer.preparing")}
+              </div>`
+            : null
+        }
         <div class="chat-assistant-video-frame" ?hidden=${preparing}>
           <video
             controls

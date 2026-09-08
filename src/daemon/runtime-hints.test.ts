@@ -57,7 +57,7 @@ describe("buildPlatformServiceStartHints", () => {
     expect(
       buildPlatformServiceStartHints({
         platform: "darwin",
-        installCommand: "openclaw gateway install",
+        installHint: "openclaw gateway install",
         startCommand: "openclaw gateway",
         launchAgentPlistPath: "~/Library/LaunchAgents/com.openclaw.gateway.plist",
         systemdServiceName: "openclaw-gateway",
@@ -71,7 +71,7 @@ describe("buildPlatformServiceStartHints", () => {
     expect(
       buildPlatformServiceStartHints({
         platform: "linux",
-        installCommand: "openclaw gateway install",
+        installHint: "openclaw gateway install",
         startCommand: "openclaw gateway",
         launchAgentPlistPath: "~/Library/LaunchAgents/com.openclaw.gateway.plist",
         systemdServiceName: "openclaw-gateway",

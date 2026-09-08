@@ -1,6 +1,6 @@
 // Tests model command output, catalog loading, and provider auth status rendering.
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -104,11 +104,12 @@ function setFastModelsCliBackendDeps(): void {
 }
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  getPreparedModelCatalogOwnerSnapshot: () => undefined,
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog: modelCatalogMocks.loadModelCatalog,
-  loadPreparedModelCatalogOwnerSnapshot: async (...args: unknown[]) => {
-    const entries = await modelCatalogMocks.loadModelCatalog(...args);
-    return { modelCatalog: { entries, routeVariants: entries }, authModes: {} };
+  withPreparedModelCatalogOwner: async (params: unknown, read: (owner: object) => unknown) => {
+    const entries = await modelCatalogMocks.loadModelCatalog(params);
+    const modelCatalog = { entries, routeVariants: entries };
+    return read({ modelCatalog, authModes: {}, isCurrent: () => true });
   },
 }));
 
@@ -188,17 +189,9 @@ const textSurfaceModelsTestPlugins = (["discord", "whatsapp"] as const).map((id)
   source: "test",
 }));
 
-beforeAll(async () => {
-  setFastModelsCliBackendDeps();
-  modelCatalogMocks.loadModelCatalog.mockResolvedValue([
-    { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
-  ]);
-  await buildPreparedModelsProviderData({
-    agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
-  } as OpenClawConfig);
-});
-
 beforeEach(() => {
+  // Output assertions must not race the browse deadline on a busy test host.
+  vi.useFakeTimers();
   setFastModelsCliBackendDeps();
   modelCatalogMocks.loadModelCatalog.mockReset();
   modelCatalogMocks.loadModelCatalog.mockResolvedValue([
@@ -252,6 +245,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   cliBackendsTesting.resetDepsForTest();
 });
 
@@ -339,22 +333,17 @@ describe("handleModelsCommand", () => {
   });
 
   it("does not block default browse when read-only catalog loading is slow", async () => {
-    vi.useFakeTimers();
-    try {
-      modelCatalogMocks.loadModelCatalog.mockReturnValue(new Promise(() => {}));
+    modelCatalogMocks.loadModelCatalog.mockReturnValue(new Promise(() => {}));
 
-      const resultPromise = handleModelsCommand(buildParams("/models"), true);
-      await vi.advanceTimersByTimeAsync(750);
-      const result = await resultPromise;
+    const resultPromise = handleModelsCommand(buildParams("/models"), true);
+    await vi.advanceTimersByTimeAsync(750);
+    const result = await resultPromise;
 
-      expect(modelCatalogMocks.loadModelCatalog).toHaveBeenCalledTimes(1);
-      expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(true);
-      expect(result?.shouldContinue).toBe(false);
-      expect(result?.reply?.text).toContain("Providers:");
-      expect(result?.reply?.text).toContain("- anthropic (1)");
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(modelCatalogMocks.loadModelCatalog).toHaveBeenCalledTimes(1);
+    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(true);
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Providers:");
+    expect(result?.reply?.text).toContain("- anthropic (1)");
   });
 
   it("keeps explicit all browse on the full catalog path", async () => {

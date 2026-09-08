@@ -371,6 +371,19 @@ describe("memory_search unavailable payloads", () => {
           "Retry memory_search after a short wait: a memory-corpus timeout pauses retries for up to a minute. If memory-corpus timeouts persist, run: openclaw memory status --deep --agent main, and rebuild with openclaw memory index --force --agent main only if it reports the index dirty or incomplete",
       });
       expect(searchCalls).toBe(1);
+      setMemorySearchImpl(async () => {
+        searchCalls += 1;
+        return [];
+      });
+      await vi.advanceTimersByTimeAsync(59_999);
+      const pausedResult = await tool.execute("search-still-paused", { query: "hello again" });
+      expect(pausedResult.details).toEqual(cooldownResult.details);
+      expect(searchCalls).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      const retryResult = await tool.execute("search-retry", { query: "hello again" });
+      expect(retryResult.details).toMatchObject({ results: [] });
+      expect(retryResult.details).not.toHaveProperty("unavailable");
+      expect(searchCalls).toBe(2);
     } finally {
       vi.useRealTimers();
     }

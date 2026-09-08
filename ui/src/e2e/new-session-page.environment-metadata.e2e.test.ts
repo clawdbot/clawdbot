@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
-import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  tooltipTitleText,
+} from "./control-ui-e2e-suite.test-support.ts";
 import {
   WORKSPACE,
   captureDeviceRuntimeUiProof,
@@ -18,11 +21,7 @@ const updateIssue = {
 
 suite.define(() => {
   it("offers paired devices to every model whose runtime explicitly supports them", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       agentModel: "anthropic/claude-sonnet-4-6",
@@ -81,6 +80,10 @@ suite.define(() => {
               workerSlots: { total: 2, available: 0 },
               capabilities: ["codex.exec-server.stdio.v1"],
               invocableCommands: ["codex.exec-server.stdio.v1"],
+              requiredNodeCommand: {
+                command: "codex.exec-server.stdio.v1",
+                state: "invocable",
+              },
             },
             {
               id: "node:restricted-mac",
@@ -91,6 +94,10 @@ suite.define(() => {
               workerSlots: { total: 2, available: 1 },
               capabilities: ["codex.exec-server.stdio.v1"],
               invocableCommands: [],
+              requiredNodeCommand: {
+                command: "codex.exec-server.stdio.v1",
+                state: "unauthorized",
+              },
             },
           ],
           profiles: [],
@@ -122,7 +129,16 @@ suite.define(() => {
       await whereTrigger.click();
       await expect.poll(() => device.isEnabled()).toBe(true);
       await expect.poll(() => restrictedDevice.isDisabled()).toBe(true);
-      await expect.poll(() => tooltipTitleText(restrictedDevice)).toMatch(/enable|approv/i);
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("environments.list")).map((request) => request.params),
+        )
+        .toContainEqual({ runtimeId: "codex" });
+      await expect
+        .poll(() => tooltipTitleText(restrictedDevice))
+        .toBe(
+          "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.",
+        );
       await captureDeviceRuntimeUiProof(
         suite,
         page,
@@ -156,11 +172,7 @@ suite.define(() => {
   });
 
   it("renders authoritative device eligibility and exact live capacity", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       workspace: WORKSPACE,

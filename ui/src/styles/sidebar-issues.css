@@ -19,7 +19,8 @@
   background: var(--bg-elevated);
   color: var(--text);
   box-shadow: var(--shadow-sm);
-  animation: menu-in 140ms var(--ease-out);
+  /* Scaling during entry skews the tab group's keyboard-scroll measurements. */
+  animation: fade-in 140ms var(--ease-out);
 }
 
 .sidebar-issues-panel__backdrop,
@@ -163,7 +164,9 @@
 
 .sidebar-issues-panel__tabs::part(tabs) {
   box-sizing: border-box;
-  width: 100%;
+  flex-shrink: 0;
+  width: max-content;
+  min-width: 100%;
   padding-inline: 8px;
 }
 
@@ -172,19 +175,16 @@
   padding-inline: 0;
 }
 
-.shell--mobile-nav .sidebar-issues-panel__tabs wa-tab.hub-tab {
-  min-width: 0;
-  flex: 1 1 0;
-}
-
-.shell--mobile-nav .sidebar-issues-panel__tabs wa-tab.hub-tab::part(base) {
-  width: 100%;
-  justify-content: center;
+.sidebar-issues-panel__tabs wa-tab.hub-tab {
+  /* Keep labels and counts whole; Web Awesome scrolls the row when they no longer fit. */
+  flex: 1 0 auto;
 }
 
 .sidebar-issues-panel__tabs wa-tab.hub-tab::part(base) {
   /* Popover tabs are tap targets (mobile sheet); keep a taller hit area than
      the page-hub sub tabs. */
+  width: 100%;
+  justify-content: center;
   padding-block: 8px 11px;
 }
 
@@ -290,6 +290,22 @@
 
 .sidebar-issues-panel__update {
   display: block;
+}
+
+.sidebar-issues-panel__mentions-note {
+  display: grid;
+  flex: none;
+  justify-items: start;
+  gap: 8px;
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+footer.sidebar-issues-panel__mentions-note {
+  border-block-start: 1px solid var(--border);
 }
 
 .sidebar-issues-panel__update > .sidebar-issues-panel__details {
@@ -456,6 +472,16 @@
   text-decoration: none;
 }
 
+.sidebar-issues-panel__summary--navigation {
+  position: relative;
+}
+
+.sidebar-issues-panel__navigation-link::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+}
+
 .sidebar-issues-panel__navigation-link:focus-visible {
   border-radius: var(--radius-sm);
   outline: none;
@@ -484,6 +510,8 @@
 }
 
 .sidebar-issues-panel__dismiss {
+  position: relative;
+  z-index: 1;
   display: inline-grid;
   width: 24px;
   height: 24px;
@@ -577,6 +605,60 @@
 .sidebar-update-card__review--primary:hover {
   background: var(--accent-hover);
   color: var(--accent-foreground);
+}
+
+.sidebar-mention-row__summary {
+  align-items: flex-start;
+}
+
+.sidebar-mention-row__avatar {
+  flex: none;
+  margin-block-start: 2px;
+}
+
+.sidebar-mention-row__header {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.sidebar-mention-row__header .sidebar-issues-panel__entity {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.sidebar-mention-row__age {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  white-space: nowrap;
+}
+
+.sidebar-mention-row__excerpt {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+
+.sidebar-mention-row__actions {
+  margin-block-start: 8px;
+}
+
+.sidebar-mention-row__actions a {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.shell--mobile-nav .sidebar-mention-row__actions .sidebar-issues-panel__action {
+  min-height: 40px;
 }
 
 .sidebar-approval-row {

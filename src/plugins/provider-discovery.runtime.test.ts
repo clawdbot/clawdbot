@@ -1,6 +1,10 @@
 /** Covers provider discovery runtime loading from plugin manifests and registries. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import {
+  prepareSyntheticAuthWithProvider,
+  resolveSyntheticAuthWithProvider,
+} from "./provider-synthetic-auth.js";
 import type { ProviderPlugin } from "./types.js";
 
 const mocks = vi.hoisted(() => {
@@ -239,6 +243,37 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
       { ...staticProvider, pluginId: "deepseek" },
     ]);
     expect(mocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
+  });
+
+  it("retains prepared auth through attribution until the provider hook changes", async () => {
+    const auth = { apiKey: "native-marker", source: "fixture", mode: "oauth" as const };
+    const provider: ProviderPlugin = {
+      id: "deepseek",
+      label: "Native fixture",
+      auth: [],
+      prepareSyntheticAuth: vi.fn(async () => auth),
+    };
+    mocks.loadSource.mockReturnValue(provider);
+    const context = { config: {}, provider: "deepseek" };
+    const options = { env: {}, workspaceDir: "/workspace" };
+    const discover = () => {
+      const [discovered] = resolvePluginDiscoveryProvidersRuntime({
+        discoveryEntriesOnly: true,
+        includeSyntheticAuthProviders: true,
+      });
+      if (!discovered) {
+        throw new Error("Fixture discovery provider missing");
+      }
+      return discovered;
+    };
+    await prepareSyntheticAuthWithProvider(discover(), context, options);
+    expect(resolveSyntheticAuthWithProvider(discover(), context, options)).toEqual(auth);
+
+    const replacement = { ...provider, prepareSyntheticAuth: vi.fn(async () => undefined) };
+    mocks.getCachedPluginModuleLoader.mockReturnValueOnce(vi.fn(() => replacement));
+    expect(resolveSyntheticAuthWithProvider(discover(), context, options)).toBeUndefined();
+    expect(provider.prepareSyntheticAuth).toHaveBeenCalledOnce();
+    expect(replacement.prepareSyntheticAuth).not.toHaveBeenCalled();
   });
 
   it("does not synthesize manifest entry providers for runtime-discovered catalogs", () => {

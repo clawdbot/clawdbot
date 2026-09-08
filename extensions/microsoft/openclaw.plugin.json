@@ -1,5 +1,6 @@
 {
   "id": "microsoft",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },

@@ -46,6 +46,7 @@ type RuntimePluginEnsureParams = {
   runtime: RuntimeEnv;
   workspaceDir?: string;
   output?: "interactive" | "silent";
+  reviewOfficialArtifacts?: boolean;
   beforePersistentEffect?: () => void | Promise<void>;
 };
 
@@ -209,6 +210,7 @@ async function ensureRuntimePluginForModelSelection(
     promptInstall: false,
     autoConfirmSingleSource: true,
     onCapabilityConsent,
+    reviewOfficialArtifacts: params.reviewOfficialArtifacts,
     beforePersistentEffect: params.beforePersistentEffect,
   });
   return finalizeRequiredRuntimePluginInstall(params.descriptor, {

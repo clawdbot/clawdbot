@@ -340,7 +340,7 @@ suite.define(() => {
           .toBe("Ada King & 4 others");
         const attribution = card.locator(".session-hovercard__attribution");
         const attributionName = attribution.locator("a.session-hovercard__attribution-name");
-        expect(await attributionName.getAttribute("href")).toBe("/activity?person=profile-ada");
+        expect(await attributionName.getAttribute("href")).toBe("/activity/profile-ada");
         const linkedAvatars = attribution.locator(".person-activity-avatar-link .viewer-avatar");
         await expect.poll(() => linkedAvatars.count()).toBe(5);
         const collapsedSpread = await linkedAvatars.evaluateAll((avatars) => {

@@ -124,6 +124,7 @@ async function loadTaskSnapshotOnce(
       "tasks.list",
       {
         status: RECENT_TASK_STATUSES,
+        sortBy: "endedAt",
         limit: 200,
         ...(params.agentId ? { agentId: params.agentId } : {}),
       },
@@ -469,9 +470,11 @@ class TasksPage extends OpenClawLightDomElement {
             ?disabled=${!this.gateway.connected || this.listTask.status === TaskStatus.PENDING}
             @click=${() => void this.refreshTasks()}
           >
-            ${this.listTask.status === TaskStatus.PENDING
-              ? t("common.refreshing")
-              : t("common.refresh")}
+            ${
+              this.listTask.status === TaskStatus.PENDING
+                ? t("common.refreshing")
+                : t("common.refresh")
+            }
           </button>
         `,
       })}

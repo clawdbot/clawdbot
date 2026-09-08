@@ -32,6 +32,7 @@ enum WatchMessagingError: LocalizedError {
     case unsupported
     case notPaired
     case watchAppNotInstalled
+    case admissionUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -41,6 +42,8 @@ enum WatchMessagingError: LocalizedError {
             "WATCH_UNAVAILABLE: no paired Apple Watch"
         case .watchAppNotInstalled:
             "WATCH_UNAVAILABLE: OpenClaw watch companion app is not installed"
+        case .admissionUnavailable:
+            "WATCH_UNAVAILABLE: Watch chat storage is not ready"
         }
     }
 }
@@ -54,7 +57,10 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
         maxCount: WatchMessagingService.maxStartupEvents)
     private var statusHandler: (@Sendable (WatchMessagingStatus) -> Void)?
     private var lastEmittedStatus: WatchMessagingStatus?
-    private var replyHandler: (@Sendable (WatchQuickReplyEvent) -> Void)?
+    private var chatDeliveryHandler: (@Sendable (OpenClawWatchChatDeliveryCommand) async throws -> Void)?
+    private var chatDeliveryReceiptAckHandler: (@Sendable (OpenClawWatchChatDeliveryReceiptAck) async throws -> Void)?
+    private var legacyChatRejectedHandler: (@Sendable () -> Void)?
+    private var hasRejectedLegacyChat = false
     private var execApprovalResolveHandler: (@Sendable (WatchExecApprovalResolveEvent) -> Void)?
     private var execApprovalSnapshotRequestHandler: (
         @Sendable (WatchExecApprovalSnapshotRequestEvent) -> Void)?
@@ -69,9 +75,8 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
             }
         }
         self.transport.setInboundEventHandler { [weak self] event in
-            Task { @MainActor [weak self] in
-                self?.receiveStartupEvent(event)
-            }
+            guard let self else { throw WatchMessagingError.admissionUnavailable }
+            try await self.receiveInboundEvent(event)
         }
         self.transport.activate()
     }
@@ -101,9 +106,21 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
         handler(snapshot)
     }
 
-    func setReplyHandler(_ handler: (@Sendable (WatchQuickReplyEvent) -> Void)?) {
-        self.replyHandler = handler
-        self.finishStartupRegistrationIfReady()
+    func setChatDeliveryHandler(
+        _ handler: (@Sendable (OpenClawWatchChatDeliveryCommand) async throws -> Void)?)
+    {
+        self.chatDeliveryHandler = handler
+    }
+
+    func setChatDeliveryReceiptAckHandler(
+        _ handler: (@Sendable (OpenClawWatchChatDeliveryReceiptAck) async throws -> Void)?)
+    {
+        self.chatDeliveryReceiptAckHandler = handler
+    }
+
+    func setLegacyChatRejectedHandler(_ handler: (@Sendable () -> Void)?) {
+        self.legacyChatRejectedHandler = handler
+        if self.hasRejectedLegacyChat { handler?() }
     }
 
     func setExecApprovalResolveHandler(_ handler: (@Sendable (WatchExecApprovalResolveEvent) -> Void)?) {
@@ -131,12 +148,14 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
     func sendNotification(
         id: String,
         params: OpenClawWatchNotifyParams,
-        gatewayStableID: String?) async throws -> WatchNotificationSendResult
+        gatewayStableID: String?,
+        chatDeliveryContext: OpenClawWatchChatDeliveryContext? = nil) async throws -> WatchNotificationSendResult
     {
         let payload = WatchMessagingPayloadCodec.encodeNotificationPayload(
             id: id,
             params: params,
-            gatewayStableID: gatewayStableID)
+            gatewayStableID: gatewayStableID,
+            chatDeliveryContext: chatDeliveryContext)
         return try await self.transport.sendPayload(payload)
     }
 
@@ -180,11 +199,11 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
             WatchMessagingPayloadCodec.encodeAppSnapshotPayload(message))
     }
 
-    func sendChatCompletion(
-        _ message: OpenClawWatchChatCompletionMessage) async throws -> WatchNotificationSendResult
+    func sendChatDeliveryReceipt(
+        _ receipt: OpenClawWatchChatDeliveryReceipt) async throws -> WatchNotificationSendResult
     {
         try await self.transport.sendPayload(
-            WatchMessagingPayloadCodec.encodeChatCompletionPayload(message))
+            OpenClawWatchChatDeliveryCodec.encode(receipt))
     }
 
     private func emitStatusIfChanged(_ snapshot: WatchMessagingStatus) {
@@ -198,10 +217,6 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
                 + "appInstalled=\(snapshot.appInstalled) reachable=\(snapshot.reachable) "
                 + "activation=\(snapshot.activationState)")
         self.statusHandler?(snapshot)
-    }
-
-    private func emitReply(_ event: WatchQuickReplyEvent) {
-        self.replyHandler?(event)
     }
 
     private func emitExecApprovalResolve(_ event: WatchExecApprovalResolveEvent) {
@@ -232,15 +247,31 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
         self.appCommandHandler?(event)
     }
 
-    private func receiveStartupEvent(_ event: WatchMessagingInboundEvent) {
-        for event in self.startupEvents.receive(event) {
-            self.dispatchStartupEvent(event)
+    private func receiveInboundEvent(_ event: WatchMessagingInboundEvent) async throws {
+        switch event {
+        case let .chatDeliveryCommand(command):
+            // Returning is the application ACK boundary; a startup buffer is not custody.
+            guard let handler = self.chatDeliveryHandler else { throw WatchMessagingError.admissionUnavailable }
+            try await handler(command)
+        case let .chatDeliveryReceiptAck(acknowledgment):
+            guard let handler = self.chatDeliveryReceiptAckHandler
+            else { throw WatchMessagingError.admissionUnavailable }
+            try await handler(acknowledgment)
+        case .legacyChat:
+            self.hasRejectedLegacyChat = true
+            self.legacyChatRejectedHandler?()
+            throw OpenClawWatchChatDeliveryError(
+                code: "upgrade_required",
+                message: "Update OpenClaw on iPhone and Apple Watch before sending Watch messages.")
+        default:
+            for event in self.startupEvents.receive(event) {
+                self.dispatchStartupEvent(event)
+            }
         }
     }
 
     private func finishStartupRegistrationIfReady() {
-        guard self.replyHandler != nil,
-              self.execApprovalResolveHandler != nil,
+        guard self.execApprovalResolveHandler != nil,
               self.execApprovalSnapshotRequestHandler != nil,
               self.appSnapshotRequestHandler != nil,
               self.appCommandHandler != nil
@@ -254,8 +285,8 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
 
     private func dispatchStartupEvent(_ event: WatchMessagingInboundEvent) {
         switch event {
-        case let .reply(event):
-            self.emitReply(event)
+        case .chatDeliveryCommand, .chatDeliveryReceiptAck, .legacyChat:
+            preconditionFailure("Durable Watch delivery must not enter the startup buffer")
         case let .execApprovalResolve(event):
             self.emitExecApprovalResolve(event)
         case let .execApprovalSnapshotRequest(event):

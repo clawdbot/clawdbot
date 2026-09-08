@@ -126,6 +126,7 @@ function executionPlanArtifact({
     upgradeSurvivorScenarios: "",
     allowFrozenTargetScenarioOmissions: false,
     allowUnreleasedChangelog: false,
+    packagePublished: false,
     sharedImagePolicy: "no-push-artifact",
   });
   const selectedKeys = new Set(children.map((entry) => entry.key));
@@ -224,7 +225,7 @@ function rootRun(
 function preflightMethods(
   children: ReturnType<typeof child>[],
   childRun: (entry: ReturnType<typeof child>) => Record<string, unknown>,
-  options: { failFast?: boolean; childRunIdOverride?: string } = {},
+  options: { failFast?: boolean; childRunIdOverride?: string; ciReleaseScope?: string } = {},
 ) {
   const byRunId = new Map(children.map((entry) => [entry.runId, entry]));
   const parentJobs = [
@@ -257,6 +258,9 @@ function preflightMethods(
       return [
         `TARGET_SHA: ${TARGET_SHA}`,
         ...(entry.key === "productPerformance" ? ["-f publish_reports=false"] : []),
+        ...(entry.key === "normalCi" && options.ciReleaseScope
+          ? [`CI_RELEASE_SCOPE: ${options.ciReleaseScope}`]
+          : []),
         `Dispatched ${entry.workflow}: https://github.com/${REPOSITORY}/actions/runs/${runId} (attempt 1)`,
       ].join("\n");
     },
@@ -590,6 +594,21 @@ describe("FRV continuation preflight", () => {
         }),
       }),
     ).rejects.toThrow("release child is not uniquely emitted by its parent job");
+  });
+
+  it("binds the normal CI dispatch scope to the plan's coverage policy", async () => {
+    const selected = child("normalCi", "101");
+    const stablePlan = { ...plan([selected]), coveragePolicy: "npm-stable-v1" };
+    const methods = (scope: string) =>
+      preflightMethods([selected], (entry) => runFor(entry, 1, "failure"), {
+        ciReleaseScope: scope,
+      });
+    await expect(
+      preflightContinuation(stablePlan, "77", methods("npm-stable")),
+    ).resolves.toBeDefined();
+    await expect(preflightContinuation(stablePlan, "77", methods("full"))).rejects.toThrow(
+      "release normal CI dispatch scope differs from its coverage policy",
+    );
   });
 });
 
@@ -1146,6 +1165,13 @@ describe("FRV strict verifier", () => {
 });
 
 describe("FRV protected gh evidence reads", () => {
+  const jobLogArgs = [
+    "api",
+    `repos/${REPOSITORY}/actions/jobs/1/logs`,
+    "-H",
+    "Cache-Control: max-age=0",
+  ];
+
   it.each([
     ["getRun", ["101"], "actions/runs/101", { run_attempt: 2 }],
     ["getRunAttempt", ["101", 2], "actions/runs/101/attempts/2", { run_attempt: 2 }],
@@ -1169,8 +1195,22 @@ describe("FRV protected gh evidence reads", () => {
     expect(result.calls).toHaveLength(1);
   });
 
+  it("falls back once when gh does not support the escape-sequence flag", () => {
+    const result = runProtectedFrv("getJobLog", [1], "actions/jobs/1/logs", "legacy-flag");
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toBe("job evidence");
+    expect(result.calls).toEqual([[...jobLogArgs, "--allow-escape-sequences"], jobLogArgs]);
+  });
+
+  it("does not fall back after an unrelated job-log error", () => {
+    const result = runProtectedFrv("getJobLog", [1], "actions/jobs/1/logs", "unrelated");
+    expect(result.status).toBe(23);
+    expect(result.stderr).toContain("unrelated log failure");
+    expect(result.calls).toEqual([[...jobLogArgs, "--allow-escape-sequences"]]);
+  });
+
   it("preserves protected refusal status without retry or alternate execution", () => {
-    const result = runProtectedFrv("getRun", ["101"], "actions/runs/101", true);
+    const result = runProtectedFrv("getRun", ["101"], "actions/runs/101", "protected");
     expect(result.status).toBe(19);
     expect(result.stderr).toContain("protected refusal");
     expect(result.calls).toHaveLength(1);
@@ -1181,7 +1221,7 @@ function runProtectedFrv(
   method: string,
   args: Array<string | number>,
   endpoint: string,
-  denied = false,
+  failure: "none" | "legacy-flag" | "protected" | "unrelated" = "none",
 ) {
   const root = mkdtempSync(join(tmpdir(), "frv-protected-"));
   const gh = join(root, "gh");
@@ -1192,9 +1232,13 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 fs.appendFileSync("calls.jsonl", JSON.stringify(args) + "\\n");
 const fail = (message, code) => { console.error(message); process.exit(code); };
-if (${denied}) fail("protected refusal", 19);
+const failure = ${JSON.stringify(failure)};
+if (failure === "protected") fail("protected refusal", 19);
 if (args[0] !== "api" || !args.includes(${JSON.stringify(`repos/${REPOSITORY}/${endpoint}`)})) fail("unexpected request", 17);
 if (!args.some((arg, i) => ["-H", "--header"].includes(arg) && args[i+1] === "Cache-Control: max-age=0")) fail("missing live header", 18);
+if (${endpoint.endsWith("/logs")} && failure === "legacy-flag" && args.includes("--allow-escape-sequences")) fail("unknown flag: --allow-escape-sequences", 1);
+if (${endpoint.endsWith("/logs")} && failure === "unrelated") fail("unrelated log failure", 23);
+if (${endpoint.endsWith("/logs")} && failure === "none" && !args.includes("--allow-escape-sequences")) fail("missing escape-sequence flag", 20);
 if (${endpoint.includes("/jobs?")}) {
   if (!args.includes("--paginate") || !args.includes(".jobs[] | @json")) fail("missing pagination", 17);
   console.log('{"id":1}\\n{"id":2}');
@@ -1222,7 +1266,13 @@ if (${endpoint.includes("/jobs?")}) {
         env: { HOME: root, PATH: `${root}${delimiter}${process.env.PATH ?? ""}` },
       },
     );
-    return { ...result, calls: readFileSync(join(root, "calls.jsonl"), "utf8").trim().split("\n") };
+    return {
+      ...result,
+      calls: readFileSync(join(root, "calls.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

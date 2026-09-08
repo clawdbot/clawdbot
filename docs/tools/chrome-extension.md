@@ -32,28 +32,54 @@ a script launcher or registry key without a proven binary framing path.
 
 ## Install
 
-Launch Chrome, then pre-register the native host before adding the extension:
+Launch Chrome at least once, then run this command on the machine that hosts
+Chrome:
 
 ```bash
 openclaw browser extension install
 ```
 
-Keep the command running. It pre-registers an origin-locked native host for the
-exact official Chrome Web Store identity and for OpenClaw's deterministic
-development IDs. After pre-registration succeeds, add
-[OpenClaw from the Chrome Web Store](https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig).
+Keep the command running while you complete Chrome's setup. On macOS, it first
+registers the native host, then asks Google Chrome to install the official
+Store extension. Chrome discovers the request at browser startup. If Chrome is
+already running, fully quit and reopen it when convenient, then approve or
+enable **OpenClaw** in Chrome. OpenClaw never restarts Chrome or approves its
+permission prompt for you. The request applies to all profiles in that Chrome
+user-data directory; Chrome controls approval in each profile.
 
-The extension pairs on its first native call; you do not need to open its
-popup, reload it, or restart Chrome during a normal first-time setup. The
-installer then inspects the profile's `Preferences` and `Secure Preferences`
+In the macOS app, **Dashboard → Settings → This Mac → Browser → Set up Chrome on
+this Mac** runs the same local setup. This always prepares Chrome on this Mac,
+even when the app is connected to a remote Gateway. A browser-based dashboard
+provides Store and setup-guide links instead of installing software locally.
+
+On Linux and in other supported Chromium browsers, add
+[OpenClaw from the Chrome Web Store](https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig)
+after native-host registration succeeds. Linux does not support this per-user
+Store installation request. Windows requires adding the Store extension and
+[manual pairing](#advanced-manual-pairing).
+
+You can also use the Store link if Chrome does not offer the requested install.
+If you previously removed the extension, Chrome remembers that choice; explicitly
+add it again from the Store. OpenClaw does not clear Chrome's removal decision.
+
+On macOS and Linux, the origin-locked native host permits the exact official
+Store identity and OpenClaw's deterministic development IDs. Once enabled, the
+extension pairs on its first native call. The installer inspects the profile's
+`Preferences` and `Secure Preferences`
 backing files and verifies the exact Store ID independently from any extension
 path. Chromium selects the backing file by settings-enforcement policy; Linux
 normally uses `Preferences`. Both files receive the same ownership, path, file
 type, permission, and size checks.
 
-For extension development, the command also copies the bundled extension to a
-stable OpenClaw-owned directory. Use that unpacked copy only as a development
-fallback:
+For extension development, skip creating a Store installation request:
+
+```bash
+openclaw browser extension install --no-store
+```
+
+This still copies the bundled extension to a stable OpenClaw-owned directory
+and registers the native host. It leaves any existing Store request unchanged.
+Use the unpacked copy as a development fallback:
 
 1. Open `chrome://extensions`.
 2. Enable **Developer mode**.
@@ -84,10 +110,12 @@ Use a different bounded wait when needed:
 openclaw browser extension install --wait-ms 60000
 ```
 
-For automation, use `--json`. The result reports Store discovery separately
-from approved unpacked IDs and paths, plus native-host registration health and
-whether manual setup is required. It never includes a relay key or pairing
-string.
+For automation, use `--json`. The result reports Store installation requests,
+Store discovery and approval, approved unpacked IDs and paths, and native-host
+registration health separately. These local observations do not prove a live
+connection. Verify the extension's connected state and run
+`openclaw browser --browser-profile chrome tabs` against the intended Gateway
+or browser node. JSON output never includes a relay key or pairing string.
 
 ## Use it
 
@@ -130,8 +158,8 @@ native host to start a standalone relay when reconnecting to that endpoint.
 Automatic local setup must be enabled. Requests are limited to once per minute;
 the extension still authenticates the relay with connection-bound v2 proofs.
 This requires both the updated native host and an extension build containing
-relay wake-up support. Do not assume the Store v2.2.0 build includes that code;
-the bundled unpacked development copy is the source-build validation path.
+relay wake-up support. Store publication can lag the bundled extension; the
+bundled unpacked development copy is the source-build validation path.
 
 Automatic wake-up requires the exact `127.0.0.1` host that the daemon serves.
 Other loopback aliases, including `localhost` and IPv6, do not trigger wake-up;
@@ -253,12 +281,29 @@ openclaw browser extension status
 openclaw browser extension status --json
 ```
 
-An `owned` registration is not necessarily launchable. Status reports a filesystem
+JSON `storeInstallRequests` entries report `requested` for a verified
+OpenClaw-owned request, `missing` when no request exists, `foreign` for an
+unrecognized registration, or `invalid` when the file cannot be safely read or
+validated. `storeDiscovered` reports `enabled` and `awaitingApproval` separately.
+A requested installation, a discovered extension, or an enabled extension does
+not prove an authenticated relay connection.
+
+An `owned` native-host registration is not necessarily launchable. Status reports a filesystem
 readiness snapshot of its registered runtime and native entry. It does not execute
 either target or verify that its code will run successfully. If an upgrade removes
 either target, rerun `openclaw browser extension install` to repair the owned
 registration. Ownership checks still refuse foreign or malformed manifests and
 launchers.
+
+Remove only OpenClaw's macOS Chrome Store installation request:
+
+```bash
+openclaw browser extension uninstall-store
+```
+
+Chrome may remove an externally installed extension on its next startup after
+the request is removed. This command leaves native-host registration and the
+development copy intact, and refuses foreign or malformed request files.
 
 Remove only OpenClaw-owned native-host manifests and launchers:
 

@@ -20,11 +20,14 @@ describe("resolveMirroredTranscriptText", () => {
     ).toBe("See attachments\na.png, b.pdf");
   });
 
-  it("keeps text with the media placeholder when no name can be derived", () => {
-    expect(resolveMirroredTranscriptText({ text: "hello", mediaUrls: ["   /   "] })).toBe(
-      "hello\nmedia",
-    );
-  });
+  it.each(["   /   ", "data:image/png;base64,aGVsbG8=", "data:text/plain,hello"])(
+    "uses the media placeholder when %s has no filename",
+    (mediaUrl) => {
+      expect(resolveMirroredTranscriptText({ text: "hello", mediaUrls: [mediaUrl] })).toBe(
+        "hello\nmedia",
+      );
+    },
+  );
 
   it("returns media names alone when there is no text", () => {
     expect(

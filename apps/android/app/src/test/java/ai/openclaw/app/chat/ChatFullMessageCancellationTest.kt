@@ -280,6 +280,7 @@ class ChatFullMessageCancellationTest {
         val controller =
           ChatController(
             scope = scope,
+            commandOutbox = scope.createChatCommandOutbox(),
             json = Json { ignoreUnknownKeys = true },
             requestGateway = { method, params -> liveSession.request(method, params) },
             requestGatewayForGateway = { gatewayId, method, params -> liveSession.requestForEndpoint(gatewayId, method, params) },

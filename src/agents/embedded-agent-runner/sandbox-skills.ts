@@ -169,7 +169,11 @@ export function resolveSandboxSkillRuntimeInputs(params: {
             ...MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS,
           )
         : (params.sandbox.containerWorkdir ?? skillsWorkspaceDir);
-    let selectedSnapshot: SkillSnapshot | undefined;
+    // An explicit empty snapshot excludes instructions; it has no host paths to remap.
+    let selectedSnapshot =
+      params.skillsSnapshot && !params.skillsSnapshot.prompt.trim()
+        ? params.skillsSnapshot
+        : undefined;
     if (params.skillsSnapshot?.librarySelections?.length) {
       const usage = mapSandboxSkillUsagePaths({
         paths: params.sandbox.skillUsagePaths,
@@ -215,7 +219,10 @@ export function resolveSandboxSkillRuntimeInputs(params: {
 }
 
 /** Rewrites host-generated explicit skill references to the prepared runtime's exact copies. */
-export function remapSkillReferencePaths(text: string, paths?: readonly SkillUsagePath[]): string {
+export function remapSkillReferencePaths(
+  text: string,
+  paths?: readonly Pick<SkillUsagePath, "skillFile" | "readPath">[],
+): string {
   return (paths ?? []).reduce(
     (result, item) => result.replaceAll(item.skillFile, item.readPath),
     text,

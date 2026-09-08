@@ -6,6 +6,8 @@ const enDebug = {
   debug: {
     snapshotsTitle: "Snapshots",
     snapshotsSubtitle: "Status, health, and heartbeat data.",
+    refreshingSnapshots: "Refreshing Gateway diagnostics.",
+    offlineSnapshots: "Connect to the Gateway to refresh diagnostics.",
     status: "Status",
     health: "Health",
     lastHeartbeat: "Last heartbeat",
@@ -40,7 +42,9 @@ const enDebug = {
       blocked: "Blocked",
     },
     overlay: {
+      ...en.debug.overlay,
       eyebrow: "Live diagnostics",
+      open: "Open overlay",
       openWithShortcut: "Open overlay · {shortcut}",
       unavailable: "Unavailable",
       lanes: "Lanes",

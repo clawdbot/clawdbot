@@ -20,7 +20,6 @@ import {
   buildOpenAIResponsesCompactionReplayPlan,
   isOpenAIResponsesReplayContext,
   isSafeResponsesReplayItemId,
-  openAIResponsesReplayContextMatches,
   type OpenAIResponsesReplayMode,
 } from "./openai-responses-compaction-replay.js";
 import {
@@ -32,7 +31,9 @@ import {
   type ReplayableResponseOutputMessage,
   type ReplayableResponseReasoningItem,
 } from "./openai-responses-contracts.js";
+import { createResponsesInputReplay } from "./openai-responses-input-replay.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
+import { providerReplayContextMatches } from "./provider-replay-context.js";
 import {
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
@@ -125,10 +126,7 @@ function prepareOpenAIResponsesReasoningItemForReplay(
     blockMetadata === undefined &&
     !hasRawMetadata &&
     options?.preserveUnattributedEncryptedContent === true;
-  if (
-    preserveUnattributed ||
-    (metadata && openAIResponsesReplayContextMatches(metadata, context))
-  ) {
+  if (preserveUnattributed || (metadata && providerReplayContextMatches(metadata, context))) {
     return normalizeOpenAIResponsesReasoningReplayItem(rest as ReplayableResponseReasoningItem);
   }
   const stripped = stripEncryptedReasoningContentFields(rest);
@@ -152,6 +150,53 @@ function normalizeResponsesReplayItemId(
 
 export function encodeTextSignatureV1(id: string, phase?: "commentary" | "final_answer"): string {
   return JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}) });
+}
+
+function orderResponsesAsyncToolResults(source: Context["messages"]): Context["messages"] {
+  const turnKey = (message: AssistantMessage) => {
+    // Early fragments keep this identity when the provider ID arrives at completion.
+    const id = message.turnId || message.responseId;
+    return id ? `${message.provider}:${message.api}:${message.model}:${id}` : undefined;
+  };
+  const lastAssistant = new Map<string, number>();
+  for (const [index, message] of source.entries()) {
+    if (message.role === "assistant") {
+      const key = turnKey(message);
+      if (key) {
+        lastAssistant.set(key, index);
+      }
+    }
+  }
+  const owners = new Map<string, string>();
+  const pending = new Map<number, Context["messages"]>();
+  const ordered: Context["messages"] = [];
+  for (const [index, message] of source.entries()) {
+    if (message.role === "assistant") {
+      const key = turnKey(message);
+      if (key) {
+        for (const block of message.content) {
+          if (block.type === "toolCall" && block.async) {
+            owners.set(block.id, key);
+          }
+        }
+      }
+    }
+    const owner = message.role === "toolResult" ? owners.get(message.toolCallId) : undefined;
+    const lastIndex = owner ? lastAssistant.get(owner) : undefined;
+    if (lastIndex !== undefined && lastIndex > index) {
+      const results = pending.get(lastIndex) ?? [];
+      results.push(message);
+      pending.set(lastIndex, results);
+    } else {
+      ordered.push(message);
+    }
+    const results = pending.get(index);
+    if (results) {
+      ordered.push(...results);
+      pending.delete(index);
+    }
+  }
+  return ordered;
 }
 
 function parseOpenAIResponsesTextSignature(
@@ -295,7 +340,11 @@ function convertResponsesMessagesWithStyle(
           normalizeSameModelToolCallIds: shouldNormalizeSameModelToolCallIds,
           preserveUnframedToolResults: replayPlan.preserveUnframedToolResults,
         });
-  const transformedMessages = transformMessages(replayPlan.messages);
+  // Results are durable when jobs finish, but Responses continuation must replay
+  // every output fragment before adding results to that response's input suffix.
+  const transformedMessages = orderResponsesAsyncToolResults(
+    transformMessages(replayPlan.messages),
+  );
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
     messages.push(
@@ -325,27 +374,31 @@ function convertResponsesMessagesWithStyle(
     ? [replayPlan.compaction, ...transformedMessages]
     : transformedMessages;
   // Responses continuation requires the complete prior input before tool output.
-  // Anchor context after the user or its compaction checkpoint, not each tool round.
-  // Other transports retain their tail placement for cross-turn prompt caching.
+  // Each carrier stays with its preceding user/checkpoint; moving it past an
+  // appended steering user would rewrite the already admitted request prefix.
   const isCarrier = (message: (typeof replayMessages)[number]) =>
     "role" in message && message.role === "user" && message.runtimeContextCarrier === true;
-  const carriers = replayMessages.filter(isCarrier);
-  if (carriers.length > 0) {
-    const stableMessages = replayMessages.filter((message) => !isCarrier(message));
-    const insertionIndex =
-      stableMessages.findLastIndex((message) =>
-        "role" in message ? message.role === "user" : message.type === "compaction",
-      ) + 1;
+  if (replayMessages.some(isCarrier)) {
+    const anchored: typeof replayMessages = [];
     // A canonical window is already emitted above; its checkpoint anchors an otherwise userless tail.
-    if (insertionIndex > 0 || replayPlan.compactedWindow) {
-      replayMessages = [
-        ...stableMessages.slice(0, insertionIndex),
-        ...carriers,
-        ...stableMessages.slice(insertionIndex),
-      ];
+    let insertionIndex = replayPlan.compactedWindow ? 0 : undefined;
+    for (const message of replayMessages) {
+      if (isCarrier(message) && insertionIndex !== undefined) {
+        anchored.splice(insertionIndex++, 0, message);
+        continue;
+      }
+      anchored.push(message);
+      if (
+        !isCarrier(message) &&
+        ("role" in message ? message.role === "user" : message.type === "compaction")
+      ) {
+        insertionIndex = anchored.length;
+      }
     }
+    replayMessages = anchored;
   }
   let msgIndex = 0;
+  const appendAssistant = createResponsesInputReplay(model);
   for (const msg of replayMessages) {
     if (!("role" in msg)) {
       messages.push(msg);
@@ -464,6 +517,7 @@ function convertResponsesMessagesWithStyle(
             ...(itemId ? { id: itemId } : {}),
             call_id: callId,
             name: block.name,
+            ...(block.async ? { async: true } : {}),
             arguments: providerStyle
               ? JSON.stringify(block.arguments)
               : typeof block.arguments === "string"
@@ -473,9 +527,21 @@ function convertResponsesMessagesWithStyle(
           previousReplayItemWasReasoning = false;
         }
       }
-      if (output.length > 0) {
-        messages.push(...output);
-      } else if (providerStyle) {
+      // Completed encrypted reasoning is self-contained, including steered async
+      // fragments. After route checks strip ciphertext, bare ids still need a following item.
+      while (true) {
+        const last = output.at(-1);
+        if (
+          last?.type !== "reasoning" ||
+          !last.id?.startsWith("rs_") ||
+          (typeof last.encrypted_content === "string" && last.encrypted_content.length > 0)
+        ) {
+          break;
+        }
+        output.pop();
+      }
+      appendAssistant(messages, output, msg);
+      if (output.length === 0 && providerStyle) {
         continue;
       }
     } else if (msg.role === "toolResult") {

@@ -21,8 +21,8 @@ describe("resolveSlackListenerEventScope", () => {
         client: listenerClient,
       });
       expect(result?.client).toBe(listenerClient);
-      expect(result?.uploadCompletionClient).toBeInstanceOf(WebClient);
-      expect(result?.uploadCompletionClient).not.toBe(listenerClient);
+      expect(result?.writeClient).toBeInstanceOf(WebClient);
+      expect(result?.writeClient).not.toBe(listenerClient);
     },
   );
 

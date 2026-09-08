@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 title: "Creating skills"
 sidebarTitle: "Creating skills"
 summary: "Build, test, and publish custom SKILL.md workspace skills or personal skills on a shared Gateway."
@@ -230,6 +231,11 @@ openclaw skills workshop apply <proposal-id>
 See [Skill Workshop](/tools/skill-workshop) for the full proposal lifecycle.
 
 ## Publishing to ClawHub
+
+An owner is a ClawHub publisher handle, such as `@alice` or `@your-org`.
+Your account has a personal owner. Organization owners can have members with
+`owner`, `admin`, or `publisher` roles; all three roles can publish. Choose your
+personal owner or an organization where you have publisher access.
 
 <Steps>
   <Step title="Ensure your SKILL.md is complete">

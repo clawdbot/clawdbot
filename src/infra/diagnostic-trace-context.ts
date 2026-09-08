@@ -29,7 +29,7 @@ type DiagnosticTraceContextInput = Partial<DiagnosticTraceContext> & {
 
 type DiagnosticTraceScopeState = {
   marker: symbol;
-  storage: AsyncLocalStorage<DiagnosticTraceContext>;
+  storage: AsyncLocalStorage<DiagnosticTraceContext | undefined>;
 };
 
 function randomHex(bytes: number): string {
@@ -59,7 +59,7 @@ function randomSpanId(): string {
 function createDiagnosticTraceScopeState(): DiagnosticTraceScopeState {
   return {
     marker: DIAGNOSTIC_TRACE_SCOPE_STATE_KEY,
-    storage: new AsyncLocalStorage<DiagnosticTraceContext>(),
+    storage: new AsyncLocalStorage<DiagnosticTraceContext | undefined>(),
   };
 }
 
@@ -235,10 +235,13 @@ export function getActiveDiagnosticTraceContext(): DiagnosticTraceContext | unde
   return getDiagnosticTraceScopeState().storage.getStore();
 }
 
-/** Runs a callback with a frozen trace context bound to async-local storage. */
+/** Runs a callback with a frozen trace context, or explicitly without a trace. */
 export function runWithDiagnosticTraceContext<T>(
-  trace: DiagnosticTraceContext,
+  trace: DiagnosticTraceContext | undefined,
   callback: () => T,
 ): T {
-  return getDiagnosticTraceScopeState().storage.run(freezeDiagnosticTraceContext(trace), callback);
+  return getDiagnosticTraceScopeState().storage.run(
+    trace === undefined ? undefined : freezeDiagnosticTraceContext(trace),
+    callback,
+  );
 }

@@ -4,6 +4,7 @@
 // before any caller imports the stream API.
 import { defaultApiRegistry, defaultLlmRuntime } from "@openclaw/ai/internal/runtime";
 import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
+import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
 import { getModelLlmRuntime } from "./model-runtime-binding.js";
 import "./ai-transport-host.js";
 import type {
@@ -47,6 +48,7 @@ function createRuntimeHostErrorMessage(model: Model, error: unknown): AssistantM
     },
     stopReason: "error",
     errorMessage: error instanceof Error ? error.message : String(error),
+    errorCode: classifyGatewayStorageFailure(error),
     timestamp: Date.now(),
   };
 }
@@ -109,7 +111,11 @@ export async function completeSimple<TApi extends Api>(
   model: Model<TApi>,
   context: Context,
   options?: SimpleStreamOptions,
+  assertCurrent?: () => void,
 ): Promise<AssistantMessage> {
   await ensureTransportRuntimeHost();
+  // Runtime setup can outlive its caller. Admit only a current request to the provider.
+  assertCurrent?.();
+  options?.signal?.throwIfAborted();
   return await resolveRuntime(model).completeSimple(model, context, options);
 }

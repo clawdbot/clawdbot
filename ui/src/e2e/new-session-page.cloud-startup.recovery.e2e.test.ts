@@ -1,11 +1,14 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   SESSION_LIST_DEFAULTS,
   WORKSPACE,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
+  expectPastedPngImage,
   installMockGateway,
   ONE_PIXEL_PNG_B64,
   pastePng,
@@ -18,30 +21,71 @@ const suite = createNewSessionPageE2eSuite();
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
-  it("retries an ambiguous cloud create with the same session key and machine class", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+  it("retries an ambiguous cloud create with the same account, session key and machine class", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { width: 1280, height: 900 },
+      ...(captureUiProof
+        ? { recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } } }
+        : {}),
+    });
     const page = await context.newPage();
     const message = "recover the cloud create";
+    const account = {
+      authProfileId: "personal:person-a:openai:one",
+      provider: "openai",
+      label: "Test Person · Personal account",
+      authType: "api_key",
+      selected: false,
+    };
+    const model = {
+      id: "gpt-5.6-luna",
+      provider: "openai",
+      name: "Luna",
+      reasoning: true,
+      effectiveFastMode: true,
+    };
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.create"],
       agentModel: "openai/gpt-5.6-luna",
-      models: [
-        {
-          id: "gpt-5.6-luna",
-          provider: "openai",
-          name: "Luna",
-          reasoning: true,
-          effectiveFastMode: true,
-        },
-      ],
+      presenceUsers: [{ id: "person-a", name: "Test Person", self: true }],
+      models: [{ ...model, available: false, unavailableReason: "missing-auth" }],
       workspaceGit: true,
       methodResponses: {
+        "users.listModelAccounts": { profileId: "person-a", accounts: [account], links: [] },
+        "chat.metadata": {
+          cases: [
+            {
+              match: { authProfileId: account.authProfileId },
+              response: {
+                commands: [],
+                models: [{ ...model, available: true }],
+                accountSelection: {
+                  kind: "personal",
+                  authProfileId: account.authProfileId,
+                  label: account.label,
+                  source: "user",
+                },
+              },
+            },
+            {
+              match: {},
+              response: {
+                commands: [],
+                models: [{ ...model, available: false, unavailableReason: "missing-auth" }],
+                accountSelection: { kind: "automatic", label: "Automatic" },
+              },
+            },
+          ],
+        },
         "agents.list": {
           agents: [
             {
               id: "cloud",
               identity: { name: "Cloud" },
               name: "Cloud",
+              model: { primary: "openai/gpt-5.6-luna" },
               workspace: WORKSPACE,
               workspaceGit: true,
             },
@@ -90,6 +134,16 @@ suite.define(() => {
         .toBe("fast");
       await page.locator(".new-session-page__message").fill(message);
       await pastePng(page.locator(".new-session-page__message"));
+      await page.locator('[data-chat-model-select="true"]').click();
+      const picker = page.locator(".chat-model-account__picker");
+      await picker.locator("[data-chat-account-trigger]").click();
+      await picker.getByRole("menuitemradio", { name: account.label, exact: true }).click();
+      await expect
+        .poll(() =>
+          page.getByRole("button", { name: "Start session" }).getAttribute("aria-disabled"),
+        )
+        .toBe("false");
+      await page.keyboard.press("Escape");
       await page.locator('[data-chat-thinking-select="true"]').click();
       const fastMode = page.locator("[data-chat-speed-toggle]");
       await expect.poll(() => fastMode.getAttribute("aria-checked")).toBe("true");
@@ -98,7 +152,10 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await page.getByRole("button", { name: "Start session" }).click();
       const firstCreate = await gateway.waitForRequest("sessions.create");
-      expect(firstCreate.params).toMatchObject({ fastMode: false });
+      expect(firstCreate.params).toMatchObject({
+        fastMode: false,
+        model: `openai/gpt-5.6-luna@${account.authProfileId}`,
+      });
       const firstKey = (firstCreate.params as { key?: string }).key;
       if (!firstKey) {
         throw new Error("expected the first recovery create to include a session key");
@@ -117,6 +174,23 @@ suite.define(() => {
       await pollLocatorText(
         page.locator("#new-session-where-trigger .new-session-page__trigger-label"),
       ).toBe("aws · fast");
+      await gateway.waitForRequest("chat.metadata");
+      try {
+        await expect
+          .poll(() =>
+            page.getByRole("button", { name: "Start session" }).getAttribute("aria-disabled"),
+          )
+          .toBe("false");
+      } finally {
+        if (captureUiProof) {
+          await writeFile(
+            path.join(suite.artifactDir, "personal-account-recovery.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+              page.locator(".new-session-page__message"),
+            ]),
+          );
+        }
+      }
       await page.getByRole("button", { name: "Start session" }).click();
       const retryCreate = await gateway.waitForRequest("sessions.create");
       expect(retryCreate.params).toMatchObject({
@@ -124,6 +198,7 @@ suite.define(() => {
         message: "",
         worktree: true,
         fastMode: false,
+        model: `openai/gpt-5.6-luna@${account.authProfileId}`,
       });
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
       await gateway.deferNext("sessions.dispatch");
@@ -145,6 +220,7 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(1);
       expect(await gateway.getRequests("sessions.send")).toHaveLength(1);
+      expect(await gateway.getRequests("users.selectModelAccount")).toHaveLength(0);
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(firstKey), {
         timeout: 30_000,
       });
@@ -357,13 +433,10 @@ suite.define(() => {
         await expect.poll(() => start.isDisabled()).toBe(true);
         if (captureUiProof) {
           await mkdir(path.join(suite.artifactDir, "cloud-session-recovery"), { recursive: true });
-          await page.screenshot({
-            path: path.join(
-              path.join(suite.artifactDir, "cloud-session-recovery"),
-              "01-interrupted.png",
-            ),
-            fullPage: true,
-          });
+          await writeFile(
+            path.join(suite.artifactDir, "cloud-session-recovery", "01-interrupted.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [interrupted]),
+          );
         }
         const reset = interrupted.getByRole("button", { name: "Reset", exact: true });
         expect(await reset.count()).toBe(1);
@@ -375,13 +448,10 @@ suite.define(() => {
         await expect.poll(() => start.isEnabled()).toBe(true);
         expect(await readRecovery()).toBeNull();
         if (captureUiProof) {
-          await page.screenshot({
-            path: path.join(
-              path.join(suite.artifactDir, "cloud-session-recovery"),
-              "02-recovered.png",
-            ),
-            fullPage: true,
-          });
+          await writeFile(
+            path.join(suite.artifactDir, "cloud-session-recovery", "02-recovered.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [composer]),
+          );
         }
 
         const previousCreateCount = (await gateway.getRequests("sessions.create")).length;
@@ -454,11 +524,7 @@ suite.define(() => {
   );
 
   it("checks an unconfirmed cloud turn without replay when composer storage is unavailable", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessionKey = "agent:cloud:storage-recovery";
     const message = "keep this cloud recovery task";
@@ -585,9 +651,7 @@ suite.define(() => {
           }),
         );
       await pollLocatorText(page.getByRole("alert")).toContain("No matching user message");
-      await retainedTurn
-        .locator(`img[src="data:image/png;base64,${ONE_PIXEL_PNG_B64}"]`)
-        .waitFor({ state: "visible" });
+      await expectPastedPngImage(retainedTurn.locator("img.chat-message-image"));
       await expect
         .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
         .toBe(true);

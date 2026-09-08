@@ -1,6 +1,6 @@
 {
   "id": "minimax",
-  "icon": "https://cdn.simpleicons.org/minimax",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },

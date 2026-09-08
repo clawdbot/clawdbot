@@ -171,7 +171,8 @@
   grid-column: 2;
 }
 
-.chat-queue__item--no-avatar .chat-queue__error {
+.chat-queue__item--no-avatar .chat-queue__error,
+.chat-queue__item--no-avatar .chat-queue__mentions {
   grid-column: 2 / -1;
 }
 
@@ -394,7 +395,8 @@
 }
 
 /* Wraps onto its own flex line below the row (see renderChatQueueItem). */
-.chat-queue__error {
+.chat-queue__error,
+.chat-queue__mentions {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -404,6 +406,10 @@
   color: var(--danger);
   font-size: 11.5px;
   line-height: 1.35;
+}
+
+.chat-queue__mentions {
+  color: var(--muted);
 }
 
 .chat-queue__error-text {
@@ -527,14 +533,9 @@
 
 .chat-queue__overflow wa-dropdown-item {
   width: 100%;
-  font-size: 12px;
-}
-
-.chat-queue__overflow wa-dropdown-item::part(base) {
-  box-sizing: border-box;
-  width: 100%;
   min-height: 32px;
   padding: 5px 8px;
+  font-size: 12px;
 }
 
 .chat-queue__overflow wa-dropdown-item span[slot="icon"] {

@@ -32,7 +32,7 @@ function normalizeTrailingNewline(value: string): string {
   return value.endsWith("\n") ? value : `${value}\n`;
 }
 
-export function normalizePinnedAndroidVersion(rawVersion: string): string {
+function normalizePinnedAndroidVersion(rawVersion: string): string {
   const trimmed = rawVersion.trim();
   if (!trimmed) {
     throw new Error(`Missing Android version in ${ANDROID_VERSION_FILE}.`);
@@ -64,7 +64,7 @@ export function canonicalAndroidVersionCode(version: string): number {
   return versionCode;
 }
 
-export function normalizeAndroidVersionCode(rawVersionCode: number, version: string): number {
+function normalizeAndroidVersionCode(rawVersionCode: number, version: string): number {
   if (
     !Number.isInteger(rawVersionCode) ||
     rawVersionCode <= 0 ||

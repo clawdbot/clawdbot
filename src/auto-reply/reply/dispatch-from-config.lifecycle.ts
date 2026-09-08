@@ -1,8 +1,6 @@
 import crypto from "node:crypto";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveActiveEmbeddedRunSessionId } from "../../agents/embedded-agent-runner/active-run-projections.js";
-import { normalizeChatType } from "../../channels/chat-type.js";
-import { resolveGroupSessionKey } from "../../config/sessions/group.js";
+import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import {
   isRestartRecoveryTombstone,
   isSessionWorkStartInvalidatedError,
@@ -17,27 +15,29 @@ import {
   type SessionWorkerPlacementContext,
 } from "../../gateway/worker-environments/session-placement-lifecycle.js";
 import { logVerbose } from "../../globals.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   runExclusiveSessionLifecycleMutation,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
-import {
-  isNativeCommandTurn,
-  resolveCommandTurnTargetSessionKey,
-} from "../command-turn-context.js";
+import { isNativeCommandTurn } from "../command-turn-context.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import {
   createAbortAwareDispatcher,
   DispatchReplyOperationAbortedError,
 } from "./dispatch-from-config.abort.js";
 import type { InboundMessageAuditTerminalRecorder } from "./dispatch-from-config.audit.js";
-import { shouldLetSlackRoutedThreadBypassBusyReplyOperation } from "./dispatch-from-config.context.js";
+import {
+  resolveDispatchResetAdmission,
+  shouldLetSlackRoutedThreadBypassBusyReplyOperation,
+} from "./dispatch-from-config.context.js";
 import { loadSessionStoreEntry } from "./dispatch-from-config.runtime.js";
 import { createReplyTurnLedger } from "./dispatch-from-config.turn-ledger.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import {
   forceClearReplyRunBySessionId,
   replyRunRegistry,
@@ -49,8 +49,6 @@ import {
   resolveReplyTurnKind,
   runWithReplyOperationLifecycleAdmission,
 } from "./reply-turn-admission.js";
-import { canReplaceRestartTombstoneFromParent } from "./session-parent-fork-prepare.js";
-import { resolveAuthorizedSessionResetCommand } from "./session-reset-command.js";
 
 type DispatchReplyOperationAcquisition =
   | { status: "ready" }
@@ -100,148 +98,65 @@ async function restoreArchivedDispatchSession(params: {
   }
   const snapshotSessionId = entry.sessionId;
   const snapshotArchivedAt = entry.archivedAt;
-  // Admission must see the current owner: a rebound, re-archive, or unsafe placement stays untouched.
-  let assertCommitAllowed: (() => void) | undefined;
+  const canRestore = (currentEntry: SessionEntry) => {
+    if (
+      currentEntry.sessionId !== snapshotSessionId ||
+      currentEntry.archivedAt !== snapshotArchivedAt ||
+      isRestartRecoveryTombstone(currentEntry)
+    ) {
+      return false;
+    }
+    try {
+      const placement = currentEntry.sessionId
+        ? placementContext.workerSessionPlacementService
+            ?.getMany([currentEntry.sessionId])
+            .get(currentEntry.sessionId)
+        : undefined;
+      return !resolveWorkerPlacementArchiveRestoreError({
+        context: placementContext,
+        key: sessionKey,
+        placement,
+      });
+    } catch {
+      return false;
+    }
+  };
   return await runExclusiveSessionLifecycleMutation({
     scope: storePath,
     identities: [sessionKey, snapshotSessionId],
-    run: async () =>
-      (await patchSessionEntryCore(
-        { sessionKey, storePath },
-        async (currentEntry) => {
-          if (
-            currentEntry.sessionId !== snapshotSessionId ||
-            currentEntry.archivedAt !== snapshotArchivedAt ||
-            isRestartRecoveryTombstone(currentEntry)
-          ) {
-            return null;
-          }
-          try {
-            const placement = currentEntry.sessionId
-              ? placementContext.workerSessionPlacementService
-                  ?.getMany([currentEntry.sessionId])
-                  .get(currentEntry.sessionId)
-              : undefined;
-            if (
-              resolveWorkerPlacementArchiveRestoreError({
-                context: placementContext,
-                key: sessionKey,
-                placement,
-              })
-            ) {
-              return null;
-            }
-          } catch {
-            return null;
-          }
-          if (currentEntry.worktree) {
-            const { synchronizeSessionWorktreeArchive } =
-              await import("../../sessions/session-worktree-lifecycle.js");
-            assertCommitAllowed = prepareSessionWorkerPlacementMutationCheck({
-              context: placementContext,
-              sessionId: currentEntry.sessionId,
-            });
-            await synchronizeSessionWorktreeArchive({
-              archived: false,
-              entry: currentEntry,
-              scope: { sessionKey, storePath },
-              commitGuard: assertCommitAllowed,
-            });
-          }
-          return { archivedAt: undefined, archivedBy: undefined, archiveReason: undefined };
-        },
-        { assertCommitAllowed: () => assertCommitAllowed?.() },
-      )) ?? undefined,
-  });
-}
-
-function resolveDispatchResetAdmission(params: {
-  agentId: string;
-  cfg: OpenClawConfig;
-  ctx: FinalizedMsgContext;
-  entry?: SessionEntry;
-  hasPluginOwnedBinding: boolean;
-  sessionKey?: string;
-  storePath?: string;
-}): {
-  allowRestartTombstoneParentFork: boolean;
-  allowRestartTombstoneReset: boolean;
-  resetTriggered: boolean;
-} {
-  const { ctx, entry } = params;
-  const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
-  const commandTarget = resolveCommandTurnTargetSessionKey(ctx);
-  const nativeCommandTarget = isNativeCommandTurn(ctx.CommandTurn) ? commandTarget : undefined;
-  const actorType = classifySessionStateActor({
-    inputProvenance: ctx.InputProvenance,
-  }).actorType;
-  const mayReplaceRestartTombstoneFromParent = canReplaceRestartTombstoneFromParent({
-    actorType,
-    entry,
-    // Parent existence is the only remaining fact. Avoid its synchronous store
-    // lookup until the already-loaded child and inbound authority require it.
-    hasParentForkSource: true,
-    hasPluginOwnedBinding: params.hasPluginOwnedBinding,
-    inboundAccessAuthorized: ctx.InboundAccessAuthorized,
-    inboundEventKind: ctx.InboundEventKind,
-    nativeCommandTarget: commandTarget,
-    sessionKey: params.sessionKey,
-  });
-  let hasParentForkSource = false;
-  if (
-    mayReplaceRestartTombstoneFromParent &&
-    parentSessionKey &&
-    parentSessionKey !== params.sessionKey &&
-    params.storePath
-  ) {
-    try {
-      hasParentForkSource = Boolean(
-        loadSessionStoreEntry({
-          agentId: params.agentId,
-          storePath: params.storePath,
-          sessionKey: parentSessionKey,
-          readConsistency: "latest",
-          clone: false,
-        })?.sessionId,
+    run: async () => {
+      const scope = { sessionKey, storePath };
+      const currentEntry = loadSessionStoreEntry(scope);
+      if (!currentEntry || !canRestore(currentEntry)) {
+        return currentEntry;
+      }
+      let assertCommitAllowed: (() => void) | undefined;
+      if (currentEntry.worktree) {
+        const { synchronizeSessionWorktreeArchive } =
+          await import("../../sessions/session-worktree-lifecycle.js");
+        // Keep the target fenced through Git/allocation waits without retaining the agent writer.
+        assertCommitAllowed = await synchronizeSessionWorktreeArchive({
+          archived: false,
+          entry: currentEntry,
+          scope,
+          commitGuard: prepareSessionWorkerPlacementMutationCheck({
+            context: placementContext,
+            sessionId: currentEntry.sessionId,
+          }),
+        });
+      }
+      const updatedEntry = await patchSessionEntryCore(
+        scope,
+        (current) =>
+          canRestore(current)
+            ? { archivedAt: undefined, archivedBy: undefined, archiveReason: undefined }
+            : null,
+        // The writer may have waited; revalidate the prepared binding at the actual commit edge.
+        { assertCommitAllowed },
       );
-    } catch {
-      hasParentForkSource = false;
-    }
-  }
-  const allowRestartTombstoneParentFork =
-    mayReplaceRestartTombstoneFromParent && hasParentForkSource;
-  if (
-    params.hasPluginOwnedBinding ||
-    entry?.pluginOwnerId !== undefined ||
-    ctx.InboundAccessAuthorized !== true ||
-    ctx.InboundEventKind === "room_event" ||
-    (nativeCommandTarget !== undefined && nativeCommandTarget !== params.sessionKey) ||
-    actorType !== "human"
-  ) {
-    return {
-      allowRestartTombstoneParentFork,
-      allowRestartTombstoneReset: false,
-      resetTriggered: false,
-    };
-  }
-  const normalizedChatType = normalizeChatType(ctx.ChatType);
-  const isGroup =
-    normalizedChatType != null && normalizedChatType !== "direct"
-      ? true
-      : Boolean(resolveGroupSessionKey(ctx));
-  const { resetCommand } = resolveAuthorizedSessionResetCommand({
-    agentId: params.agentId,
-    cfg: params.cfg,
-    commandAuthorized: ctx.CommandAuthorized,
-    ctx,
-    isGroup,
+      return updatedEntry ?? undefined;
+    },
   });
-  const resetTriggered = resetCommand.matchedResetTriggerLower !== undefined;
-  return {
-    resetTriggered,
-    allowRestartTombstoneParentFork,
-    allowRestartTombstoneReset: resetTriggered && isRestartRecoveryTombstone(entry),
-  };
 }
 
 export function createDispatchReplyOperationCoordinator(params: {
@@ -457,9 +372,15 @@ export function createDispatchReplyOperationCoordinator(params: {
     const admitCurrentReplyTurn = async () => {
       try {
         return await admitReplyTurn({
+          agentId: params.agentId,
           sessionKey: dispatchOperationSessionKey,
+          resolveGatewayContext:
+            readChannelContextGatewayContextResolver(params.ctx) ??
+            getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext,
           sessionId: operationSessionId,
-          expectedSessionId: params.resolveOperationExpectedSessionId(),
+          expectedSessionId:
+            params.replyOptions?.expectedExistingSessionId ??
+            params.resolveOperationExpectedSessionId(),
           expectedActiveOperation: params.initialDispatchReplyOperation,
           storePath: params.operationSessionStoreEntry.storePath,
           kind: replyTurnKind,
@@ -520,6 +441,13 @@ export function createDispatchReplyOperationCoordinator(params: {
         );
         admission = await admitCurrentReplyTurn();
       }
+    }
+    const runState = resolveReplyOperationRunState(params.replyOptions);
+    if (runState) {
+      runState.admission =
+        admission.status === "owned"
+          ? { status: "owned" }
+          : { status: "skipped", reason: admission.reason };
     }
     if (admission.status === "skipped") {
       if (allowActiveResolution && admission.reason === "active-run") {

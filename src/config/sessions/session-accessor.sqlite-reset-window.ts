@@ -72,6 +72,7 @@ function cacheResetMessageWindow(key: string, entry: ResetMessageWindowCacheEntr
 function readLatestActiveBoundaryMetadataByType(
   projection: CurrentTranscriptProjection,
   eventType: "compaction" | "reset",
+  beforeRawSeq?: number,
 ) {
   const db = getActiveTranscriptKysely(projection.database);
   return executeSqliteQueryTakeFirstSync(
@@ -86,6 +87,7 @@ function readLatestActiveBoundaryMetadataByType(
       .select(["active.active_position", "identity.event_type", "identity.seq"])
       .where("active.session_id", "=", projection.resolved.sessionId)
       .where("identity.event_type", "=", eventType)
+      .$if(beforeRawSeq !== undefined, (query) => query.where("identity.seq", "<", beforeRawSeq!))
       .orderBy("identity.seq", "desc")
       .limit(1),
   );
@@ -94,12 +96,13 @@ function readLatestActiveBoundaryMetadataByType(
 function readLatestActiveBoundaryMetadata(
   projection: CurrentTranscriptProjection,
   scope: BoundaryWindowScope,
+  beforeRawSeq?: number,
 ) {
-  const reset = readLatestActiveBoundaryMetadataByType(projection, "reset");
+  const reset = readLatestActiveBoundaryMetadataByType(projection, "reset", beforeRawSeq);
   if (scope === "history") {
     return reset;
   }
-  const compaction = readLatestActiveBoundaryMetadataByType(projection, "compaction");
+  const compaction = readLatestActiveBoundaryMetadataByType(projection, "compaction", beforeRawSeq);
   return reset && (!compaction || reset.seq > compaction.seq) ? reset : compaction;
 }
 
@@ -134,9 +137,10 @@ function readBoundaryWindowFacts(
 function findLatestResetMessageWindow(
   projection: CurrentTranscriptProjection,
   scope: BoundaryWindowScope,
+  beforeRawSeq?: number,
 ): ResetMessageWindow | null {
   const db = getActiveTranscriptKysely(projection.database);
-  const latestBoundary = readLatestActiveBoundaryMetadata(projection, scope);
+  const latestBoundary = readLatestActiveBoundaryMetadata(projection, scope, beforeRawSeq);
   if (!latestBoundary) {
     return null;
   }
@@ -191,7 +195,9 @@ function findLatestResetMessageWindow(
           .where("active.active_position", ">=", firstKept.active_position)
           .where("active.active_position", "<", latestBoundary.active_position)
           .where("active.message_position", "is not", null)
-          .$if(scope === "context", (query) => query.where("active.context_eligible", "=", 1))
+          .$if(scope === "context" && latestBoundary.event_type !== "reset", (query) =>
+            query.where("active.context_eligible", "=", 1),
+          )
           .orderBy("active.active_position", "asc"),
       );
       const candidates = Array.from(candidateRows, (row) => {
@@ -224,7 +230,9 @@ function findLatestResetMessageWindow(
           return [];
         }
         const role = row.event.message.role;
-        return role === "user" || role === "assistant" ? [row.message_position] : [];
+        return scope === "context" || role === "user" || role === "assistant"
+          ? [row.message_position]
+          : [];
       });
     }
   }
@@ -238,10 +246,15 @@ function findLatestResetMessageWindow(
   };
 }
 
-function resolveResetMessageWindow(
+export function resolveTranscriptBoundaryWindow(
   projection: CurrentTranscriptProjection,
   scope: BoundaryWindowScope = "history",
+  beforeRawSeq?: number,
 ): ResetMessageWindow | null {
+  // A current-turn read cannot reuse a window from a later reset or compaction.
+  if (beforeRawSeq !== undefined) {
+    return findLatestResetMessageWindow(projection, scope, beforeRawSeq);
+  }
   const key = `${projection.database.path}\0${projection.resolved.sessionId}\0${scope}`;
   const cached = resetMessageWindowCache.get(key);
   const generation = readTranscriptProjectionGeneration(projection);
@@ -269,7 +282,7 @@ function resolveResetMessageWindow(
 export function resolveVisibleMessagePositions(
   projection: CurrentTranscriptProjection,
 ): VisibleMessagePositions {
-  const window = resolveResetMessageWindow(projection);
+  const window = resolveTranscriptBoundaryWindow(projection);
   if (!window) {
     return { kept: [], postStart: 0, total: projection.state.activeMessageCount };
   }
@@ -345,6 +358,55 @@ export function* iterateVisibleMessageRange(
   }
 }
 
+export function hasUnindexedVisibleMessages(
+  projection: CurrentTranscriptProjection,
+  start: number,
+  endExclusive: number,
+): boolean {
+  return selectVisibleMessageRanges(projection, start, endExclusive).some(
+    (range) =>
+      executeSqliteQueryTakeFirstSync(
+        projection.database.db,
+        range.query
+          .leftJoin("transcript_event_identities as identity", (join) =>
+            join
+              .onRef("identity.session_id", "=", "active.session_id")
+              .onRef("identity.seq", "=", "active.event_seq"),
+          )
+          .select("active.event_seq")
+          .where("identity.seq", "is", null)
+          .limit(1),
+      ) !== undefined,
+  );
+}
+
+/** Validate the whole selected history without materializing ordinary payloads in JavaScript. */
+export function assertVisibleMessageRangeJson(
+  projection: CurrentTranscriptProjection,
+  start: number,
+  endExclusive: number,
+): void {
+  for (const range of selectVisibleMessageRanges(projection, start, endExclusive)) {
+    for (const row of iterateSqliteQuerySync(
+      projection.database.db,
+      range.query
+        .select(["active.event_seq", "active.message_position", "event.event_json"])
+        .where((eb) => {
+          // The raw check rejects extra values; the enclosing array cannot end at a NUL.
+          const enclosed = eb(eb.val("["), "||", eb("event.event_json", "||", eb.val("]")));
+          return eb.or([
+            eb(eb.fn<number>("json_valid", ["event.event_json"]), "=", 0),
+            eb(eb.fn<number>("json_valid", [enclosed]), "=", 0),
+          ]);
+        }),
+    )) {
+      // SQLite's nesting limit is stricter than JSON.parse. Keep readable deep
+      // rows and let the existing parser own actual malformed-row failures.
+      parseActiveTranscriptMessageRow(row);
+    }
+  }
+}
+
 /** Sizes the same logical ranges without fetching or parsing excluded payloads. */
 export function readVisibleMessageMetadata(
   projection: CurrentTranscriptProjection,
@@ -375,7 +437,7 @@ export function readVisibleTranscriptStats(projection: CurrentTranscriptProjecti
   eventCount: number;
   sizeBytes: number;
 } {
-  const window = resolveResetMessageWindow(projection, "context");
+  const window = resolveTranscriptBoundaryWindow(projection, "context");
   const db = getActiveTranscriptKysely(projection.database);
   const base = db
     .selectFrom("session_transcript_active_events as active")

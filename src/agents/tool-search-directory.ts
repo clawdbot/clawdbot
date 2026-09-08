@@ -1,5 +1,6 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   applyToolCatalogCompaction,
   collectUniqueCatalogToolNames,
@@ -71,25 +72,41 @@ export function applyToolSchemaDirectoryCatalog(params: {
 
 export function buildToolSchemaDirectoryPrompt(
   ctx: ToolSearchToolContext,
-  options?: CatalogVisibilityOptions,
+  options?: CatalogVisibilityOptions & { contextTokenBudget?: number },
 ): string {
   const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
   const catalog = resolveCatalog(ctx);
-  const cacheKey = `${config.mode}:${options?.includeMcp === false ? "without-mcp" : "all"}`;
+  const contextTokens = options?.contextTokenBudget;
+  // At four characters per token, the listing gets 2.5% of the active window.
+  // Keep enough room for discovery instructions even in a very small window.
+  const maxChars =
+    contextTokens && Number.isFinite(contextTokens) && contextTokens > 0
+      ? Math.min(
+          MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
+          Math.max(768, Math.floor(contextTokens / 10)),
+        )
+      : MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS;
+  const cacheKey = `${config.mode}:${options?.includeMcp === false ? "without-mcp" : "all"}:${maxChars}`;
   let cachedPrompts = toolSchemaDirectoryPromptCache.get(catalog.entries);
-  const cachedPrompt = cachedPrompts?.get(cacheKey);
+  // Caller-owned filters may change in place; cached text must not bypass them.
+  const cachedPrompt = options?.allowedIds ? undefined : cachedPrompts?.get(cacheKey);
   if (cachedPrompt !== undefined) {
     return cachedPrompt;
   }
   const prompt = formatToolSearchCatalogDirectory(
     visibleCatalogEntries(catalog, options),
     config.mode,
+    maxChars,
   );
+  if (options?.allowedIds) {
+    return prompt;
+  }
   if (!cachedPrompts) {
     cachedPrompts = new Map<string, string>();
     toolSchemaDirectoryPromptCache.set(catalog.entries, cachedPrompts);
   }
   cachedPrompts.set(cacheKey, prompt);
+  pruneMapToMaxSize(cachedPrompts, 12);
   return prompt;
 }
 
@@ -118,12 +135,12 @@ export function resolveToolSearchCatalogTool(
   }
 }
 
-function compactDirectoryDescription(description: string): string {
+function compactDirectoryDescription(description: string, maxChars: number): string {
   const normalized = description.replace(/\s+/g, " ").trim();
-  if (normalized.length <= 180) {
+  if (normalized.length <= maxChars) {
     return normalized;
   }
-  return `${truncateUtf16Safe(normalized, 177).trimEnd()}...`;
+  return `${truncateUtf16Safe(normalized, maxChars - 3).trimEnd()}...`;
 }
 
 function formatToolDirectoryIdentifier(value: string | undefined): string | undefined {
@@ -131,7 +148,10 @@ function formatToolDirectoryIdentifier(value: string | undefined): string | unde
   return trimmed && TOOL_DIRECTORY_IDENTIFIER_RE.test(trimmed) ? trimmed : undefined;
 }
 
-function formatToolDirectoryEntry(entry: ToolSearchCatalogEntry): string | undefined {
+function formatToolDirectoryEntry(
+  entry: ToolSearchCatalogEntry,
+  descriptionMaxChars: number,
+): string | undefined {
   if (entry.source !== "openclaw") {
     return undefined;
   }
@@ -139,70 +159,83 @@ function formatToolDirectoryEntry(entry: ToolSearchCatalogEntry): string | undef
   if (!name) {
     return undefined;
   }
-  const description = compactDirectoryDescription(entry.description);
   const ownerName = formatToolDirectoryIdentifier(entry.sourceName);
   const owner = ownerName ? ` (${ownerName})` : "";
+  if (descriptionMaxChars === 0) {
+    return `- ${name}${owner}`;
+  }
+  const description = compactDirectoryDescription(entry.description, descriptionMaxChars);
   return `- ${name}${owner}: ${description || "No description."}`;
-}
-
-function renderToolSearchCatalogDirectory(
-  lines: string[],
-  total: number,
-  mode: ToolSearchMode,
-): string {
-  const omitted = total - lines.length;
-  const guidance =
-    mode === "code"
-      ? "Use tool_search_code with openclaw.tools.search(query), openclaw.tools.describe(id), and openclaw.tools.call(id, args)."
-      : omitted > 0
-        ? "Use tool_search to find them, then tool_describe to load a full schema before tool_call."
-        : "Call tool_describe with a listed tool name to load its full schema before using tool_call.";
-  const footer = omitted > 0 ? `${omitted} additional tools omitted. ${guidance}` : guidance;
-  return [
-    "Available deferred-schema tools:",
-    ...lines,
-    "",
-    "Policy-approved MCP and client tools may also be discoverable through search.",
-    footer,
-  ].join("\n");
 }
 
 function formatToolSearchCatalogDirectory(
   entries: ToolSearchCatalogEntry[],
   mode: ToolSearchMode,
+  maxChars: number,
 ): string {
-  if (entries.length === 0) {
+  const deferredEntries = entries.filter((entry) => !entry.directVisible);
+  if (deferredEntries.length === 0) {
     return "Available deferred-schema tools: none.";
   }
   const nameCounts = new Map<string, number>();
   for (const entry of entries) {
     nameCounts.set(entry.name, (nameCounts.get(entry.name) ?? 0) + 1);
   }
-  const lines = entries
+  // Count collisions before excluding native tools: their lookalikes remain ambiguous.
+  const listedEntries = deferredEntries
     .filter((entry) => nameCounts.get(entry.name) === 1)
     .toSorted(
       (left, right) =>
         (left.name < right.name ? -1 : left.name > right.name ? 1 : 0) ||
         (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
-    )
-    .map(formatToolDirectoryEntry)
-    .filter((line): line is string => Boolean(line));
-  const fullDirectory = renderToolSearchCatalogDirectory(lines, entries.length, mode);
-  if (fullDirectory.length <= MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS) {
-    return fullDirectory;
-  }
-  let low = 0;
-  let high = lines.length;
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    if (
-      renderToolSearchCatalogDirectory(lines.slice(0, middle), entries.length, mode).length <=
-      MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS
-    ) {
-      low = middle;
-    } else {
-      high = middle - 1;
+    );
+  let descriptionMaxChars = 180;
+  const renderRows = () =>
+    listedEntries
+      .map((entry) => formatToolDirectoryEntry(entry, descriptionMaxChars))
+      .filter((line): line is string => Boolean(line));
+  let lines = renderRows();
+  const heading = "Available deferred-schema tools:";
+  const notice = "Policy-approved MCP and client tools may also be discoverable through search.";
+  const omittedLabel = " additional tools omitted. ";
+  // Each line includes its newline; three fixed separators remain outside the rows.
+  let lineChars = lines.reduce((chars, line) => chars + line.length + 1, 0);
+  let omitted = deferredEntries.length - lines.length;
+  let guidance: string;
+  for (;;) {
+    guidance =
+      mode === "code"
+        ? "Use tool_search_code with openclaw.tools.search(query), openclaw.tools.describe(id), and openclaw.tools.call(id, args)."
+        : omitted > 0
+          ? "Use tool_search to find a tool and its input signature; use tool_describe when a full schema is needed."
+          : "Use tool_search for a compact input signature or tool_describe for a full schema.";
+    if (mode === "tools") {
+      guidance +=
+        " Deferred names are not directly callable. Call tool_call with the result id or name in id and all tool parameters in args. Use this wrapper even when other guidance names a deferred tool directly.";
+    } else if (mode === "directory") {
+      guidance +=
+        " Call a unique deferred tool name directly, or use tool_call with its id and args.";
     }
+    const footerChars =
+      guidance.length + (omitted > 0 ? String(omitted).length + omittedLabel.length : 0);
+    if (
+      heading.length + lineChars + notice.length + footerChars + 3 <= maxChars ||
+      lines.length === 0
+    ) {
+      break;
+    }
+    // Preserve capability names before dropping rows; full descriptions remain searchable.
+    if (descriptionMaxChars > 0) {
+      descriptionMaxChars = descriptionMaxChars === 180 ? 64 : 0;
+      lines = renderRows();
+      lineChars = lines.reduce((chars, line) => chars + line.length + 1, 0);
+      continue;
+    }
+    // SAFETY: this renderer owns the nonempty, dense formatted-line array.
+    // Remove excluded rows before materializing the bounded directory.
+    lineChars -= lines.pop()!.length + 1;
+    omitted += 1;
   }
-  return renderToolSearchCatalogDirectory(lines.slice(0, low), entries.length, mode);
+  const footer = omitted > 0 ? `${omitted}${omittedLabel}${guidance}` : guidance;
+  return [heading, ...lines, "", notice, footer].join("\n");
 }

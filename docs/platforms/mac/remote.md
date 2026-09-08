@@ -2,10 +2,83 @@
 summary: "macOS app flow for controlling a remote OpenClaw gateway"
 read_when:
   - Setting up or debugging remote mac control
+  - Signing in to a Gateway from the Mac app or opening it from a website
 title: "Remote control"
 ---
 
-This flow lets the macOS app act as a full remote control for an OpenClaw gateway running on another host (desktop/server). The app connects directly to trusted LAN/Tailnet gateway URLs, or manages an SSH tunnel when the remote gateway is loopback-only. Health checks, Voice Wake forwarding, and Web Chat reuse the same remote configuration from _Settings -> General_.
+This flow lets the macOS app act as a full remote control for an OpenClaw gateway running on another host (desktop/server). The app connects directly to trusted LAN/Tailnet gateway URLs, or manages an SSH tunnel when the remote gateway is loopback-only. Health checks, Voice Wake forwarding, and Web Chat reuse the same remote configuration from the native **Connection** window.
+
+## Connect with your browser
+
+Add a saved Gateway to use its dashboard and native chat with your personal
+account. This connection stays separate from the primary Gateway that owns
+Mac node capabilities and Talk Mode.
+
+1. On first launch, choose **Connect to an existing Gateway**. In an already
+   configured app, open **Connection… → Gateways → Add Gateway**.
+2. Enter the Gateway's address, such as `gateway.example.com` or
+   `https://gateway.example.com/operator/`. A hostname defaults to HTTPS;
+   include the full base path when the Gateway is hosted beneath one. **Name**
+   is optional.
+3. Click **Connect**. For a Gateway protected by Cloudflare Access, the app
+   opens your default browser. Continue with the account you use for that
+   Gateway and complete any sign-in prompts there.
+4. Return to OpenClaw. The saved Gateway's dashboard opens; check the account
+   name in its sidebar footer. You can open more windows from
+   **File → New Gateway Window…** or the **Gateways** menu. The app reopens your selected Gateway after
+   restart, including when a separate primary Gateway supplies Mac capabilities.
+
+Cloudflare Access issues the personal application session through its
+[browser-to-client sign-in flow](https://developers.cloudflare.com/cloudflare-one/tutorials/cli/).
+The Mac app stores that session in Keychain and uses it for the saved Gateway's
+native connection and embedded dashboard. Its validity follows the session
+duration configured by the Access administrator. No shared Gateway token needs
+to be copied from the website.
+
+Browser sign-in currently supports Cloudflare Access. For Gateways that use a
+shared token or password, expand **Token or password** and provide the
+credential supplied by the administrator. Other browser sign-in providers are
+not supported by this flow. Existing private-network `ws://` and secure
+`wss://` connections remain available through this editor.
+
+A signed-in native operator device may still need a one-time approval on the
+Gateway. The Gateway's existing [automatic device approval policy](/gateway/trusted-proxy-auth#automatic-device-approval)
+determines whether verified proxy identities can enroll automatically.
+
+When the browser session expires, choose **Reconnect** for that saved Gateway,
+then **Connect** to sign in again. Renewing the same account keeps its native
+chat cache and queued messages. Signing in with a different account closes the
+previous account's native chat windows and uses that account's own cache and
+queue. Previously queued messages remain with their original account; sign
+back into that account to access them.
+
+To sign out of that Gateway in the Mac app,
+remove it from **Connection… → Gateways** and confirm **Remove**. This removes its
+saved credentials and dashboard browser data. Use your identity provider's
+session controls to revoke account access more broadly.
+
+### Open the Mac app from a website
+
+In the browser dashboard, open **Get the apps** from the account menu, then
+choose **Open in Mac app** on the macOS card. The link uses the connected
+Gateway's HTTPS address. OpenClaw shows **Add Gateway** with that address filled
+in; review it and click **Connect** to complete the same sign-in flow.
+
+Websites can launch this editor with the registered `openclaw` URL scheme:
+
+```text
+openclaw://gateway/add?url=https%3A%2F%2Fgateway.example.com%2Foperator%2F&name=Research
+```
+
+`url` is required and contains the percent-encoded full HTTPS Gateway base URL,
+including its port and base path when needed. `name` is an optional display
+label. The link carries connection intent only: it accepts no token, password,
+URL user information, query, or fragment in the Gateway address, and it does
+not authorize access. Credentials are obtained separately during sign-in.
+
+The existing `openclaw://gateway?host=…` setup route retains its primary-Gateway
+setup behavior. Use `openclaw://gateway/add` to add a saved Gateway without replacing
+the primary connection.
 
 ## Modes
 
@@ -20,7 +93,7 @@ This flow lets the macOS app act as a full remote control for an OpenClaw gatewa
 
 The app disables SSH connection multiplexing and post-authentication backgrounding for its own SSH processes so it can monitor and restart the exact process, even if the selected alias enables `ControlMaster` or `ForkAfterAuthentication`.
 
-SSH host-key verification is strict by default because gateway credentials travel through this tunnel. To opt into a managed SSH alias's own trust behavior, set `--ssh-host-key-policy openssh` via `openclaw-mac configure-remote`, or set `gateway.remote.sshHostKeyPolicy` to `"openssh"` directly. Review the alias and any matching `Host *` or system configuration before opting in. Changing the SSH target (in the app or via `configure-remote`) resets the policy back to `strict` unless you explicitly opt in again for the new target.
+SSH host-key verification is strict by default because gateway credentials travel through this tunnel. To opt into a managed SSH alias's own trust behavior, set `--ssh-host-key-policy openssh` via `openclaw-mac primary set`, or set `gateway.remote.sshHostKeyPolicy` to `"openssh"` directly. Review the alias and any matching `Host *` or system configuration before opting in. Changing the SSH target (in the app or via `openclaw-mac`) resets the policy back to `strict` unless you explicitly opt in again for the new target.
 
 In SSH tunnel mode, discovered LAN/tailnet hostnames save as `gateway.remote.sshTarget`. The app keeps `gateway.remote.url` on the local tunnel endpoint (for example `ws://127.0.0.1:18789`) so CLI, Web Chat, and the local node-host service all use the same loopback transport. When discovery returns both raw Tailnet IPs and stable hostnames, the app prefers Tailscale MagicDNS or LAN names so connections survive address changes better. If the local tunnel port differs from the remote gateway port, set `gateway.remote.remotePort` to the port on the remote host.
 
@@ -34,29 +107,143 @@ The Mac app's node combines native capabilities with system, browser, plugin, sk
 
 ## macOS app setup
 
-To preconfigure the app without the welcome flow, over SSH:
+Use the bundled `openclaw-mac` command to inspect or change the running app's
+connections from Terminal or over SSH. The app's CLI installer links it beside
+its profile-managed `openclaw` command. You can also call it directly at
+`/Applications/OpenClaw.app/Contents/MacOS/openclaw-mac`.
+
+Inspect the primary connection, saved Gateways, and app version:
+
+```bash
+openclaw-mac status --json
+openclaw-mac primary show
+openclaw-mac gateway list
+```
+
+Configure the primary Gateway over SSH:
+
+```bash
+openclaw-mac primary set \
+  --ssh-target user@gateway-host \
+  --local-port 18789 \
+  --remote-port 18789 \
+  --token-file /path/to/gateway-token
+```
+
+Or connect directly to a trusted LAN or Tailnet endpoint:
+
+```bash
+openclaw-mac primary set \
+  --direct-url ws://192.168.0.202:18789 \
+  --token-file /path/to/gateway-token
+```
+
+The app applies the change and restarts its primary connection and SSH tunnel
+as needed. Changing targets clears the previous SSH identity, remote project
+root, and remote CLI path; supply `--identity /path/to/key` for an SSH identity
+on the new target. Host-key verification defaults to `strict`; use
+`--ssh-host-key-policy openssh` only for an alias whose OpenSSH trust policy
+you accept. Use `primary set --local` for a Gateway on this Mac, or
+`primary clear` to return the primary connection to its unconfigured state.
+Saved Gateways remain separate from this primary connection.
+
+### Add and manage saved Gateways
+
+For a Gateway protected by Cloudflare Access:
+
+```bash
+openclaw-mac gateway add Research \
+  --url https://gateway.example.com/operator/ \
+  --browser
+```
+
+The command prints `Complete sign-in in your browser…` to stderr and waits
+while the app runs its bundled browser sign-in helper. Complete authentication
+in the Mac's default browser. The request remains open until sign-in succeeds,
+fails, or reaches the helper's 300-second limit. On success, the command
+reports the saved Gateway and its identity subject and expiry. An SSH session
+can initiate this flow, but browser interaction still happens on the Mac.
+
+For a Gateway using a shared token, replace `--browser` with
+`--token-file /path/to/gateway-token`; passwords use
+`--password-file /path/to/gateway-password`. The same URL validation as the
+Gateways tab applies, including secure `wss://` for public hosts.
+Token/password adds wait for a connection attempt within the request timeout; if it fails, the profile remains saved and the command exits with code `0`, reporting `disconnected` with a sanitized error.
+
+```bash
+openclaw-mac gateway reconnect Research
+openclaw-mac gateway remove Research --yes
+```
+
+Reconnect renews browser authentication for browser profiles and reconnects
+token/password profiles. Remove signs out and removes the app's saved
+credentials and dashboard browser data. Commands accept an exact Gateway ID
+or a unique case-insensitive name; ambiguous names produce an error listing
+candidates. Without `--yes`, removal asks once in an interactive terminal;
+noninteractive removal requires `--yes`.
+
+### Secrets, profiles, and app launch
+
+On `primary set` and `gateway add`, pass secrets only with `--token-file`,
+`--token-stdin`, `--password-file`, or `--password-stdin`. File/stdin input is
+read once and trailing newlines are removed. Keep credential files private.
+The new commands reject `--token` and `--password` to keep secrets out of
+process arguments. Status and saved-Gateway output never contain credentials.
+
+Use `--profile <name>` or `OPENCLAW_PROFILE` to select the app profile. For
+example:
+
+```bash
+openclaw-mac --profile research status --json
+openclaw-mac --no-launch status --json
+```
+
+The CLI starts its containing app bundle in the background when needed,
+falling back to `/Applications/OpenClaw.app`. Use `--no-launch` to require an
+already-running app. `--timeout <ms>` bounds waiting for the app and operation.
+The default is 15 seconds, or 310 seconds for `gateway add` and
+`gateway reconnect` to allow browser sign-in to finish. Global flags can appear
+before or after the command; `--profile` takes precedence over the environment.
+The control socket follows the app profile: `~/.openclaw/mac-control.sock`
+for the default profile and `~/.openclaw-<name>/mac-control.sock` for a named
+profile. `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH` do not relocate it.
+
+With `--json`, successful commands print the requested result to stdout.
+Failures print `{ "ok": false, "error": { "code": "…", "message": "…" } }`
+to stderr. Exit codes are `0` for success, `1` for usage errors, `2` when the
+app is unreachable, and `3` when an operation fails.
+
+### Offline preconfiguration
+
+Keep `configure-remote` for preparing a primary connection before the app
+starts. It writes configuration and app defaults directly; it cannot manage
+saved Gateways or restart a running app's connection. Prefer `primary set`
+when the app is running.
 
 ```bash
 openclaw-mac configure-remote \
   --ssh-target user@gateway-host \
   --local-port 18789 \
-  --remote-port 18789 \
-  --token "$OPENCLAW_GATEWAY_TOKEN"
+  --remote-port 18789
 ```
 
-Or for a gateway already reachable on a trusted LAN or Tailnet, skip SSH entirely:
+The legacy `connect`, `wizard`, and `configure-remote` commands resolve config
+in this order: `OPENCLAW_CONFIG_PATH`, then
+`$OPENCLAW_STATE_DIR/openclaw.json`, then `~/.openclaw/openclaw.json`.
+`configure-remote` supports SSH and `--direct-url` transports, marks onboarding
+complete, and leaves the app to use the selected transport on its next start.
+Its ports default to `18789`. Additional options include `--identity`,
+`--ssh-host-key-policy`, `--project-root`, `--cli-path`, and `--json`.
+Its legacy `--token`/`--password` arguments remain supported, but expose
+credentials through process arguments; use the running app's file/stdin
+commands for credential changes. Run `configure-remote --help` for its full
+reference.
 
-```bash
-openclaw-mac configure-remote \
-  --direct-url ws://192.168.0.202:18789 \
-  --token "$OPENCLAW_GATEWAY_TOKEN"
-```
-
-`openclaw-mac connect`, `wizard`, and `configure-remote` resolve the active config in this order: `OPENCLAW_CONFIG_PATH`, then `$OPENCLAW_STATE_DIR/openclaw.json`, then `~/.openclaw/openclaw.json`. Both configuration forms write that active file, mark onboarding complete, and let the app own the selected transport on next start. `--local-port`/`--remote-port` default to `18789`. Other flags: `--password`, `--identity <path>`, `--ssh-host-key-policy <strict|openssh>`, `--project-root <path>`, `--cli-path <path>`, `--json`. Run `openclaw-mac configure-remote --help` for the full reference.
+### Configure in the app
 
 To configure from the UI instead:
 
-1. Open _Settings -> General_.
+1. Choose **Connection…** from the menu bar and select the **Connection** tab.
 2. Under **OpenClaw runs**, pick **Remote** and set:
    - **Transport**: **SSH tunnel** or **Direct (ws/wss)**.
    - **SSH target**: `user@host` (optional `:port`). If the gateway is on the same LAN and advertises Bonjour, pick it from the discovered list to auto-fill this field.
@@ -92,6 +279,8 @@ To configure from the UI instead:
 - Re-run login on that host if auth expires. The health check surfaces link problems.
 
 ## Troubleshooting
+
+The Dashboard error page shows the attempted address without embedded credentials. Check the host, port, and path when troubleshooting an unavailable Gateway. Choose **Connection Settings…** there, or **Connection…** from the menu bar, to repair the connection without loading the Dashboard.
 
 | Symptom                                          | Cause / fix                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

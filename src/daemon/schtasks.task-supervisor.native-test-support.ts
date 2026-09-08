@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect } from "vitest";
@@ -16,6 +17,7 @@ type WindowsProcessDiagnostic = {
 export type GatewayTaskSupervisorProbe = {
   childPidPath: string;
   failedAttemptPidPath: string;
+  failedSupervisorPidPath: string;
   probePath: string;
   supervisorPidPath: string;
 };
@@ -39,15 +41,20 @@ async function waitForRecordedPid(pidPath: string, label: string): Promise<numbe
   throw new Error(`Timed out waiting for Scheduled Task ${label} process id`);
 }
 
-async function waitForProcessExit(pid: number): Promise<void> {
+export function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+export async function waitForProcessExit(pid: number): Promise<void> {
   const deadline = Date.now() + WAIT_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    try {
-      process.kill(pid, 0);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ESRCH") {
-        return;
-      }
+    if (!isProcessAlive(pid)) {
+      return;
     }
     await sleep();
   }
@@ -58,6 +65,7 @@ export function createGatewayTaskSupervisorProbe(rootDir: string): GatewayTaskSu
   return {
     childPidPath: path.join(rootDir, "child-pid.txt"),
     failedAttemptPidPath: path.join(rootDir, "failed-attempt-pid.txt"),
+    failedSupervisorPidPath: path.join(rootDir, "failed-supervisor-pid.txt"),
     probePath: path.join(rootDir, "probe.mts"),
     supervisorPidPath: path.join(rootDir, "supervisor-pid.txt"),
   };
@@ -68,44 +76,52 @@ export async function writeGatewayTaskSupervisorProbe(params: {
   eventsPath: string;
   probe: GatewayTaskSupervisorProbe;
 }): Promise<void> {
-  const taskSupervisorModuleUrl = pathToFileURL(
-    path.resolve("src/cli/gateway-cli/task-supervisor.ts"),
+  const taskSupervisorModuleUrl = new URL("../cli/gateway-cli/task-supervisor.ts", import.meta.url)
+    .href;
+  const hostedProbeModuleUrl = new URL(
+    "./schtasks.hosted-stop.native-test-support.ts",
+    import.meta.url,
   ).href;
   await fs.writeFile(
     params.probe.probePath,
     [
-      'import { spawn } from "node:child_process";',
       'import fs from "node:fs";',
-      'import net from "node:net";',
-      `import { runWindowsGatewayTaskSupervisor } from ${JSON.stringify(taskSupervisorModuleUrl)};`,
+      // Bound Scheduler's inherited logon environment before importing product
+      // owners. Actions service tokens must not reach the supervisor or Gateway.
+      "const allowedEnv = new Set([",
+      '  "SYSTEMROOT", "WINDIR", "COMSPEC", "PATH", "PATHEXT", "TEMP", "TMP",',
+      '  "USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",',
+      '  "OPENCLAW_PROFILE", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH",',
+      '  "OPENCLAW_GATEWAY_PORT", "OPENCLAW_SERVICE_KIND", "OPENCLAW_SERVICE_MARKER",',
+      '  "TSX_TSCONFIG_PATH",',
+      "]);",
+      "for (const key of Object.keys(process.env)) if (!allowedEnv.has(key.toUpperCase())) delete process.env[key];",
       "const eventsPath = process.argv[5];",
       "const activePidPath = process.argv[6];",
       "const childPidPath = process.argv[7];",
       "const supervisorPidPath = process.argv[8];",
       "const failedAttemptPidPath = process.argv[9];",
-      "const appendEvent = (phase) => fs.appendFileSync(eventsPath, `${JSON.stringify({ phase, pid: process.pid, ppid: process.ppid })}\\n`);",
+      "const failedSupervisorPidPath = process.argv[10];",
+      "const appendEvent = (phase, details = {}) => fs.appendFileSync(phase === 'started' || phase === 'listening' ? eventsPath : eventsPath + '.hosted-stop', `${JSON.stringify({ phase, pid: process.pid, ppid: process.ppid, ...details })}\\n`);",
+      "process.once('exit', (code) => appendEvent('process-exit', { code }));",
+      "appendEvent('bounded-environment', { keys: Object.keys(process.env).map((key) => key.toUpperCase()).sort() });",
       "if (process.argv.includes('--task-supervisor')) {",
       "  fs.writeFileSync(supervisorPidPath, String(process.pid));",
+      `  const { runWindowsGatewayTaskSupervisor } = await import(${JSON.stringify(taskSupervisorModuleUrl)});`,
       "  await runWindowsGatewayTaskSupervisor();",
+      "  appendEvent('supervisor-joined', { code: process.exitCode ?? 0 });",
       "} else if (!fs.existsSync(failedAttemptPidPath)) {",
+      // Preserve this run's supervisor before a recovery launch overwrites its live PID file.
+      "  fs.copyFileSync(supervisorPidPath, failedSupervisorPidPath);",
       "  fs.writeFileSync(failedAttemptPidPath, String(process.pid));",
       "  process.exit(23);",
       "} else {",
       'const portIndex = process.argv.indexOf("--port");',
       "const port = Number.parseInt(process.argv[portIndex + 1] ?? '', 10);",
       "if (!Number.isInteger(port) || port < 1) throw new Error('Missing gateway --port');",
-      "const activePidTempPath = `${activePidPath}.${process.pid}.tmp`;",
-      "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
-      "fs.writeFileSync(childPidPath, String(child.pid));",
-      "const server = net.createServer((socket) => socket.end());",
       'appendEvent("started");',
-      "server.listen({ host: '127.0.0.1', port, exclusive: true }, () => {",
-      "  fs.writeFileSync(activePidTempPath, String(process.pid));",
-      "  fs.renameSync(activePidTempPath, activePidPath);",
-      '  appendEvent("listening");',
-      "});",
-      "server.on('error', (error) => { console.error(error); process.exit(1); });",
-      "setInterval(() => {}, 1000).unref();",
+      `const { runHostedStopNativeProbe } = await import(${JSON.stringify(hostedProbeModuleUrl)});`,
+      "await runHostedStopNativeProbe({ port, activePidPath, childPidPath, appendEvent });",
       "}",
       "",
     ].join("\n"),
@@ -119,10 +135,12 @@ export function buildGatewayTaskSupervisorProgramArguments(params: {
   gatewayPort: number;
   probe: GatewayTaskSupervisorProbe;
 }): string[] {
+  // The task runs from a temporary workspace, not the checkout that owns tsx.
+  const tsxImportUrl = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
   return [
     process.execPath,
     "--import",
-    "tsx",
+    tsxImportUrl,
     params.probe.probePath,
     "gateway",
     "--port",
@@ -132,22 +150,24 @@ export function buildGatewayTaskSupervisorProgramArguments(params: {
     params.probe.childPidPath,
     params.probe.supervisorPidPath,
     params.probe.failedAttemptPidPath,
+    params.probe.failedSupervisorPidPath,
   ];
 }
 
 export async function waitForGatewayTaskSupervisorProcesses(params: {
   probe: GatewayTaskSupervisorProbe;
-  requireFailedAttempt?: boolean;
+  failedAttempt?: boolean;
 }): Promise<{ childPid: number; supervisorPid: number }> {
+  const childPidPath = params.failedAttempt
+    ? params.probe.failedAttemptPidPath
+    : params.probe.childPidPath;
+  const supervisorPidPath = params.failedAttempt
+    ? params.probe.failedSupervisorPidPath
+    : params.probe.supervisorPidPath;
   const [childPid, supervisorPid] = await Promise.all([
-    waitForRecordedPid(params.probe.childPidPath, "child"),
-    waitForRecordedPid(params.probe.supervisorPidPath, "supervisor"),
+    waitForRecordedPid(childPidPath, "child"),
+    waitForRecordedPid(supervisorPidPath, "supervisor"),
   ]);
-  if (params.requireFailedAttempt) {
-    await waitForProcessExit(
-      await waitForRecordedPid(params.probe.failedAttemptPidPath, "failed child"),
-    );
-  }
   return { childPid, supervisorPid };
 }
 

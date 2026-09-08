@@ -1,5 +1,9 @@
-import { vi } from "vitest";
+import fs from "node:fs";
+import { expect, it, vi } from "vitest";
+import { createConfigIO } from "../config/io.factory.js";
+import { hashConfigRaw } from "../config/io.read-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
 
 const mocks = vi.hoisted(() => ({
@@ -8,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   runContributions: vi.fn<(ctx: DoctorHealthFlowContext) => Promise<void>>(),
   writeUpdatePostInstallDoctorResult: vi.fn(),
   service: vi.fn(),
+  probePortUsage: vi.fn<(typeof import("../infra/ports-probe.js"))["probePortUsage"]>(),
   packageRoot: vi.fn<() => string | undefined>(),
   restartedHealthy: true,
   emulateNativeInstall: true,
@@ -34,6 +39,13 @@ vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
 vi.mock("../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/service.js")>()),
   resolveGatewayService: () => mocks.service(),
+}));
+
+// Service absence requires a free port too; never consult the host Gateway
+// while exercising the fixture's in-memory native manager.
+vi.mock("../infra/ports-probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/ports-probe.js")>()),
+  probePortUsage: mocks.probePortUsage,
 }));
 
 vi.mock("../config/paths.js", async (importOriginal) => {
@@ -120,7 +132,8 @@ vi.mock("../config/config.js", async (importOriginal) => ({
   CONFIG_PATH: "/tmp/openclaw.json",
 }));
 
-vi.mock("../infra/update-doctor-result.js", () => ({
+vi.mock("../infra/update-doctor-result.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-doctor-result.js")>()),
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE: 86,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV: "OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH",
   writeUpdatePostInstallDoctorResult: mocks.writeUpdatePostInstallDoctorResult,
@@ -131,3 +144,70 @@ vi.mock("./doctor-health-contributions.js", () => ({
 }));
 
 export { mocks };
+
+export function registerDoctorConfigReceiptTests(
+  runDoctorHealthFlow: typeof import("./doctor-health.js").runDoctorHealthFlow,
+  postInstallAdvisory: NonNullable<DoctorHealthFlowContext["postInstallDoctorResult"]>,
+) {
+  it.each(["unchanged", "ok", "error", "advisory", "interleaved"] as const)(
+    "reports the consumed input and last committed Doctor config hash before exiting (%s)",
+    async (outcome) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const resultPath = state.path("doctor-result.json");
+        vi.stubEnv("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH", resultPath);
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        let expectedHash = "unchanged";
+        const expectedInputHash = hashConfigRaw(
+          fs.existsSync(state.configPath) ? fs.readFileSync(state.configPath, "utf8") : null,
+        );
+        const failure = new Error("health check failed after config commit");
+        mocks.runContributions.mockImplementation(async (ctx) => {
+          if (outcome === "unchanged") {
+            return;
+          }
+          const io = createConfigIO({ env: state.env, pluginValidation: "skip" });
+          // Preflight and final repair can both write. Only the last payload belongs in the receipt.
+          for (const port of [19101, 19102, 19103]) {
+            const written = await io.writeConfigFile({ gateway: { mode: "local", port } });
+            expectedHash = written.persistedHash;
+            if (outcome === "interleaved" && port === 19101) {
+              fs.appendFileSync(state.configPath, "\n");
+            }
+          }
+          fs.appendFileSync(state.configPath, "\n// operator saved after Doctor\n");
+          if (outcome === "error") {
+            throw failure;
+          }
+          if (outcome === "advisory") {
+            ctx.postInstallDoctorResult = postInstallAdvisory;
+          }
+        });
+        const completed = runDoctorHealthFlow(runtime, { nonInteractive: true });
+        if (outcome === "error") {
+          await expect(completed).rejects.toBe(failure);
+        } else {
+          await completed;
+        }
+        expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
+          resultPath,
+          result: {
+            ...(outcome === "advisory"
+              ? postInstallAdvisory
+              : { status: outcome === "error" ? "error" : "ok" }),
+            configHash: expectedHash,
+            ...(outcome === "unchanged" || outcome === "interleaved"
+              ? {}
+              : { configInputHash: expectedInputHash }),
+          },
+        });
+        if (outcome !== "unchanged") {
+          expect(expectedHash).not.toBe(hashConfigRaw(fs.readFileSync(state.configPath, "utf8")));
+        }
+        if (outcome === "advisory") {
+          expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledBefore(runtime.exit);
+          expect(runtime.exit).toHaveBeenCalledWith(86);
+        }
+      });
+    },
+  );
+}

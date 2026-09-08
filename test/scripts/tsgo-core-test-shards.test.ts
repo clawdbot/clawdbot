@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   findTsgoCoreTestShardViolations,
@@ -13,6 +14,7 @@ import {
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { isProcessAlive, waitForPidFile } from "../helpers/process-wait.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
+import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 
 describe("tsgo core test shards", () => {
   it("stripes partition the full shard list exactly once", () => {
@@ -87,6 +89,68 @@ describe("tsgo core test shards", () => {
     );
   });
 
+  it("keeps plugin browser source and tests in the extension type graphs", () => {
+    const root = lifetime.createTempDir("openclaw-browser-type-graphs-");
+    const coreConfigs = [
+      "tsconfig.ui.json",
+      "test/tsconfig/tsconfig.core.test.json",
+      "test/tsconfig/tsconfig.core.test.ui-other.json",
+    ];
+    const write = (file: string, content: string) => {
+      const target = path.join(root, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, content);
+    };
+    for (const config of [
+      "tsconfig.json",
+      "tsconfig.extensions.json",
+      "test/tsconfig/tsconfig.test.json",
+      "test/tsconfig/tsconfig.extensions.test.json",
+      "test/tsconfig/tsconfig.core.test.shard.json",
+      ...coreConfigs,
+    ]) {
+      write(config, fs.readFileSync(config, "utf8"));
+    }
+    const browserSource = "extensions/fixture/browser/index.ts";
+    const browserTest = "extensions/fixture/browser/index.test.ts";
+    for (const file of [
+      browserSource,
+      browserTest,
+      "extensions/fixture/index.ts",
+      "extensions/fixture/index.test.ts",
+      "ui/src/main.ts",
+      "ui/src/fixture.test.ts",
+    ]) {
+      write(file, "export {};\n");
+    }
+    const roots = (config: string) => {
+      const parsed = ts.getParsedCommandLineOfConfigFile(
+        path.join(root, config),
+        {},
+        {
+          ...ts.sys,
+          onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
+            throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
+          },
+        },
+      );
+      if (!parsed) {
+        throw new Error(`Could not parse ${config}`);
+      }
+      expect(parsed.errors, config).toEqual([]);
+      return parsed.fileNames.map((file) => path.relative(root, file).replaceAll(path.sep, "/"));
+    };
+
+    expect(roots("tsconfig.extensions.json")).toContain(browserSource);
+    expect(roots("test/tsconfig/tsconfig.extensions.test.json")).toContain(browserTest);
+    for (const config of coreConfigs) {
+      expect(
+        roots(config).filter((file) => file.startsWith("extensions/")),
+        config,
+      ).toEqual([]);
+    }
+  });
+
   it("routes aggregate package aliases through bounded processes", () => {
     const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
       scripts: Record<string, string>;
@@ -115,6 +179,15 @@ describe("changed core test graph selection", () => {
       "agents-other",
       "agents-tools",
     ]);
+  });
+
+  it("rejects a plugin browser test even when the inventory claims core ownership", () => {
+    const pluginTest = "extensions/example/browser/page.test.ts";
+    const graphs = inventory();
+    const uiGraph = graphs.find((graph) => graph.name === "core-test-ui-other")!;
+    uiGraph.roots = [pluginTest];
+    uiGraph.files = [pluginTest];
+    expect(selectChangedTsgoCoreTestShards([pluginTest], graphs)).toBeUndefined();
   });
 
   it.for([
@@ -164,6 +237,7 @@ it.runIf(process.platform !== "win32")(
     lifetime.run(async () => {
       const sourceRoot = process.cwd();
       const root = fs.realpathSync(lifetime.createTempDir("openclaw-changed-types-"));
+      const native = materializeNativeCompiler(root);
       const write = (name: string, content: string) => {
         const file = path.join(root, name);
         fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -214,31 +288,30 @@ it.runIf(process.platform !== "win32")(
           }),
         );
       }
+      fs.unlinkSync(path.join(root, "node_modules/.bin/tsgo"));
       const compiler = write(
         "node_modules/.bin/tsgo",
         `#!/usr/bin/env node
 const fs=require('node:fs'),path=require('node:path'),{spawnSync}=require('node:child_process');
 const args=process.argv.slice(2);
 fs.appendFileSync(path.join(process.cwd(),'compiler-events.jsonl'),JSON.stringify(args)+'\\n');
-const result=spawnSync(process.execPath,[${JSON.stringify(path.join(sourceRoot, "node_modules/@typescript/native-preview/bin/tsgo"))},...args],{stdio:'inherit'});
+const result=spawnSync(${JSON.stringify(native)},args,{stdio:'inherit'});
 process.exit(result.status??1);
 `,
       );
       fs.chmodSync(compiler, 0o755);
-      const driver = write(
-        "check.mts",
-        `
-import {createChangedCoreTestCheck} from './scripts/run-tsgo-core-test-shards.mts';
-const check=createChangedCoreTestCheck([${JSON.stringify(leaf)}],process.env);
-const boundary=await check.checkBoundary();
-process.exitCode=boundary || await check.checkTypes();
-`,
-      );
-      const check = async () => {
+      const driver = path.join(root, "scripts/run-tsgo-core-test-shards.mts");
+      const changedArgs = (paths: string[]) => ["--changed-paths-json", JSON.stringify(paths)];
+      const check = async (paths = [leaf]) => {
         write("compiler-events.jsonl", "");
         const result = await lifetime.track(
           runNodeScript(
-            ["--import", pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href, driver],
+            [
+              "--import",
+              pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href,
+              driver,
+              ...changedArgs(paths),
+            ],
             { ...process.env, OPENCLAW_LOCAL_CHECK: "0" },
             undefined,
             { cwd: root, signal, requireProcessTreeExit: true },
@@ -270,6 +343,10 @@ process.exitCode=boundary || await check.checkTypes();
         "test/tsconfig/tsconfig.core.test.agents-other.json",
         "test/tsconfig/tsconfig.core.test.agents-tools.json",
       ]);
+      // A removed rename source has no current root: keep the full canonical check.
+      const renamed = await check([leaf, "src/agents/old.test.ts"]);
+      expect(renamed.result.status, renamed.result.stderr).toBe(0);
+      expect(renamed.builds).toEqual(TSGO_CORE_TEST_SHARDS.map((shard) => shard.config));
       write(leaf, "export type Value = string;\n");
       const brokenConsumer = await check();
       expect(brokenConsumer.result.status).not.toBe(0);
@@ -295,7 +372,12 @@ setInterval(()=>{},1000);
       const cancel = new AbortController();
       const running = lifetime.track(
         runNodeScript(
-          ["--import", pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href, driver],
+          [
+            "--import",
+            pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href,
+            driver,
+            ...changedArgs([leaf]),
+          ],
           { ...process.env, OPENCLAW_LOCAL_CHECK: "0" },
           undefined,
           {

@@ -82,7 +82,10 @@ describe("Codex app-server policy", () => {
     expect(request).toHaveBeenCalledTimes(2);
     const canceled = expect(first).rejects.toBe(abortError);
     aborted.abort(abortError);
-    await Promise.all([canceled, expect(second).resolves.toBeUndefined()]);
+    await Promise.all([
+      canceled,
+      expect(second).resolves.toMatchObject({ config: { model_provider: "openai" } }),
+    ]);
   });
 
   it("revalidates Guardian trust across calls and workspaces on one Codex process", async () => {
@@ -121,19 +124,25 @@ describe("Codex app-server policy", () => {
   });
 
   it.each([
-    { name: "missing effective config", response: {} },
-    { name: "alternate model provider", response: { config: { model_provider: "custom" } } },
+    { name: "missing effective config", response: {}, error: /invalid effective config/i },
+    {
+      name: "alternate model provider",
+      response: { config: { model_provider: "custom" } },
+      error: /reviewer/i,
+    },
     {
       name: "managed ChatGPT endpoint",
       response: { config: { chatgpt_base_url: "https://review-proxy.example.invalid" } },
+      error: /reviewer/i,
     },
     {
       name: "managed model-provider endpoint",
       response: {
         config: { model_providers: { openai: { base_url: "https://proxy.example.invalid/v1" } } },
       },
+      error: /reviewer/i,
     },
-  ])("fails Guardian review closed on $name", async ({ response }) => {
+  ])("fails Guardian review closed on $name", async ({ response, error }) => {
     const client = { request: vi.fn(async () => response) };
 
     await expect(
@@ -142,7 +151,7 @@ describe("Codex app-server policy", () => {
         approvalsReviewer: "auto_review",
         cwd: "/workspace",
       }),
-    ).rejects.toThrow(/reviewer/i);
+    ).rejects.toThrow(error);
   });
 
   it("keeps model-backed reviewers for explicit OpenAI model providers", () => {

@@ -16,7 +16,9 @@ import {
   isRootFileMissingFailure,
   openRootFileFollowingParents,
 } from "../infra/boundary-file-read.js";
-import { sameFileIdentity, type FileIdentityStat } from "../infra/fs-safe-advanced.js";
+import { isHardlinkFallbackError } from "../infra/directory-durability.js";
+import { hasErrnoCode } from "../infra/errno.js";
+import { sameFileIdentity, tempFile, type FileIdentityStat } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, pathExists, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { retryAsync } from "../infra/retry.js";
@@ -36,6 +38,7 @@ import {
   readWorkspaceBootstrapFile,
 } from "./workspace-bootstrap-read.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
+import { readWorkspaceFileCache, writeWorkspaceFileCache } from "./workspace-file-cache.js";
 import {
   assertNoUnmigratedWorkspaceState,
   LEGACY_WORKSPACE_STATE_CURRENT_FILENAME,
@@ -85,8 +88,6 @@ const workspaceLogger = createSubsystemLogger("workspace");
 const workspaceTemplateCache = new Map<string, Promise<string>>();
 const gitInitializationInFlight = new Map<string, Promise<void>>();
 
-// File content cache keyed by stable file identity to avoid stale reads.
-const workspaceFileCache = new Map<string, { content: string; identity: string }>();
 type WorkspaceFileSourceIdentity = readonly [
   canonicalPath: string,
   stat: FileIdentityStat,
@@ -162,23 +163,22 @@ async function readWorkspaceFileWithGuards(params: {
           if (isTransientWorkspaceReadError(opened.error)) {
             throw opened.error;
           }
-          workspaceFileCache.delete(params.filePath);
           return opened;
         }
 
         const identity = workspaceFileIdentity(opened.stat, opened.path);
         const sourceIdentity = [opened.path, opened.stat, identity] as const;
         const cached =
-          params.useCache === false ? undefined : workspaceFileCache.get(params.filePath);
-        if (cached?.identity === identity) {
+          params.useCache === false ? undefined : readWorkspaceFileCache(opened.path, identity);
+        if (cached !== undefined) {
           syncFs.closeSync(opened.fd);
-          return { ok: true, content: cached.content, sourceIdentity };
+          return { ok: true, content: cached, sourceIdentity };
         }
 
         try {
           const content = await readWorkspaceBootstrapFile(opened.fd);
           if (params.useCache !== false) {
-            workspaceFileCache.set(params.filePath, { content, identity });
+            writeWorkspaceFileCache({ filePath: opened.path, content, identity });
           }
           return { ok: true, content, sourceIdentity };
         } finally {
@@ -194,7 +194,6 @@ async function readWorkspaceFileWithGuards(params: {
     );
   } catch (error) {
     // Non-transient read failure, or transient retries exhausted.
-    workspaceFileCache.delete(params.filePath);
     return { ok: false, reason: error instanceof RangeError ? "validation" : "io", error };
   }
 }
@@ -314,25 +313,81 @@ export class WorkspaceVanishedError extends Error {
   }
 }
 
-async function writeFileIfMissing(
+export async function publishBootstrapFile(
   filePath: string,
-  content: string,
+  content: string | Buffer,
   beforePersistentApply?: () => void,
 ): Promise<boolean> {
-  beforePersistentApply?.();
-  try {
-    await fs.writeFile(filePath, content, {
-      encoding: "utf-8",
-      flag: "wx",
-    });
-    return true;
-  } catch (err) {
-    const anyErr = err as { code?: string };
-    if (anyErr.code !== "EEXIST") {
-      throw err;
+  const dir = await fs.realpath(path.dirname(filePath));
+  const targetPath = path.join(dir, path.basename(filePath));
+  // Existing entries, including dangling symlinks, need no staging writes.
+  // Preserve the exclusive-create no-op on read-only established workspaces.
+  const existing = await fs.lstat(targetPath).catch((error: unknown) => {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      throw error;
     }
+  });
+  beforePersistentApply?.();
+  if (existing) {
     return false;
   }
+  let cleanupError: unknown;
+  const staging = await tempFile({
+    rootDir: dir,
+    prefix: "openclaw-bootstrap",
+    fileName: path.basename(filePath),
+    onCleanupError: (error) => {
+      cleanupError = error;
+    },
+  });
+  let outcome: { kind: "created" } | { kind: "exists" } | { kind: "failed"; error: unknown };
+  try {
+    beforePersistentApply?.();
+    await fs.writeFile(staging.path, content, { flag: "wx", flush: true });
+    beforePersistentApply?.();
+    let linked = false;
+    try {
+      // No await may split these operations: safe readers reject the temporary
+      // two-link inode, so publication must reach one link in the same turn.
+      syncFs.linkSync(staging.path, targetPath);
+      linked = true;
+      syncFs.unlinkSync(staging.path);
+      outcome = { kind: "created" };
+    } catch (error) {
+      if (!linked && hasErrnoCode(error, "EEXIST")) {
+        outcome = { kind: "exists" };
+      } else if (!linked && isHardlinkFallbackError(error)) {
+        outcome = {
+          kind: "failed",
+          error: new Error(
+            "Workspace filesystem does not support atomic bootstrap publication. Use a workspace on a filesystem with hard-link support.",
+            { cause: error },
+          ),
+        };
+      } else {
+        outcome = { kind: "failed", error };
+      }
+    }
+  } catch (error) {
+    outcome = { kind: "failed", error };
+  }
+  await staging.cleanup();
+  if (cleanupError !== undefined) {
+    if (outcome.kind !== "failed") {
+      throw new Error("Workspace bootstrap staging cleanup failed after publication.", {
+        cause: cleanupError,
+      });
+    }
+    throw new AggregateError(
+      [outcome.error, cleanupError],
+      "Workspace bootstrap publication and staging cleanup failed. Remove the incomplete staging directory, then retry.",
+      { cause: cleanupError },
+    );
+  }
+  if (outcome.kind === "failed") {
+    throw outcome.error;
+  }
+  return outcome.kind === "created";
 }
 
 function isTransientWorkspaceReadError(error: unknown): boolean {
@@ -1095,15 +1150,15 @@ export async function ensureAgentWorkspace(params?: {
   const shouldWriteBootstrapFile = (fileName: string): boolean =>
     !OPTIONAL_BOOTSTRAP_FILENAMES.has(fileName) || !skipOptionalBootstrapFiles.has(fileName);
 
-  await writeFileIfMissing(agentsPath, agentsTemplate, beforePersistentApply);
+  await publishBootstrapFile(agentsPath, agentsTemplate, beforePersistentApply);
   if (shouldWriteBootstrapFile(DEFAULT_SOUL_FILENAME)) {
-    await writeFileIfMissing(soulPath, soulTemplate, beforePersistentApply);
+    await publishBootstrapFile(soulPath, soulTemplate, beforePersistentApply);
   }
   const identityPathCreated = shouldWriteBootstrapFile(DEFAULT_IDENTITY_FILENAME)
-    ? await writeFileIfMissing(identityPath, identityTemplate, beforePersistentApply)
+    ? await publishBootstrapFile(identityPath, identityTemplate, beforePersistentApply)
     : false;
   if (shouldWriteBootstrapFile(DEFAULT_USER_FILENAME)) {
-    await writeFileIfMissing(userPath, userTemplate, beforePersistentApply);
+    await publishBootstrapFile(userPath, userTemplate, beforePersistentApply);
   }
 
   let state = readCanonicalWorkspaceStateSnapshot(dir).setup;
@@ -1154,7 +1209,7 @@ export async function ensureAgentWorkspace(params?: {
       markState({ setupCompletedAt: nowIso() });
     } else {
       const bootstrapTemplate = await loadTemplate(DEFAULT_BOOTSTRAP_FILENAME);
-      const wroteBootstrap = await writeFileIfMissing(
+      const wroteBootstrap = await publishBootstrapFile(
         bootstrapPath,
         bootstrapTemplate,
         beforePersistentApply,

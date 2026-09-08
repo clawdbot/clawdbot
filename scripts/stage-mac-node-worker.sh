@@ -7,10 +7,8 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DESTINATION="$1"
 shift
 [[ "$#" -gt 0 ]] || { echo "ERROR: No worker architectures requested" >&2; exit 1; }
-runtime_name=runtime
 case "${OPENCLAW_MAC_SIGNING_VARIANT:-standard}" in
-  standard) ;;
-  elevation-host) runtime_name=elevation ;;
+  standard|elevation-host) ;;
   *) echo "ERROR: Unknown Mac signing variant" >&2; exit 1 ;;
 esac
 # Scratch follows the caller's temp volume; only installed payloads need to
@@ -52,19 +50,19 @@ for arch in "$@"; do
         exit 1
       }
       install_openclaw
-      mv "$(node_dir)" "$2/runtime"
+      mv "$(node_dir)" "$2/installed"
     ' bash "$ROOT_DIR" "$STAGE/$arch" "$TARBALL" "$node_arch"
-  if [[ "$runtime_name" == elevation ]]; then
-    env -i HOME="$SCRATCH/$arch/home" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
-      TMPDIR="$SCRATCH/$arch/tmp" /usr/bin/python3 -B "$ROOT_DIR/scripts/materialize-mac-node-worker.py" \
-      "$STAGE/$arch/runtime" "$STAGE/$arch/elevation" "$STAGE/$arch" "$arch"
-  fi
+  # Unused Intel prebuilds can trigger macOS compatibility warnings even when
+  # the app and its selected worker are native Apple silicon.
+  env -i HOME="$SCRATCH/$arch/home" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+    TMPDIR="$SCRATCH/$arch/tmp" /usr/bin/python3 -B "$ROOT_DIR/scripts/materialize-mac-node-worker.py" \
+    "$STAGE/$arch/installed" "$STAGE/$arch/runtime" "$STAGE/$arch" "$arch"
   # Validate after moving out of its install prefix: absolute wrappers/symlinks
   # cannot accidentally make a non-relocatable payload pass the proof.
   env -i HOME="$SCRATCH/$arch/home" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
     TMPDIR="$SCRATCH/$arch/tmp" \
-    "$STAGE/$arch/$runtime_name/bin/node" "$ROOT_DIR/scripts/verify-mac-node-worker.mjs" \
-    "$STAGE/$arch/$runtime_name" "$ROOT_DIR/dist/build-info.json"
+    "$STAGE/$arch/runtime/bin/node" "$ROOT_DIR/scripts/verify-mac-node-worker.mjs" \
+    "$STAGE/$arch/runtime" "$ROOT_DIR/dist/build-info.json"
 done
 
 mkdir -p "$DESTINATION"
@@ -73,5 +71,5 @@ for arch in "$@"; do
   [[ ! -e "$DESTINATION/$arch" && ! -L "$DESTINATION/$arch" ]] || { echo "ERROR: Worker destination exists: $DESTINATION/$arch" >&2; exit 1; }
 done
 for arch in "$@"; do
-  mv "$STAGE/$arch/$runtime_name" "$DESTINATION/$arch"
+  mv "$STAGE/$arch/runtime" "$DESTINATION/$arch"
 done

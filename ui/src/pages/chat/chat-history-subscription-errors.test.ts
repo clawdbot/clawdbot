@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   disposeSelectedSessionMessageSubscription,
@@ -140,18 +141,17 @@ describe("visible chat message subscription failures", () => {
   });
 
   it("never publishes a failed subscription after its pane is disposed", async () => {
-    let rejectSubscription: (error: Error) => void = () => undefined;
-    const pending = new Promise<Subscription>((_resolve, reject) => {
-      rejectSubscription = reject;
-    });
+    const pending = createDeferred<Subscription>();
     const { state } = createSubscriptionState({
-      subscribeMessages: vi.fn<SessionCapability["subscribeMessages"]>().mockReturnValue(pending),
+      subscribeMessages: vi
+        .fn<SessionCapability["subscribeMessages"]>()
+        .mockReturnValue(pending.promise),
     });
 
     const sync = syncSelectedSessionMessageSubscription(state);
     await Promise.resolve();
     disposeSelectedSessionMessageSubscription(state);
-    rejectSubscription(new Error("Retired observer unavailable"));
+    pending.reject(new Error("Retired observer unavailable"));
     await sync;
 
     expect(state.lastError).toBeNull();
@@ -160,18 +160,17 @@ describe("visible chat message subscription failures", () => {
   });
 
   it("never publishes a failed subscription from a replaced same-client generation", async () => {
-    let rejectSubscription: (error: Error) => void = () => undefined;
-    const pending = new Promise<Subscription>((_resolve, reject) => {
-      rejectSubscription = reject;
-    });
+    const pending = createDeferred<Subscription>();
     const { state } = createSubscriptionState({
-      subscribeMessages: vi.fn<SessionCapability["subscribeMessages"]>().mockReturnValue(pending),
+      subscribeMessages: vi
+        .fn<SessionCapability["subscribeMessages"]>()
+        .mockReturnValue(pending.promise),
     });
 
     const sync = syncSelectedSessionMessageSubscription(state);
     await Promise.resolve();
     state.connectionEpoch += 1;
-    rejectSubscription(new Error("Prior connection generation unavailable"));
+    pending.reject(new Error("Prior connection generation unavailable"));
     await sync;
 
     expect(state.lastError).toBeNull();
@@ -252,20 +251,14 @@ describe("selected agent subscription changes", () => {
 
   it("keeps the latest selection when pending release retries settle out of order", async () => {
     const previous = { key: "agent:main:previous", agentId: null };
-    let resolveSecondRetry: () => void = () => undefined;
-    let resolveLatestRetry: () => void = () => undefined;
-    const secondRetry = new Promise<void>((resolve) => {
-      resolveSecondRetry = resolve;
-    });
-    const latestRetry = new Promise<void>((resolve) => {
-      resolveLatestRetry = resolve;
-    });
+    const secondRetry = createDeferred();
+    const latestRetry = createDeferred();
     const unsubscribeMessages = vi
       .fn()
       .mockRejectedValueOnce(new Error("previous release failed"))
       .mockRejectedValueOnce(new Error("replacement release failed"))
-      .mockReturnValueOnce(secondRetry)
-      .mockReturnValueOnce(latestRetry)
+      .mockReturnValueOnce(secondRetry.promise)
+      .mockReturnValueOnce(latestRetry.promise)
       .mockResolvedValue(undefined);
     const subscribeMessages = vi.fn(async (key: string) => ({ key, agentId: null }));
     const state = {
@@ -285,9 +278,9 @@ describe("selected agent subscription changes", () => {
     const latestSync = syncSelectedSessionMessageSubscription(state as never);
     await Promise.resolve();
 
-    resolveLatestRetry();
+    latestRetry.resolve();
     await latestSync;
-    resolveSecondRetry();
+    secondRetry.resolve();
     await secondSync;
 
     expect(state.chatSessionMessageSubscriptionRequestedKey).toBe("agent:main:latest");

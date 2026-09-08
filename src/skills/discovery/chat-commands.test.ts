@@ -187,6 +187,26 @@ beforeEach(() => {
 });
 
 describe("resolveSkillCommandInvocation", () => {
+  it("keeps a renamed dashboard skill addressable through /skill and $ references", () => {
+    const dashboard = {
+      name: "dashboard_2",
+      skillName: "dashboard",
+      description: "Custom dashboard skill",
+    };
+    expect(
+      resolveSkillCommandInvocation({
+        commandBodyNormalized: "/skill dashboard custom input",
+        skillCommands: [dashboard],
+      }),
+    ).toEqual({ command: dashboard, args: "custom input" });
+    expect(
+      resolveSkillReferenceInvocations({
+        text: "Use $dashboard for the custom workflow",
+        skillCommands: [dashboard],
+      }),
+    ).toEqual([dashboard]);
+  });
+
   it("matches skill commands and parses args", () => {
     const invocation = resolveSkillCommandInvocation({
       commandBodyNormalized: "/demo_skill do the thing",

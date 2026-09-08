@@ -35,32 +35,38 @@ export function renderModelSetupSuccessDialog(
           class=${`model-setup-success__icon${providerIconId ? " model-setup-success__icon--provider" : ""}`}
           aria-hidden="true"
         >
-          ${providerIconId
-            ? html`
-                ${renderProviderBrandIcon(providerIconId, {
-                  className: "model-setup-success__provider-icon",
-                })}
-                <span class="model-setup-success__status-badge">${icons.check}</span>
-              `
-            : icons.shieldCheck}
+          ${
+            providerIconId
+              ? html`
+                  ${renderProviderBrandIcon(providerIconId, {
+                    className: "model-setup-success__provider-icon",
+                  })}
+                  <span class="model-setup-success__status-badge">${icons.check}</span>
+                `
+              : icons.shieldCheck
+          }
         </div>
         <div class="model-setup-success__copy">
           <h2>${t("modelSetup.success.title")}</h2>
           ${activation.warning ? nothing : html`<p>${description}</p>`}
         </div>
-        ${activation.warning
-          ? html`<div class="model-setup-success__warning">${activation.warning}</div>`
-          : nothing}
+        ${
+          activation.warning
+            ? html`<div class="model-setup-success__warning">${activation.warning}</div>`
+            : nothing
+        }
         <div class="model-setup-success__summary">
           <span>${t("modelSetup.success.activeModel")}</span>
           <strong>${activation.modelRef}</strong>
-          ${activation.latencyMs === undefined
-            ? nothing
-            : html`<span>
-                ${t("modelSetup.success.latency", {
-                  latencyMs: String(activation.latencyMs),
-                })}
-              </span>`}
+          ${
+            activation.latencyMs === undefined
+              ? nothing
+              : html`<span>
+                  ${t("modelSetup.success.latency", {
+                    latencyMs: String(activation.latencyMs),
+                  })}
+                </span>`
+          }
         </div>
         <footer class="model-setup-success__actions">
           <button type="button" class="btn" @click=${onClose}>

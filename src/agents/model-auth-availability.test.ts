@@ -600,7 +600,7 @@ describe("createModelAuthAvailabilityResolver", () => {
     });
   });
 
-  it("treats preferred and locked profiles as distinct source-order facts", () => {
+  it("treats automatic preferences and user pins as distinct source-order facts", () => {
     const store = authStore(
       {
         "openai:platform": { type: "api_key", provider: "openai", key: "platform-key" },
@@ -624,7 +624,7 @@ describe("createModelAuthAvailabilityResolver", () => {
         store,
         ref: {
           preferredProfileId: "openai:chatgpt",
-          lockedProfileId: "openai:platform",
+          pinnedProfileId: "openai:platform",
         },
       }),
     ).toMatchObject({
@@ -820,7 +820,7 @@ describe("createModelAuthAvailabilityResolver", () => {
 
     expect(
       resolver.resolveProviderAuthAvailability("claude-cli", {
-        lockedProfileId: manualProfileId,
+        requiredProfileId: manualProfileId,
       }),
     ).toBeUndefined();
   });

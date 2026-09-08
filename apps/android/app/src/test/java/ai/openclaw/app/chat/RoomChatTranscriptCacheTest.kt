@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.ui.chat.latestChatMessageUsage
 import androidx.room3.Room
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -117,6 +118,118 @@ class RoomChatTranscriptCacheTest {
       }
     }
   }
+
+  @Test
+  fun toolOnlyAssistantKeepsUnknownUsageAfterOfflineReload() =
+    runTest {
+      val controller =
+        createChatController(transcriptCache = store, cacheScope = { ChatCacheScope("gateway-a", 1) }) { method, _ ->
+          when (method) {
+            "chat.history" -> """{"sessionId":"session-1","sessionInfo":{"key":"main"},"messages":[{"role":"assistant","content":"older","usage":{"output":123}},{"role":"assistant","provider":"openai","model":"gpt-5.2","content":[{"type":"toolCall","id":"read-1","name":"read","arguments":{}}],"__openclaw":{"id":"entry-2"}}]}"""
+            "sessions.list" -> error("list unavailable")
+            else -> emptyChatGatewayResponse(method)
+          }
+        }
+      controller.load("main")
+      advanceUntilIdle()
+      assertEquals(2, controller.messages.value.size)
+      assertTrue(
+        controller.messages.value
+          .last()
+          .content
+          .isEmpty(),
+      )
+      assertEquals(
+        "entry-2",
+        controller.messages.value
+          .last()
+          .entryId,
+      )
+      assertEquals(null, latestChatMessageUsage(controller.messages.value))
+
+      val offline = createChatController(transcriptCache = store, cacheScope = { ChatCacheScope("gateway-a", 2) }) { _, _ -> error("offline") }
+      offline.load("main")
+      advanceUntilIdle()
+      assertTrue(offline.messagesFromCache.value)
+      assertEquals(null, latestChatMessageUsage(offline.messages.value))
+      assertEquals(2, offline.messages.value.size)
+    }
+
+  @Test
+  fun canonicalSessionInfoKeepsRequestedAliasTranscriptReachable() =
+    runTest {
+      val controller =
+        createChatController(transcriptCache = store, cacheScope = { ChatCacheScope("gateway-a", 1) }) { method, _ ->
+          when (method) {
+            "chat.history" -> """{"sessionId":"alias-session","sessionInfo":{"key":"agent:main:review-alias"},"messages":[{"role":"assistant","content":"alias transcript"}]}"""
+            "sessions.list" -> error("list unavailable")
+            else -> emptyChatGatewayResponse(method)
+          }
+        }
+      controller.load("review-alias", "main")
+      advanceUntilIdle()
+      assertEquals(
+        "alias transcript",
+        controller.messages.value
+          .single()
+          .content
+          .single()
+          .text,
+      )
+      assertEquals(listOf("alias transcript"), loadTranscript(sessionKey = "review-alias").map { it.content.single().text })
+      assertEquals(listOf("review-alias"), loadSessions().map { it.key })
+      assertTrue(loadTranscript(sessionKey = "agent:main:review-alias").isEmpty())
+    }
+
+  @Test
+  fun fullHistoryUsageClearSurvivesOfflineReopenWithoutAListResponse() =
+    runTest {
+      saveSessions(listOf(ChatSessionEntry(key = "main", updatedAtMs = 1L, outputTokens = 840L)))
+      saveTranscript(listOf(message("before", role = "assistant")))
+      val controller =
+        createChatController(transcriptCache = store, cacheScope = { ChatCacheScope("gateway-a", 1) }) { method, _ ->
+          when (method) {
+            "chat.history" -> {
+              """{"sessionId":"session-1","messages":[{"role":"system","content":[],"__openclaw":{"kind":"compaction"}}],"sessionInfo":{"key":"main","totalTokens":24700,"totalTokensFresh":true,"contextTokens":272000}}"""
+            }
+
+            "sessions.list" -> {
+              error("list unavailable")
+            }
+
+            else -> {
+              emptyChatGatewayResponse(method)
+            }
+          }
+        }
+      controller.load("main")
+      advanceUntilIdle()
+      assertEquals(
+        null,
+        controller.sessions.value
+          .single()
+          .outputTokens,
+      )
+
+      val reopened =
+        createChatController(transcriptCache = store, cacheScope = { ChatCacheScope("gateway-a", 2) }) { _, _ -> error("offline") }
+      reopened.load("main")
+      advanceUntilIdle()
+      assertTrue(reopened.messagesFromCache.value)
+      assertEquals(
+        "compaction",
+        reopened.messages.value
+          .single()
+          .transcriptMarker
+          ?.kind,
+      )
+      assertEquals(
+        null,
+        reopened.sessions.value
+          .single()
+          .outputTokens,
+      )
+    }
 
   @Test
   fun oldHistoryPostPublicationHealthWaitCannotOverwriteNewerCachedTranscript() =
@@ -324,6 +437,52 @@ class RoomChatTranscriptCacheTest {
       assertEquals(provenance, loaded[0].provenance)
       assertEquals(marker, loaded[1].transcriptMarker)
       assertTrue(loaded[1].content.isEmpty())
+    }
+
+  @Test
+  fun transcriptRoundTripKeepsObservedAssistantUsage() =
+    runTest {
+      val usage = ChatMessageUsage(input = 12_000, output = 300, cacheRead = 438_400)
+      val cost = ChatMessageCost(input = 0.003, output = 0.018, cacheRead = 0.0015, total = 0.0225)
+      saveTranscript(
+        messages =
+          listOf(
+            message("Usage-backed reply").copy(
+              role = "assistant",
+              provider = "openai",
+              model = "gpt-5.2",
+              usage = usage,
+              cost = cost,
+            ),
+            message("Delivery copy").copy(
+              role = "assistant",
+              deliveryMirror = ChatDeliveryMirror(kind = "channel-final"),
+              usage = ChatMessageUsage(input = 0, output = 0),
+            ),
+            message("discarded display text").copy(
+              role = "assistant",
+              content = emptyList(),
+              provider = "anthropic",
+              model = "claude-opus-4-1",
+              usage = ChatMessageUsage(input = 7_500, output = 450),
+              cost = ChatMessageCost(total = 0.031),
+            ),
+            message("Synthetic fallback").copy(role = "assistant", isSyntheticDisplay = true),
+          ),
+      )
+
+      val loaded = loadTranscript()
+
+      assertEquals("openai", loaded[0].provider)
+      assertEquals("gpt-5.2", loaded[0].model)
+      assertEquals(usage, loaded[0].usage)
+      assertEquals(cost, loaded[0].cost)
+      assertEquals(ChatDeliveryMirror(kind = "channel-final"), loaded[1].deliveryMirror)
+      assertTrue(loaded[2].content.isEmpty())
+      assertEquals(ChatMessageUsage(input = 7_500, output = 450), loaded[2].usage)
+      assertEquals(ChatMessageCost(total = 0.031), loaded[2].cost)
+      assertTrue(loaded[3].isSyntheticDisplay)
+      assertEquals(ChatMessageUsage(input = 7_500, output = 450), latestChatMessageUsage(loaded))
     }
 
   @Test

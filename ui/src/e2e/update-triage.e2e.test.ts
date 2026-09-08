@@ -72,7 +72,7 @@ async function recordUpdateTraffic(page: Page): Promise<MockGatewayRequest[]> {
 
 suite.define(() => {
   it.each(["manual", "automatic", "missing triage module"])(
-    "takes a %s failure into diagnosis without replaying the update",
+    "takes a pre-ledger %s failure into diagnosis without replaying the update",
     async (source) => {
       const artifactDir = createControlUiE2eArtifactDir(
         `update-triage-${source.replaceAll(" ", "-")}`,
@@ -203,6 +203,13 @@ suite.define(() => {
             expect(question).toMatchObject({
               message: expect.stringContaining("Do not retry the update"),
             });
+            if (source === "manual") {
+              const dialog = page.locator("openclaw-modal-dialog");
+              await dialog.getByRole("button", { name: "Retry update", exact: true }).waitFor();
+              expect(await dialog.textContent()).toContain("ENOSPC");
+              await page.screenshot({ path: path.join(artifactDir, "2-retained-failure.png") });
+              await dialog.getByRole("button", { name: "Close", exact: true }).click();
+            }
             expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
             await panel.getByText(DIAGNOSTIC_REPLY, { exact: true }).waitFor();
             expect(await panel.getByText(DIAGNOSTIC_REPLY, { exact: true }).count()).toBe(1);

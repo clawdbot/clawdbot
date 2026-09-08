@@ -25,6 +25,11 @@ import {
 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
 import {
+  createStageTimingTracker,
+  formatStageTimings,
+  type StageTimingSummary,
+} from "openclaw/plugin-sdk/time-runtime";
+import {
   isCodexRemoteExecPlacementSandbox,
   readCodexPluginConfig,
   type CodexPluginConfig,
@@ -158,11 +163,12 @@ type DynamicToolBuildParams = {
   ignoreRuntimePlan?: boolean;
   /** Host fact resolver; injectable only for focused plugin contract tests. */
   isHostScopedToolActive?: (toolName: string) => boolean;
-  onYieldDetected: (acknowledgment?: string) => void;
+  onYieldDetected: (message: string, acknowledgment?: string) => void;
   claimYieldCompletion?: OpenClawCodingToolsOptions["claimYieldCompletion"];
   onCodexAppServerEvent?: (event: CodexDynamicToolBuildEvent) => void;
   onPersistentWebSearchPolicyResolved?: (allowed: boolean) => void;
   onWebSearchPolicyResolved?: (allowed: boolean) => void;
+  onMessageToolTargetResolved?: (requireExplicitMessageTarget: boolean) => void;
   computerContextEpoch?: {
     value: number;
     frameToolCallId?: string;
@@ -189,70 +195,34 @@ export function resolveCodexAppServerHookChannelId(
     messageTo: params.messageTo,
   }).channelId;
 }
-type CodexDynamicToolBuildStageTiming = {
-  name: string;
-  durationMs: number;
-  elapsedMs: number;
-};
-type CodexDynamicToolBuildStageSummary = {
-  totalMs: number;
-  stages: CodexDynamicToolBuildStageTiming[];
-};
+type CodexDynamicToolBuildStageSummary = StageTimingSummary;
 const CODEX_DYNAMIC_TOOL_BUILD_WARN_TOTAL_MS = 1_000;
 const CODEX_DYNAMIC_TOOL_BUILD_WARN_STAGE_MS = 500;
-/** Creates cheap optional timing instrumentation for the dynamic-tool hot path. */
-export function createCodexDynamicToolBuildStageTracker(options: { enabled?: boolean } = {}): {
+/** Captures bounded preparation stages before a slow turn needs diagnosis. */
+export function createCodexDynamicToolBuildStageTracker(): {
   mark: (name: string) => void;
   snapshot: () => CodexDynamicToolBuildStageSummary;
 } {
-  if (!options.enabled) {
-    return {
-      mark() {},
-      snapshot() {
-        return { totalMs: 0, stages: [] };
-      },
-    };
-  }
-  const startedAt = Date.now();
-  let previousAt = startedAt;
-  const stages: CodexDynamicToolBuildStageTiming[] = [];
-  const toMs = (value: number) => Math.max(0, Math.round(value));
-  return {
-    mark(name) {
-      const currentAt = Date.now();
-      stages.push({
-        name,
-        durationMs: toMs(currentAt - previousAt),
-        elapsedMs: toMs(currentAt - startedAt),
-      });
-      previousAt = currentAt;
-    },
-    snapshot() {
-      return {
-        totalMs: toMs(Date.now() - startedAt),
-        stages: stages.slice(),
-      };
-    },
-  };
+  const { mark, snapshot } = createStageTimingTracker();
+  return { mark, snapshot };
 }
 /** Returns true when dynamic-tool construction is slow enough to warrant a warning log. */
 export function shouldWarnCodexDynamicToolBuildStageSummary(
   summary: CodexDynamicToolBuildStageSummary,
+  profilerEnabled = false,
 ): boolean {
+  const totalWarnMs = profilerEnabled ? CODEX_DYNAMIC_TOOL_BUILD_WARN_TOTAL_MS : 10_000;
+  const stageWarnMs = profilerEnabled ? CODEX_DYNAMIC_TOOL_BUILD_WARN_STAGE_MS : 5_000;
   return (
-    summary.totalMs >= CODEX_DYNAMIC_TOOL_BUILD_WARN_TOTAL_MS ||
-    summary.stages.some((stage) => stage.durationMs >= CODEX_DYNAMIC_TOOL_BUILD_WARN_STAGE_MS)
+    summary.totalMs >= totalWarnMs ||
+    summary.stages.some((stage) => stage.durationMs >= stageWarnMs)
   );
 }
 /** Formats per-stage timings into the compact form used by Codex app-server logs. */
 export function formatCodexDynamicToolBuildStageSummary(
   summary: CodexDynamicToolBuildStageSummary,
 ): string {
-  return summary.stages.length > 0
-    ? summary.stages
-        .map((stage) => `${stage.name}:${stage.durationMs}ms@${stage.elapsedMs}ms`)
-        .join(",")
-    : "none";
+  return formatStageTimings(summary.stages);
 }
 /** Builds, filters, and normalizes Codex-compatible runtime tools for a single turn. */
 export async function buildDynamicTools(
@@ -275,11 +245,7 @@ export async function buildDynamicTools(
     input.onWebSearchPolicyResolved?.(false);
     return [];
   }
-  // Dynamic tool construction is on the reply hot path, so per-stage
-  // Date.now/span bookkeeping runs only when the Codex profiler flag is set.
-  const toolBuildStages = createCodexDynamicToolBuildStageTracker({
-    enabled: input.profilerEnabled,
-  });
+  const toolBuildStages = createCodexDynamicToolBuildStageTracker();
   const modelHasVision = params.model.input?.includes("image") ?? false;
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, input.sessionAgentId);
   const injectedOpenClawCodingToolsFactory = dynamicToolBuildState.openClawCodingToolsFactory;
@@ -317,27 +283,18 @@ export async function buildDynamicTools(
     ...(toolConstructionPlan ? { toolConstructionPlan } : {}),
     messageProvider: resolveCodexMessageToolProvider(params),
     toolPolicyMessageProvider: params.messageProvider ?? params.messageChannel,
-    // Capability-gated tools (requiredClientCaps) need the originating client's
-    // declared caps in this sibling harness too, not only the embedded runner.
-    clientCaps: params.clientCaps,
-    chatType: params.chatType,
-    agentAccountId: params.agentAccountId,
-    messageTo: params.messageTo,
-    messageThreadId: params.messageThreadId,
-    nativeChannelId: params.chatId,
-    messageActionTurnCapability: params.messageActionTurnCapability,
-    groupId: params.groupId,
-    groupChannel: params.groupChannel,
-    groupSpace: params.groupSpace,
-    spawnedBy: params.spawnedBy,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-    senderIsOwner: params.senderIsOwner,
+    // Codex dispatches dynamic tools itself, so no tool-start handler reserves a
+    // blocking question's prompt. Hand the tools this run's own way to show one.
+    ...(params.onToolResult
+      ? {
+          questionPrompt: {
+            send: params.onToolResult,
+            ...(params.messageChannel ? { messageChannel: params.messageChannel } : {}),
+          },
+        }
+      : {}),
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
-    scheduledToolPolicy: params.scheduledToolPolicy,
     allowGatewaySubagentBinding:
       params.allowGatewaySubagentBinding || isForcedPrivateQaCodexRuntime(),
     sessionKey: input.sandboxSessionKey,
@@ -347,7 +304,6 @@ export async function buildDynamicTools(
         : undefined,
     sessionId: params.sessionId,
     runId: params.runId,
-    approvalReviewerDeviceId: params.approvalReviewerDeviceId,
     agentDir,
     preparedModelRuntime: params.preparedModelRuntime,
     cwd: input.effectiveCwd ?? input.effectiveWorkspace,
@@ -387,28 +343,19 @@ export async function buildDynamicTools(
     ),
     suppressManagedWebSearch: false,
     webFetchHostnameAllowlistRef,
-    currentChannelId: params.currentChannelId,
-    currentMessagingTarget: params.currentMessagingTarget,
     hookChannelId: resolveCodexAppServerHookChannelId(params, input.sandboxSessionKey),
-    currentThreadTs: params.currentThreadTs,
-    currentMessageId: params.currentMessageId,
-    replyToMode: params.replyToMode,
-    hasRepliedRef: params.hasRepliedRef,
     modelHasVision,
     computerContextEpoch: input.computerContextEpoch,
+    oneShotCliRun: params.oneShotCliRun,
     registerRunCleanup: input.registerRunCleanup,
     requireExplicitMessageTarget:
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
-    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    // Same sibling-harness rule as clientCaps above: without this forward,
-    // suggest_task/dismiss_task silently never exist for Codex-harness runs.
-    taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     disableMessageTool: input.ignoreDisableMessageTool ? false : params.disableMessageTool,
     forceMessageTool: shouldForceMessageTool(messagePolicyParams),
     enableHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
     forceHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
     onYield: (message, acknowledgment) => {
-      input.onYieldDetected(acknowledgment);
+      input.onYieldDetected(message, acknowledgment);
       input.onCodexAppServerEvent?.({
         stream: "codex_app_server.tool",
         data: { name: "sessions_yield", message },
@@ -426,6 +373,7 @@ export async function buildDynamicTools(
     cronCreatorAuthorityUnavailableReason: input.cronCreatorAuthorityUnavailableReason,
   };
 
+  input.onMessageToolTargetResolved?.(options.requireExplicitMessageTarget === true);
   const buildOpenClawCodingTools = () => {
     const bindingOptions = { cwd: input.effectiveCwd ?? input.effectiveWorkspace };
     if (injectedOpenClawCodingToolsFactory) {
@@ -583,7 +531,7 @@ export async function buildDynamicTools(
     );
   }
   const summary = toolBuildStages.snapshot();
-  if (shouldWarnCodexDynamicToolBuildStageSummary(summary)) {
+  if (shouldWarnCodexDynamicToolBuildStageSummary(summary, input.profilerEnabled)) {
     const phase = input.forceHeartbeatTool ? "registered-tools" : "runtime-tools";
     embeddedAgentLog.warn(
       `codex app-server dynamic tool build timings runId=${params.runId} sessionId=${params.sessionId} phase=${phase} totalMs=${summary.totalMs} stages=${formatCodexDynamicToolBuildStageSummary(summary)}`,

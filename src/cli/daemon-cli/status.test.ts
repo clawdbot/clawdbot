@@ -4,22 +4,20 @@ import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-ta
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import type { DaemonStatus } from "./status.gather.js";
 
-const gatherDaemonStatus = vi.fn(
-  async (_opts?: unknown): Promise<DaemonStatus> => ({
-    service: {
-      label: "LaunchAgent",
-      loaded: true,
-      loadState: { status: "loaded" },
-      loadedText: "loaded",
-      notLoadedText: "not loaded",
-    },
-    rpc: {
-      ok: true,
-      url: "ws://127.0.0.1:18789",
-    },
-    extraServices: [],
-  }),
-);
+const gatherDaemonStatus = vi.fn(async (_opts?: unknown): Promise<DaemonStatus> => ({
+  service: {
+    label: "LaunchAgent",
+    loaded: true,
+    loadState: { status: "loaded" },
+    loadedText: "loaded",
+    notLoadedText: "not loaded",
+  },
+  rpc: {
+    ok: true,
+    url: "ws://127.0.0.1:18789",
+  },
+  extraServices: [],
+}));
 const printDaemonStatus = vi.fn();
 
 vi.mock("../../infra/update-check-package-target.js", () => ({

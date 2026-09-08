@@ -2,7 +2,6 @@
  * Canvas plugin entrypoint for node canvas control, hosted A2UI routes, and
  * node CLI registration.
  */
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry, type AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import { canvasA2UIBoardWidgetKind } from "./src/board-widget.js";
@@ -33,25 +32,16 @@ export default definePluginEntry({
   name: "Canvas",
   description: "Presents hosted widget documents on paired macOS panels.",
   configSchema: canvasConfigSchema,
-  reload: {
-    restartPrefixes: ["plugins.enabled", "plugins.allow", "plugins.deny", "plugins.entries.canvas"],
-  },
   register(api) {
     if (isCanvasHostEnabled(api.config)) {
       api.registerBoardWidgetContentKind(canvasA2UIBoardWidgetKind);
-      const loadHttpRouteHandler = createLazyRuntimeModule(() =>
-        import("./src/http-route.js").then(({ createCanvasHttpRouteHandler }) =>
-          createCanvasHttpRouteHandler(),
-        ),
-      );
-      const handleHttpRequest = async (req: IncomingMessage, res: ServerResponse) =>
-        await (await loadHttpRouteHandler()).handleHttpRequest(req, res);
+      const loadRenderer = createLazyRuntimeModule(() => import("./src/host/a2ui.js"));
       api.registerHttpRoute({
         path: A2UI_PATH,
         auth: "plugin",
         match: "prefix",
         nodeCapability: { surface: "canvas" },
-        handler: handleHttpRequest,
+        handler: async (req, res) => await (await loadRenderer()).handleA2uiHttpRequest(req, res),
       });
       api.registerWidgetPresenter(createCanvasWidgetPresenter(api.runtime.nodes));
     }

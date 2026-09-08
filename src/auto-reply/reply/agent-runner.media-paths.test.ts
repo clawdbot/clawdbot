@@ -17,7 +17,10 @@ import {
   createReplyOperation as createRegisteredReplyOperation,
   type ReplyOperation,
 } from "./reply-run-registry.js";
-import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
+import {
+  prepareReplyToolAuthority,
+  resolveFollowupRunToolAuthorityFingerprint,
+} from "./reply-tool-authority.js";
 import {
   createMockFollowupRun,
   createMockReplyOperation,
@@ -263,10 +266,8 @@ function makeRunReplyAgentParams(
       replyOperation.setPhase("running");
     }
   }
-  if (overrides.isActive === true && !replyOperation.toolAuthorityFingerprint) {
-    replyOperation.bindToolAuthorityFingerprint(
-      resolveFollowupRunToolAuthorityFingerprint(followupRun),
-    );
+  if (overrides.isActive === true && !overrides.replyOperation) {
+    replyOperation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
   }
   if (overrides.isActive === true) {
     replyOperation.attachBackend({
@@ -572,7 +573,7 @@ describe("runReplyAgent media path normalization", () => {
       resetTriggered: false,
     });
     operation.setPhase("running");
-    operation.bindToolAuthorityFingerprint(resolveFollowupRunToolAuthorityFingerprint(followupRun));
+    operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
     expect(operation.acceptedSteeredInboundAudio).toBe(false);
     queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: true,

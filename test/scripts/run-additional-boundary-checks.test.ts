@@ -17,7 +17,7 @@ import {
   runSingleCheck,
   selectChecksForShard,
 } from "../../scripts/run-additional-boundary-checks.mts";
-import { waitForFile, waitForPidFile } from "../helpers/process-wait.js";
+import { waitForChildClose, waitForFile, waitForPidFile } from "../helpers/process-wait.js";
 
 function createOutputBuffer() {
   const chunks: string[] = [];
@@ -87,30 +87,12 @@ async function waitForNotRunning(pid: number, timeoutMs: number): Promise<void> 
   throw new Error(`process still running: ${pid}`);
 }
 
-async function waitForChildClose(
-  child: ReturnType<typeof spawn>,
-  timeoutMs: number,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error("child did not close before timeout"));
-    }, timeoutMs);
-    child.once("close", (code, signal) => {
-      clearTimeout(timeout);
-      resolve({ code, signal });
-    });
-  });
-}
-
 describe("run-additional-boundary-checks", () => {
-  it("keeps prompt snapshot drift checks in their dedicated CI lane", () => {
+  it("keeps prompt snapshot drift checks out of boundary shards", () => {
     // The snapshot check regenerates prompt fixtures over the full agent
     // tool/prompt import graph; packing it into a boundary shard makes that
     // shard the PR wall clock, so it owns the check-prompt-snapshots lane.
     expect(BOUNDARY_CHECKS.some((check) => check.label === "prompt:snapshots:check")).toBe(false);
-    const workflow = fs.readFileSync(".github/workflows/ci.yml", "utf8");
-    expect(workflow).toContain("check_name: check-prompt-snapshots");
-    expect(workflow).toContain('run_check "prompt:snapshots:check" pnpm prompt:snapshots:check');
   });
 
   it("normalizes concurrency input", () => {
@@ -183,18 +165,47 @@ describe("run-additional-boundary-checks", () => {
       BOUNDARY_CHECKS.map((check) => check.label).toSorted((a, b) => a.localeCompare(b)),
     );
     expect(new Set(shardedLabels).size).toBe(BOUNDARY_CHECKS.length);
+    const transferred = [1, 2, 3, 4].flatMap((index) => {
+      const full = selectChecksForShard(BOUNDARY_CHECKS, `${index}/4`);
+      const selected = selectChecksForShard(BOUNDARY_CHECKS, `${index}/4`, "test-types");
+      expect(selected).toEqual(
+        full.filter((check) => check.label !== "lint:tmp:tsgo-core-boundary"),
+      );
+      return selected;
+    });
+    expect(transferred).toHaveLength(BOUNDARY_CHECKS.length - 1);
+
     expect(() => parseShardSpec("5/4")).toThrow("Invalid shard spec");
     expect(() => parseShardSpec("9007199254740993/9007199254740994")).toThrow("Invalid shard spec");
   });
 
   it("parses CLI help and shard args before running checks", () => {
-    expect(parseCliArgs(["--help"], {})).toEqual({ help: true, shardSpec: "" });
-    expect(parseCliArgs(["--shard", "2/4"], {})).toEqual({ help: false, shardSpec: "2/4" });
-    expect(parseCliArgs(["--shard=3/4"], {})).toEqual({ help: false, shardSpec: "3/4" });
+    expect(parseCliArgs(["--help"], {})).toEqual({
+      help: true,
+      shardSpec: "",
+      coreTestBoundaryOwner: "additional",
+    });
+    expect(parseCliArgs(["--shard", "2/4"], {})).toEqual({
+      help: false,
+      shardSpec: "2/4",
+      coreTestBoundaryOwner: "additional",
+    });
+    expect(parseCliArgs(["--shard=3/4"], {})).toEqual({
+      help: false,
+      shardSpec: "3/4",
+      coreTestBoundaryOwner: "additional",
+    });
     expect(parseCliArgs([], { OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: "4/4" })).toEqual({
       help: false,
       shardSpec: "4/4",
+      coreTestBoundaryOwner: "additional",
     });
+    expect(parseCliArgs(["--core-test-boundary-owner=test-types"], {})).toEqual({
+      help: false,
+      shardSpec: "",
+      coreTestBoundaryOwner: "test-types",
+    });
+    expect(() => parseCliArgs(["--core-test-boundary-owner=none"], {})).toThrow("Unknown argument");
     expect(() => parseCliArgs(["--shard"], {})).toThrow("--shard requires a value");
     expect(() => parseCliArgs(["--shard", "-h"], {})).toThrow("--shard requires a value");
     expect(() => parseCliArgs(["--wat"], {})).toThrow("Unknown argument: --wat");

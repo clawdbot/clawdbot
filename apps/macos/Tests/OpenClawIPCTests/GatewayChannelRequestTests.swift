@@ -62,6 +62,47 @@ struct GatewayChannelRequestTests {
         case response, cancellation, disconnect, shutdown
     }
 
+    @Test func `websocket results retain arrival order across receive callbacks`() async throws {
+        let socket = GatewayTestWebSocketTask()
+        socket.resume()
+        let (messages, continuation) = AsyncStream<String>.makeStream()
+        defer { continuation.finish() }
+        let receive: @Sendable (Int) -> Void = { ordinal in
+            socket.receive { result in
+                switch result {
+                case let .success(.string(value)):
+                    continuation.yield("\(ordinal):\(value)")
+                case let .failure(error):
+                    #expect((error as? URLError)?.code == .networkConnectionLost)
+                    continuation.yield("\(ordinal):connection lost")
+                default:
+                    Issue.record("Expected a synthetic string frame or connection loss")
+                }
+            }
+        }
+
+        receive(1)
+        socket.emitReceiveSuccess(.string("agent.wait completed"))
+        // The next peer reply can arrive before the channel registers its next receive.
+        socket.emitReceiveSuccess(.string("chat.history reply"))
+        socket.emitReceiveFailure()
+
+        let received = try await AsyncTimeout.withTimeout(
+            seconds: 1,
+            onTimeout: { URLError(.timedOut) },
+            operation: {
+                var received: [String] = []
+                for await message in messages {
+                    received.append(message)
+                    if received.count == 3 { return received }
+                    receive(received.count + 1)
+                }
+                return received
+            })
+        #expect(received == ["1:agent.wait completed", "2:chat.history reply", "3:connection lost"])
+        #expect(socket.snapshotCallbackReceiveCount() == 3)
+    }
+
     @Test(arguments: RequestCompletion.allCases)
     @MainActor
     func `completed requests release their channel before the original deadline`(
@@ -101,7 +142,7 @@ struct GatewayChannelRequestTests {
             let socket = try #require(session.latestTask())
             switch completion {
             case .response:
-                socket.emitReceiveSuccessOnce(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
+                socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
                 let response = try await request.value
                 #expect(!response.isEmpty)
             case .cancellation:
@@ -167,7 +208,7 @@ struct GatewayChannelRequestTests {
                     guard sendIndex == 2,
                           let requestID = GatewayWebSocketTestSupport.requestID(from: message)
                     else { return }
-                    task.emitReceiveSuccessOnce(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
+                    task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
                 })
             })
         let channel = try GatewayChannelActor(
@@ -219,7 +260,7 @@ struct GatewayChannelRequestTests {
         #expect(await channel._test_pendingRequestCount() == 0)
 
         let socket = try #require(session.latestTask())
-        socket.emitReceiveSuccessOnce(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
+        socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
         await Task.yield()
         #expect(await channel._test_pendingRequestCount() == 0)
     }
@@ -248,7 +289,7 @@ struct GatewayChannelRequestTests {
         let requestID = await probe.wait()
         let socket = try #require(session.latestTask())
 
-        socket.emitReceiveSuccessOnce(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
+        socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
         await resumedGate.waitUntilEntered()
         request.cancel()
         await resumedGate.release()

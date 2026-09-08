@@ -18,12 +18,11 @@ import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { fileStore } from "../infra/file-store.js";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
-import { isPathInside } from "../infra/fs-safe.js";
+import { FsSafeError, isPathInside, readLocalFileSafely } from "../infra/fs-safe.js";
 import type { resolvePinnedHostname } from "../infra/net/ssrf.js";
 import { retryAsync } from "../infra/retry.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { resolveConfigDir } from "../utils.js";
-import { isFsSafeError, readLocalFileSafely, type FsSafeLikeError } from "./store.runtime.js";
 import { MEDIA_FILE_MODE, SaveMediaSourceError } from "./store.shared.js";
 
 const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
@@ -124,12 +123,12 @@ function openMediaStore(maxBytes = MAX_BYTES, rootDir = resolveMediaDir()) {
  * Keeps: alphanumeric, dots, hyphens, underscores, Unicode letters/numbers.
  */
 function sanitizeFilename(name: string): string {
-  const base = sanitizeUntrustedFileName(name, "");
+  // Store keys require NFC; source filesystem paths keep their original spelling.
+  const base = sanitizeUntrustedFileName(name, "").normalize("NFC");
   if (!base) {
     return "";
   }
   const sanitized = base.replace(/[^\p{L}\p{N}._-]+/gu, "_");
-  // Collapse multiple underscores, trim leading/trailing, limit length
   return truncateUtf16Safe(sanitized.replace(/_+/g, "_").replace(/^_|_$/g, ""), 60);
 }
 
@@ -378,8 +377,8 @@ function safeOriginalFilenameExtension(originalFilename?: string): string | unde
   if (!originalFilename) {
     return undefined;
   }
-  const ext = extnameFromAnyPath(originalFilename).toLowerCase();
-  return /^\.[a-z0-9]{1,16}$/.test(ext) ? ext : undefined;
+  const ext = extnameFromAnyPath(originalFilename);
+  return /^\.[a-z0-9]{1,16}$/i.test(ext) ? ext : undefined;
 }
 
 function extensionForAuthoritativeHeaderMime(contentType?: string): string | undefined {
@@ -498,7 +497,7 @@ async function writeMediaStreamToFile(params: {
   }
 }
 
-function toSaveMediaSourceError(err: FsSafeLikeError, maxBytes = MAX_BYTES): SaveMediaSourceError {
+function toSaveMediaSourceError(err: FsSafeError, maxBytes = MAX_BYTES): SaveMediaSourceError {
   switch (err.code) {
     case "symlink":
       return new SaveMediaSourceError("invalid-path", "Media path must not be a symlink", {
@@ -553,7 +552,7 @@ export async function saveMediaSource(
     await writeSavedMediaBuffer({ subdir, id, buffer });
     return buildSavedMediaResult({ dir, id, size: stat.size, contentType: mime });
   } catch (err) {
-    if (isFsSafeError(err)) {
+    if (err instanceof FsSafeError) {
       throw toSaveMediaSourceError(err, maxBytes);
     }
     throw err;

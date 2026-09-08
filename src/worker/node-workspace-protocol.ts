@@ -3,6 +3,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SpawnResult } from "../process/exec.js";
 import type { NodeWorkerWorkspaceTransferInput } from "./node-workspace-transfer-protocol.js";
 import { hasExactOwnKeys } from "./protocol-record.js";
+import {
+  isWorkspaceInspectionCommand,
+  WORKSPACE_INSPECTION_COMMAND,
+  WORKSPACE_INSPECTION_MAX_BYTES,
+} from "./workspace-inspection-protocol.js";
 
 const IDENTIFIER_MAX_CHARS = 256;
 const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
@@ -15,6 +20,7 @@ const ARGV_MAX_ITEMS = 128;
 // REQUEST_MAX_BYTES; the canonical manifest script is larger than an ordinary argv item.
 const ARG_MAX_BYTES = 128 * 1024;
 const TIMEOUT_MAX_MS = 10 * 60 * 1000;
+export const NODE_WORKSPACE_DRAIN_COMMAND = "openclaw-internal-workspace-drain";
 
 export type NodeWorkerWorkspaceSeedInput =
   | { action: "apply"; key: string }
@@ -36,7 +42,7 @@ export type NodeWorkerWorkspaceExecInput = {
 export type NodeWorkerWorkspaceExecResult = SpawnResult & { workspaceDir: string };
 
 function parseJson(raw?: string | null): unknown {
-  if (!raw || Buffer.byteLength(raw, "utf8") > REQUEST_MAX_BYTES) {
+  if (!raw || Buffer.byteLength(raw, "utf8") > WORKSPACE_INSPECTION_MAX_BYTES * 2) {
     throw new Error("INVALID_REQUEST: invalid node worker workspace request");
   }
   try {
@@ -98,10 +104,34 @@ export function parseNodeWorkerWorkspaceExecInput(
   ) {
     throw new Error("INVALID_REQUEST: argv must be a bounded non-empty string array");
   }
+  const inspection = isWorkspaceInspectionCommand(value.argv);
+  if (
+    value.argv[0] === NODE_WORKSPACE_DRAIN_COMMAND &&
+    (value.argv.length !== 1 ||
+      value.input !== undefined ||
+      value.transfer !== undefined ||
+      value.seed !== undefined ||
+      value.resetWorkspace !== undefined)
+  ) {
+    throw new Error("INVALID_REQUEST: workspace drain owns its operation");
+  }
+  if (
+    value.argv[0] === WORKSPACE_INSPECTION_COMMAND &&
+    (!inspection ||
+      value.transfer !== undefined ||
+      value.seed !== undefined ||
+      value.resetWorkspace !== undefined)
+  ) {
+    throw new Error("INVALID_REQUEST: workspace inspection owns its operation");
+  }
+  if (!inspection && Buffer.byteLength(raw ?? "", "utf8") > REQUEST_MAX_BYTES) {
+    throw new Error("INVALID_REQUEST: workspace command request exceeds its bound");
+  }
   if (
     value.input !== undefined &&
     (typeof value.input !== "string" ||
-      Buffer.byteLength(value.input, "utf8") > NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES)
+      Buffer.byteLength(value.input, "utf8") >
+        (inspection ? WORKSPACE_INSPECTION_MAX_BYTES : NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES))
   ) {
     throw new Error("INVALID_REQUEST: workspace command input exceeds its bound");
   }
@@ -155,6 +185,7 @@ export function parseNodeWorkerWorkspaceExecInput(
     const token = value.transfer.token;
     const manifestRef = value.transfer.manifestRef;
     const baseManifestRef = value.transfer.baseManifestRef;
+    const referenceManifestRef = value.transfer.referenceManifestRef;
     const validRef = (candidate: unknown): candidate is string =>
       typeof candidate === "string" && /^sha256:[a-f0-9]{64}$/u.test(candidate);
     if (
@@ -166,33 +197,58 @@ export function parseNodeWorkerWorkspaceExecInput(
         ? !hasExactOwnKeys(
             value.transfer,
             ["direction", "token", "manifestRef"],
-            ["attachments", "seedKey"],
+            ["attachments", "seedKey", "checkpointBaseManifestRef"],
           ) ||
-          !validRef(manifestRef) ||
           (value.transfer.attachments !== undefined && value.transfer.attachments !== true) ||
+          (value.transfer.checkpointBaseManifestRef !== undefined &&
+            (!validRef(value.transfer.checkpointBaseManifestRef) ||
+              value.transfer.attachments !== undefined ||
+              value.transfer.seedKey !== undefined)) ||
           (value.transfer.seedKey !== undefined &&
             (typeof value.transfer.seedKey !== "string" ||
               !/^[a-f0-9]{64}$/u.test(value.transfer.seedKey) ||
               value.transfer.attachments !== undefined))
         : direction === "upload"
-          ? !hasExactOwnKeys(value.transfer, ["direction", "token", "baseManifestRef"]) ||
-            !validRef(baseManifestRef)
+          ? !hasExactOwnKeys(
+              value.transfer,
+              ["direction", "token", "baseManifestRef", "referenceManifestRef"],
+              ["publicationBaseCommit"],
+            ) ||
+            (value.transfer.publicationBaseCommit !== undefined &&
+              (typeof value.transfer.publicationBaseCommit !== "string" ||
+                !/^[a-f0-9]{40}$/u.test(value.transfer.publicationBaseCommit)))
           : true)
     ) {
       throw new Error("INVALID_REQUEST: workspace transfer is invalid");
     }
-    transfer =
-      direction === "download"
-        ? {
-            direction,
-            token,
-            manifestRef: manifestRef as string,
-            ...(typeof value.transfer.seedKey === "string"
-              ? { seedKey: value.transfer.seedKey }
-              : {}),
-            ...(value.transfer.attachments === true ? { attachments: true } : {}),
-          }
-        : { direction: "upload", token, baseManifestRef: baseManifestRef as string };
+    if (direction === "download") {
+      if (!validRef(manifestRef)) {
+        throw new Error("INVALID_REQUEST: workspace transfer is invalid");
+      }
+      transfer = {
+        direction,
+        token,
+        manifestRef,
+        ...(typeof value.transfer.seedKey === "string" ? { seedKey: value.transfer.seedKey } : {}),
+        ...(value.transfer.attachments === true ? { attachments: true } : {}),
+        ...(typeof value.transfer.checkpointBaseManifestRef === "string"
+          ? { checkpointBaseManifestRef: value.transfer.checkpointBaseManifestRef }
+          : {}),
+      };
+    } else {
+      if (!validRef(baseManifestRef) || !validRef(referenceManifestRef)) {
+        throw new Error("INVALID_REQUEST: workspace transfer is invalid");
+      }
+      transfer = {
+        direction: "upload",
+        token,
+        baseManifestRef,
+        referenceManifestRef,
+        ...(typeof value.transfer.publicationBaseCommit === "string"
+          ? { publicationBaseCommit: value.transfer.publicationBaseCommit }
+          : {}),
+      };
+    }
   }
   return {
     gatewayNamespace,
@@ -218,6 +274,7 @@ function isAbsoluteHostPath(value: string): boolean {
 
 export function parseNodeWorkerWorkspaceExecResult(
   value: unknown,
+  argv: readonly string[] = [],
 ): NodeWorkerWorkspaceExecResult | null {
   if (
     !isRecord(value) ||
@@ -235,7 +292,10 @@ export function parseNodeWorkerWorkspaceExecResult(
     typeof value.workspaceDir !== "string" ||
     !isAbsoluteHostPath(value.workspaceDir) ||
     value.workspaceDir.length > 4_096 ||
-    !isBoundedText(value.stdout, OUTPUT_MAX_BYTES) ||
+    !isBoundedText(
+      value.stdout,
+      isWorkspaceInspectionCommand(argv) ? WORKSPACE_INSPECTION_MAX_BYTES : OUTPUT_MAX_BYTES,
+    ) ||
     !isBoundedText(value.stderr, STDERR_MAX_BYTES) ||
     (value.code !== null &&
       (!Number.isSafeInteger(value.code) || typeof value.code !== "number")) ||
@@ -275,6 +335,7 @@ export function parseNodeWorkerWorkspaceExecResult(
 export function projectNodeWorkerWorkspaceExecResult(
   workspaceDir: string,
   result: SpawnResult,
+  argv: readonly string[] = [],
 ): NodeWorkerWorkspaceExecResult {
   const projected = {
     workspaceDir,
@@ -298,7 +359,7 @@ export function projectNodeWorkerWorkspaceExecResult(
       ? {}
       : { outputErrorStream: result.outputErrorStream }),
   };
-  const parsed = parseNodeWorkerWorkspaceExecResult(projected);
+  const parsed = parseNodeWorkerWorkspaceExecResult(projected, argv);
   if (!parsed) {
     throw new Error("node worker workspace result violated its bounded contract");
   }

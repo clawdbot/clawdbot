@@ -1,4 +1,5 @@
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 
@@ -25,10 +26,6 @@ type SessionStateDeleteSnapshotDatabase = Pick<
   | "transcript_events"
   | "transcript_rewrite_watermarks"
 >;
-
-function normalizeOptionalSqliteNumber(value: number | bigint | null | undefined): number | null {
-  return value === null || value === undefined ? null : Number(value);
-}
 
 /** Captures the owner window and canonical child state writable outside the lifecycle queue. */
 export function readSessionStateDeleteSnapshot(
@@ -76,7 +73,7 @@ export function readSessionStateDeleteSnapshot(
       .where("session_id", "=", sessionId),
   );
   return {
-    acpParentStreamEventCount: normalizeOptionalSqliteNumber(acpParentStream?.event_count) ?? 0,
+    acpParentStreamEventCount: sqliteNumber(acpParentStream?.event_count ?? 0),
     generation: rewriteWatermark?.generation ?? null,
     lastSeq: lastEvent?.seq ?? null,
     sessionKey: window?.session_key ?? null,

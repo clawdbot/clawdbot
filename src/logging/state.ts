@@ -12,7 +12,6 @@ function createUnownedAppliedLoggingConfig():
 
 function createLoggingState() {
   return {
-    generation: 0,
     appliedConfig: createUnownedAppliedLoggingConfig(),
     cachedLogger: null as unknown,
     cachedSettings: null as unknown,

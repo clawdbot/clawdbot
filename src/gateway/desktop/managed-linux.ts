@@ -277,18 +277,16 @@ export function createManagedLinuxDesktop(
   };
 
   const waitForRun = (run: ManagedRun): Promise<RunExit> => {
-    const pending = run.wait().catch(
-      (error: unknown): RunExit => ({
-        reason: "spawn-error",
-        exitCode: null,
-        exitSignal: null,
-        durationMs: Math.max(0, nowMs() - run.startedAtMs),
-        stdout: "",
-        stderr: error instanceof Error ? error.message : String(error),
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
-    );
+    const pending = run.wait().catch((error: unknown): RunExit => ({
+      reason: "spawn-error",
+      exitCode: null,
+      exitSignal: null,
+      durationMs: Math.max(0, nowMs() - run.startedAtMs),
+      stdout: "",
+      stderr: error instanceof Error ? error.message : String(error),
+      timedOut: false,
+      noOutputTimedOut: false,
+    }));
     activeWaits.add(pending);
     void pending.finally(() => activeWaits.delete(pending));
     return pending;
@@ -301,8 +299,6 @@ export function createManagedLinuxDesktop(
   ) => {
     try {
       return await supervisor.spawn({
-        sessionId: "host-desktop-managed-linux",
-        backendId: binary === "Xtigervnc" ? "managed-vnc" : "managed-session",
         scopeKey,
         mode: "child",
         argv,

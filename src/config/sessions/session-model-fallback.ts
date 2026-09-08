@@ -8,7 +8,7 @@ export type AgentPatchedSessionModelFallback = {
   prevModelOverrideFallbackOriginProvider?: string;
   prevModelOverrideFallbackOriginModel?: string;
   prevAuthProfileOverride?: string;
-  prevAuthProfileOverrideSource?: "auto" | "user";
+  prevAuthProfileOverrideSource?: "auto" | "user" | "user-link";
   prevAuthProfileOverrideCompactionCount?: number;
   prevContextWindow?: string;
   prevThinkingLevel?: string;
@@ -28,7 +28,7 @@ export function createAgentPatchedSessionModelFallback(params: {
     modelOverrideFallbackOriginProvider?: string;
     modelOverrideFallbackOriginModel?: string;
     authProfileOverride?: string;
-    authProfileOverrideSource?: "auto" | "user";
+    authProfileOverrideSource?: "auto" | "user" | "user-link";
     authProfileOverrideCompactionCount?: number;
     contextWindow?: string;
     thinkingLevel?: string;

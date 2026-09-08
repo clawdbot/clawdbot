@@ -41,6 +41,10 @@ describe("crypto digest helpers", () => {
       await fs.writeFile(filePath, HOSTILE_BYTES);
 
       await expect(sha256File(filePath)).resolves.toBe(HOSTILE_BYTES_SHA256);
+      await expect(sha256File(filePath, 0)).resolves.toBe(sha256Hex(HOSTILE_BYTES.subarray(0, 1)));
+      await expect(sha256File(filePath, HOSTILE_BYTES.length - 1)).resolves.toBe(
+        HOSTILE_BYTES_SHA256,
+      );
     });
   });
 

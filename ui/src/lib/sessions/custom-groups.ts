@@ -2,6 +2,8 @@
 // Catalog storage and member updates live on the gateway (sessions.groups.*);
 // the SessionCapability mirrors the catalog into state.groups.
 
+import { moveArrayEntry } from "../array-order.ts";
+
 const BUILT_IN_SESSION_SECTION_IDS = new Set(["ungrouped", "groups", "work"]);
 
 export type SessionGroupSettings = {
@@ -109,17 +111,5 @@ export function moveSessionOrderEntry(
   target: string,
   position: "before" | "after",
 ): string[] {
-  const ordered = [...order];
-  const sourceIndex = ordered.indexOf(source);
-  const targetIndex = ordered.indexOf(target);
-  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) {
-    return ordered;
-  }
-  const [moved] = ordered.splice(sourceIndex, 1);
-  if (!moved) {
-    return ordered;
-  }
-  const targetInsertionIndex = ordered.indexOf(target) + (position === "after" ? 1 : 0);
-  ordered.splice(targetInsertionIndex, 0, moved);
-  return ordered;
+  return moveArrayEntry(order, source, target, position);
 }

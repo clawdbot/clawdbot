@@ -1,7 +1,8 @@
 // Resolves OpenClaw update channels from config, tags, and versions.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { parse as parseSemver } from "semver";
-import { normalizeLegacyDotBetaVersion } from "./semver.js";
+import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
+import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
 
 /** Release stream used to choose registry tags and update policy defaults. */
 export type UpdateChannel = "stable" | "extended-stable" | "beta" | "dev";
@@ -62,6 +63,26 @@ export function channelToNpmTag(channel: UpdateChannel): string {
     return "dev";
   }
   return "latest";
+}
+
+/** Beta follows the newest published beta or stable version, including plugin packages. */
+export function selectNpmChannelVersion<T extends { version: string | null }>(
+  beta: T,
+  latest: T,
+): T {
+  if (!latest.version) {
+    return beta;
+  }
+  if (!beta.version) {
+    return latest;
+  }
+  const comparison =
+    compareOpenClawReleaseVersions(beta.version, latest.version) ??
+    compareValidSemver(
+      normalizeLegacyDotBetaVersion(beta.version),
+      normalizeLegacyDotBetaVersion(latest.version),
+    );
+  return comparison !== null && comparison < 0 ? latest : beta;
 }
 
 /** Returns whether a version/tag explicitly targets the beta stream. */

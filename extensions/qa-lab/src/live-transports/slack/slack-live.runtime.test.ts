@@ -1,6 +1,6 @@
 // Qa Lab tests cover slack live plugin behavior.
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readQaScenarioById } from "../../scenario-catalog.js";
 import { requireFlowScenario } from "../../scenario-catalog.test-utils.js";
 import { resolveLiveTransportQaScenarioIds } from "../shared/scenario-selection.js";
@@ -32,6 +32,14 @@ import {
   runSlackTableInvalidBlocksFallbackScenario,
 } from "./slack-live.observations.js";
 import * as slackScenarioImplementations from "./slack-live.scenario-implementations.js";
+import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
+
+// Keep real Slack operations in Vitest's graph instead of recompiling them through Jiti.
+// The separate facade tests own plugin loading; this suite owns delivery behavior.
+vi.mock("./slack-plugin.runtime.js", async () => {
+  const runtime = await import("@openclaw/slack/test-api.js");
+  return { loadSlackQaRuntime: () => runtime };
+});
 
 function toSlackScenarioExportName(id: string): string {
   const suffix = id
@@ -107,6 +115,13 @@ function renderExpectedSlackTableAccessibleText(summaryText: string) {
 }
 
 describe("Slack live QA runtime helpers", () => {
+  beforeAll(async () => {
+    // Load the real Slack action graph as suite preparation, outside scenario
+    // deadlines: the first send otherwise pays that cold import inside its
+    // 120s test budget and times out on contended CI shards.
+    await loadSlackQaRuntime().preloadSlackActions();
+  });
+
   it("converts Slack rate-limit retry seconds for the observer backoff", () => {
     expect(testing.resolveSlackRateLimitDelayMs({ retryAfter: 10 })).toBe(10_000);
     expect(testing.resolveSlackRateLimitDelayMs({ retryAfter: 0 })).toBeUndefined();
@@ -114,6 +129,10 @@ describe("Slack live QA runtime helpers", () => {
   });
 
   beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
     vi.useRealTimers();
   });
 
@@ -656,7 +675,7 @@ describe("Slack live QA runtime helpers", () => {
         id: "slack-progress-commentary-omitted",
         commentaryTs: "1.500000",
         commentaryStyle: "headline",
-        toolProgress: "absent",
+        toolProgress: "draft",
       },
       {
         id: "slack-progress-commentary-verbose-dedupe",
@@ -684,7 +703,8 @@ describe("Slack live QA runtime helpers", () => {
       if (!commentaryMarker || !toolMarker || !outputMarker || !finalMarker || !verifyObserved) {
         throw new Error(`missing Slack progress verifier: ${testCase.id}`);
       }
-      // The command marker detects accidental tool detail disclosure in quiet drafts.
+      // Progress cards compact command details from the middle, so the QA marker
+      // stays at the command suffix where the real Slack presentation preserves it.
       expect(input).toContain(`sleep 5; printf '%s\\n' '${outputMarker}' # ${toolMarker}`);
       const messages = [
         {
@@ -712,8 +732,10 @@ describe("Slack live QA runtime helpers", () => {
                 text:
                   testCase.toolProgress === "standalone-redacted"
                     ? "🛠️ Exec"
-                    : `🛠️ Exec\n\`\`\`\n${outputMarker}\n\`\`\``,
-                ts: "1.750000",
+                    : testCase.toolProgress === "standalone"
+                      ? `🛠️ Exec\n\`\`\`\n${outputMarker}\n\`\`\``
+                      : `🛠️ Exec ${toolMarker}`,
+                ts: testCase.toolProgress === "draft" ? "1.500000" : "1.750000",
               },
             ]),
       ];
@@ -847,12 +869,8 @@ describe("Slack live QA runtime helpers", () => {
       ).toThrow("tool progress to stay out");
     }
     expect(
-      verify("slack-progress-commentary-omitted", ([commentary, tool, final]) => [
-        commentary,
-        tool,
-        final,
-      ]),
-    ).toThrow("tool progress to stay out");
+      verify("slack-progress-commentary-omitted", ([commentary, , final]) => [commentary, final]),
+    ).toThrow("tool progress on the draft");
     expect(
       verify(
         "slack-progress-commentary-true",
@@ -1163,9 +1181,11 @@ describe("Slack live QA runtime helpers", () => {
   });
 
   it("settles complete channel and thread observations after the final reply", async () => {
+    // The second observation belongs to the settle window, not host scheduling speed.
+    vi.useFakeTimers();
     let historyCalls = 0;
     const observedMessages: Array<{ text: string }> = [];
-    await testing.observeSlackScenarioMessages({
+    const observationParams = {
       channelId: "C123456789",
       client: {
         conversations: {
@@ -1194,10 +1214,16 @@ describe("Slack live QA runtime helpers", () => {
       observationScenarioId: "slack-progress-commentary-verbose-dedupe",
       observationScenarioTitle: "Slack commentary dedupe",
       sentTs: "1.000000",
-      settleMs: 10,
+      // The observer re-polls only while the settle window is open; keep it well above one
+      // poll's wall time so a loaded runner still reaches the second observation.
+      settleMs: 500,
       sutIdentity: { userId: "U999999999" },
       threadTs: "1.000000",
-    });
+    };
+    const observation = testing.observeSlackScenarioMessages(observationParams);
+    // A shorter clock advance strands the observer's final timer.
+    await vi.advanceTimersByTimeAsync(observationParams.settleMs);
+    await observation;
 
     expect(historyCalls).toBeGreaterThanOrEqual(2);
     expect(new Set(observedMessages.map((message) => message.text))).toEqual(

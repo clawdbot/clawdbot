@@ -9,13 +9,13 @@ import type {
 import { BrowserProfileUnavailableError } from "./errors.js";
 
 const DEFAULT_CHROME_MCP_COMMAND = "npx";
-// Endpoint policy below must match the launched CLI's argument grammar.
-const DEFAULT_CHROME_MCP_PACKAGE_ARGS = ["-y", "chrome-devtools-mcp@1.8.0"];
+// Optional npm audits must not delay the handshake. Use =false so npx does not
+// consume the package name as a value for --no-audit and drop Chrome MCP's flags.
+const DEFAULT_CHROME_MCP_PACKAGE_ARGS = ["-y", "--audit=false", "chrome-devtools-mcp@1.8.0"];
 const DEFAULT_CHROME_MCP_FEATURE_ARGS = [
   "--no-usage-statistics",
   // Direct chrome-devtools-mcp launches do not enable structuredContent by default.
   "--experimentalStructuredContent",
-  "--experimental-page-id-routing",
 ];
 const CHROME_MCP_USAGE_STATISTICS_FLAG_RE = /^--(?:no-)?usage-?statistics(?:=.*)?$/i;
 
@@ -86,6 +86,8 @@ export function normalizeChromeMcpOptions(
       ...(command === DEFAULT_CHROME_MCP_COMMAND ? DEFAULT_CHROME_MCP_PACKAGE_ARGS : []),
       ...connectionArgs,
       ...defaultFeatureArgs,
+      // Stable custom launchers may still need the opt-in flag; pinned 1.8 enables it by default.
+      ...(command === DEFAULT_CHROME_MCP_COMMAND ? [] : ["--experimental-page-id-routing"]),
       ...(!overridesConnection && !browserUrl && userDataDir && argv.userDataDir === undefined
         ? ["--userDataDir", userDataDir]
         : []),

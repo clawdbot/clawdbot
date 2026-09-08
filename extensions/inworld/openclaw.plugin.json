@@ -1,5 +1,6 @@
 {
   "id": "inworld",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },

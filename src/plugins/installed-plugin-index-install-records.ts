@@ -5,6 +5,7 @@ import {
   setPluginInstallRecordMapEntry,
 } from "../config/plugin-install-record-map.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { getInstalledPluginIndexFacts } from "./installed-plugin-index-facts.js";
 import type {
   InstalledPluginIndex,
   InstalledPluginInstallRecordInfo,
@@ -35,8 +36,30 @@ function restoreInstallRecordMap(
 export function extractPluginInstallRecordsFromInstalledPluginIndex(
   index: InstalledPluginIndex | null | undefined,
 ): Record<string, PluginInstallRecord> {
+  const facts = index ? getInstalledPluginIndexFacts(index) : undefined;
+  if (!facts) {
+    return restoreInstallRecordMap(indexInstallRecords(index));
+  }
+  const parsed = (facts.installRecords ??= restoreInstallRecordMap(indexInstallRecords(index)));
+  const records = createPluginInstallRecordMap<PluginInstallRecord>();
+  for (const [pluginId, record] of Object.entries(parsed)) {
+    // Match schema parsing's copies of known structured fields; passthrough fields stay intact.
+    setPluginInstallRecordMapEntry(records, pluginId, {
+      ...record,
+      ...(record.clawhubTrustReasons
+        ? { clawhubTrustReasons: [...record.clawhubTrustReasons] }
+        : {}),
+      ...(record.acceptedSurface
+        ? { acceptedSurface: structuredClone(record.acceptedSurface) }
+        : {}),
+    });
+  }
+  return records;
+}
+
+function indexInstallRecords(index: InstalledPluginIndex | null | undefined) {
   if (index && Object.hasOwn(index, "installRecords")) {
-    return restoreInstallRecordMap(index.installRecords);
+    return index.installRecords;
   }
   const records = createPluginInstallRecordMap<PluginInstallRecord>();
   for (const plugin of index?.plugins ?? []) {
@@ -44,5 +67,5 @@ export function extractPluginInstallRecordsFromInstalledPluginIndex(
       setPluginInstallRecordMapEntry(records, plugin.pluginId, plugin.installRecord);
     }
   }
-  return restoreInstallRecordMap(records);
+  return records;
 }

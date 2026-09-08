@@ -1,10 +1,11 @@
 // Deepgram tests cover audio plugin behavior.
 import { spawnSync } from "node:child_process";
 import { runRealtimeSttLiveTest } from "openclaw/plugin-sdk/provider-test-contracts";
+import { createRealtimeTranscriptionWebSocketSession } from "openclaw/plugin-sdk/realtime-transcription-session";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import { transcribeDeepgramAudio } from "./audio.js";
-import { buildDeepgramRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
+import { buildDeepgramRealtimeTranscriptionProvider } from "./realtime-transcription-provider-factory.js";
 
 const DEEPGRAM_KEY = process.env.DEEPGRAM_API_KEY ?? "";
 const DEEPGRAM_MODEL = process.env.DEEPGRAM_MODEL?.trim() || "nova-3";
@@ -75,7 +76,9 @@ describeLive("deepgram live", () => {
   }, 30000);
 
   it("streams realtime STT through the registered transcription provider", async () => {
-    const provider = buildDeepgramRealtimeTranscriptionProvider();
+    const provider = buildDeepgramRealtimeTranscriptionProvider({
+      createRealtimeTranscriptionWebSocketSession,
+    });
     const speech = convertWavToMulaw8k(await fetchSampleBuffer(SAMPLE_URL, 15_000));
     expect(speech.byteLength).toBeGreaterThan(0);
 

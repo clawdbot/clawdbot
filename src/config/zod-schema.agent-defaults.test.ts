@@ -622,6 +622,14 @@ describe("agent defaults schema", () => {
     );
   });
 
+  it.each([undefined, {}, { maxConcurrent: 3 }, false, { enabled: false }])(
+    "preserves per-agent Swarm config %j for inherited enablement",
+    (swarm) => {
+      const tools = swarm === undefined ? {} : { swarm };
+      expect(AgentEntrySchema.parse({ id: "ops", tools }).tools?.swarm).toEqual(swarm);
+    },
+  );
+
   it("accepts per-agent tools.swarm config", () => {
     expectSchemaSuccess(
       AgentEntrySchema.safeParse({ id: "ops", tools: { swarm: { enabled: true } } }),

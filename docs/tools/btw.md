@@ -29,6 +29,10 @@ The two side-question contracts are deliberately separate. BTW is a one-shot que
 
 The main run, if one is active, is left untouched.
 
+When their runtime supplies usage, completed direct-provider and harness side
+questions report it through the configured [diagnostics pipeline](/gateway/opentelemetry).
+This does not add the exchange to session history or session-derived `/usage cost` totals.
+
 For Codex harness sessions, BTW forks the active Codex app-server thread into
 an ephemeral child thread instead of running a separate provider call. This
 keeps Codex OAuth and native tool/thread behavior intact, and the forked

@@ -1,5 +1,5 @@
 // Run diagnostic event tests cover emitted diagnostics from isolated cron runs.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onDiagnosticEvent,
   onInternalDiagnosticEvent,
@@ -11,14 +11,12 @@ vi.mock("../../agents/auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSource: vi.fn(() => false),
 }));
 
+import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
-  clearFastTestEnv,
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
   makeCronSessionEntry,
-  resetRunCronIsolatedAgentTurnHarness,
   resolveCronSessionMock,
-  restoreFastTestEnv,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
@@ -55,17 +53,11 @@ type EventRecord = {
 };
 
 describe("runCronIsolatedAgentTurn diagnostic events", () => {
-  let previousFastTestEnv: string | undefined;
+  setupRunCronIsolatedAgentTurnSuite();
 
   beforeEach(() => {
-    previousFastTestEnv = clearFastTestEnv();
-    resetRunCronIsolatedAgentTurnHarness();
     resetDiagnosticStateForTest();
     resetDiagnosticEventsForTest();
-  });
-
-  afterEach(() => {
-    restoreFastTestEnv(previousFastTestEnv);
   });
 
   it("emits a paired queued/processing/idle/processed lifecycle for an isolated cron run", async () => {
@@ -147,17 +139,20 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
     );
     runWithModelFallbackMock.mockResolvedValue({
       result: {
-        payloads: [{ text: "test output" }],
-        meta: {
-          agentMeta: {
-            sessionId: "persisted-run-session",
-            sessionFile: "/tmp/persisted-run-session.jsonl",
-            usage: { input: 10, output: 20 },
+        result: {
+          payloads: [{ text: "test output" }],
+          meta: {
+            agentMeta: {
+              sessionId: "persisted-run-session",
+              sessionFile: "/tmp/persisted-run-session.jsonl",
+              usage: { input: 10, output: 20 },
+            },
           },
         },
       },
       provider: "openai",
       model: "gpt-5.4",
+      attempts: [],
     });
 
     const events: EventRecord[] = [];
@@ -221,27 +216,30 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
 
     runWithModelFallbackMock.mockResolvedValue({
       result: {
-        payloads: [{ text: "test output" }],
-        meta: {
-          agentMeta: {
-            sessionId: "cron-usage-session",
-            sessionFile: "/tmp/cron-usage-session.jsonl",
-            provider: "test-provider",
-            model: "test-model",
-            usage: { input: 50, output: 100, cacheRead: 7, cacheWrite: 3, total: 55 },
-            diagnosticUsage: {
-              input: 150,
-              output: 200,
-              cacheRead: 17,
-              cacheWrite: 13,
-              total: 380,
+        result: {
+          payloads: [{ text: "test output" }],
+          meta: {
+            agentMeta: {
+              sessionId: "cron-usage-session",
+              sessionFile: "/tmp/cron-usage-session.jsonl",
+              provider: "test-provider",
+              model: "test-model",
+              usage: { input: 50, output: 100, cacheRead: 7, cacheWrite: 3, total: 55 },
+              diagnosticUsage: {
+                input: 150,
+                output: 200,
+                cacheRead: 17,
+                cacheWrite: 13,
+                total: 380,
+              },
+              lastCallUsage: { input: 40, output: 5, cacheRead: 6, cacheWrite: 4 },
             },
-            lastCallUsage: { input: 40, output: 5, cacheRead: 6, cacheWrite: 4 },
           },
         },
       },
       provider: "fallback-provider",
       model: "fallback-model",
+      attempts: [],
     });
 
     let result: Awaited<ReturnType<typeof runCronIsolatedAgentTurn>> | undefined;
@@ -320,16 +318,19 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
       abortController.abort("cron: job execution timed out");
       return {
         result: {
-          payloads: [{ text: "late output" }],
-          meta: {
-            agentMeta: {
-              sessionId: "late-session",
-              usage: { input: 50, output: 10, total: 60 },
+          result: {
+            payloads: [{ text: "late output" }],
+            meta: {
+              agentMeta: {
+                sessionId: "late-session",
+                usage: { input: 50, output: 10, total: 60 },
+              },
             },
           },
         },
         provider: "openai",
         model: "gpt-5.4",
+        attempts: [],
       };
     });
 
@@ -379,15 +380,18 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
 
     runWithModelFallbackMock.mockResolvedValue({
       result: {
-        payloads: [{ text: "test output" }],
-        meta: {
-          agentMeta: {
-            usage,
+        result: {
+          payloads: [{ text: "test output" }],
+          meta: {
+            agentMeta: {
+              usage,
+            },
           },
         },
       },
       provider: "openai",
       model: "gpt-5.4",
+      attempts: [],
     });
 
     try {

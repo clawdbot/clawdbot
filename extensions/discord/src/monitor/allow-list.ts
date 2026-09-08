@@ -9,7 +9,7 @@ import {
   resolveChannelMatchConfig,
   type ChannelMatchSource,
 } from "openclaw/plugin-sdk/channel-targets";
-import type { DiscordGuildEntry, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { DiscordGuildEntry } from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -290,55 +290,18 @@ export function resolveDiscordOwnerAccess(params: {
   ownerAllowList: DiscordAllowList | null;
   ownerAllowed: boolean;
 } {
-  const ownerAllowFrom = params.allowFrom?.filter(
-    (entry) => (normalizeOptionalString(entry) ?? "") !== "*",
-  );
   const ownerAllowList = normalizeDiscordAllowList(
-    ownerAllowFrom && ownerAllowFrom.length > 0 ? ownerAllowFrom : undefined,
+    params.allowFrom?.filter((entry) => (normalizeOptionalString(entry) ?? "") !== "*"),
     DISCORD_OWNER_ALLOWLIST_PREFIXES,
   );
-  const ownerAllowed = ownerAllowList
-    ? allowListMatches(
-        ownerAllowList,
-        {
-          id: params.sender.id,
-          name: params.sender.name,
-          tag: params.sender.tag,
-        },
-        { allowNameMatching: params.allowNameMatching },
-      )
-    : false;
-  return { ownerAllowList, ownerAllowed };
-}
-
-export function resolveDiscordCommandOwnerAllowFrom(cfg: OpenClawConfig): string[] | undefined {
-  const raw = cfg.commands?.ownerAllowFrom;
-  if (!Array.isArray(raw) || raw.length === 0) {
-    return undefined;
-  }
-  const entries: string[] = [];
-  for (const entry of raw) {
-    const trimmed = normalizeOptionalString(String(entry ?? "")) ?? "";
-    if (!trimmed) {
-      continue;
-    }
-    const separatorIndex = trimmed.indexOf(":");
-    if (separatorIndex > 0) {
-      const prefix = trimmed.slice(0, separatorIndex).toLowerCase();
-      if (prefix === "discord") {
-        const remainder = normalizeOptionalString(trimmed.slice(separatorIndex + 1)) ?? "";
-        if (remainder) {
-          entries.push(remainder);
-        }
-        continue;
-      }
-      if (prefix !== "user" && prefix !== "pk") {
-        continue;
-      }
-    }
-    entries.push(trimmed);
-  }
-  return entries.length > 0 ? entries : undefined;
+  return {
+    ownerAllowList,
+    ownerAllowed:
+      ownerAllowList !== null &&
+      allowListMatches(ownerAllowList, params.sender, {
+        allowNameMatching: params.allowNameMatching,
+      }),
+  };
 }
 
 export function resolveDiscordCommandAuthorized(params: {

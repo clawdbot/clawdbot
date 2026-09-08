@@ -12,7 +12,6 @@ import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.SessionBranch
-import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -80,12 +79,6 @@ class ChatScreenTest {
   }
 
   @Test
-  fun jumpToLatestReservesItsTouchTargetBelowMessages() {
-    assertEquals(0.dp, chatReaderListBottomInset(showJumpToLatest = false))
-    assertEquals(56.dp, chatReaderListBottomInset(showJumpToLatest = true))
-  }
-
-  @Test
   fun branchMessageCountUsesCountNeutralCopy() {
     assertEquals("Messages: 1", branchMessageCountText(1))
     assertEquals("Messages: 2", branchMessageCountText(2))
@@ -139,7 +132,7 @@ class ChatScreenTest {
   }
 
   @Test
-  fun composerPrimaryActionKeepsRunStopSeparateFromLiveTalk() {
+  fun composerPrimaryActionSendsDraftsDuringRunsAndKeepsTalkStopIndependent() {
     assertEquals(
       ChatComposerPrimaryAction.Stop,
       resolveChatComposerPrimaryAction(talkActive = true, runActive = true, hasContent = true),
@@ -149,12 +142,16 @@ class ChatScreenTest {
       resolveChatComposerPrimaryAction(talkActive = true, runActive = false, hasContent = true),
     )
     assertEquals(
-      ChatComposerPrimaryAction.Stop,
+      ChatComposerPrimaryAction.Send,
       resolveChatComposerPrimaryAction(talkActive = false, runActive = true, hasContent = true),
     )
     assertEquals(
       ChatComposerPrimaryAction.Send,
       resolveChatComposerPrimaryAction(talkActive = false, runActive = false, hasContent = true),
+    )
+    assertEquals(
+      ChatComposerPrimaryAction.Stop,
+      resolveChatComposerPrimaryAction(talkActive = false, runActive = true, hasContent = false),
     )
     assertEquals(
       ChatComposerPrimaryAction.StartTalk,

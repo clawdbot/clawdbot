@@ -1,10 +1,11 @@
 import Foundation
+import OpenClawKit
 import OSLog
 @preconcurrency import WatchConnectivity
 
 private struct WatchConnectivityTransportCallbacks {
     var statusUpdateHandler: (@Sendable (WatchMessagingStatus) -> Void)?
-    var inboundEventHandler: (@Sendable (WatchMessagingInboundEvent) -> Void)?
+    var inboundEventHandler: (@Sendable (WatchMessagingInboundEvent) async throws -> Void)?
 }
 
 func updateWatchSnapshotApplicationContext(_ payload: [String: Any], with session: WCSession, lock: NSLock) throws {
@@ -64,7 +65,7 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
         self.updateCallbacks { $0.statusUpdateHandler = handler }
     }
 
-    func setInboundEventHandler(_ handler: (@Sendable (WatchMessagingInboundEvent) -> Void)?) {
+    func setInboundEventHandler(_ handler: (@Sendable (WatchMessagingInboundEvent) async throws -> Void)?) {
         self.updateCallbacks { $0.inboundEventHandler = handler }
     }
 
@@ -194,13 +195,38 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
         }
     }
 
-    private func emitInboundEvent(_ event: WatchMessagingInboundEvent) {
-        guard let handler = self.callbacksSnapshot().inboundEventHandler else {
-            return
+    private func receivePayload(
+        _ payload: [String: Any],
+        transport: String,
+        acknowledgment: WatchMessageAcknowledgment? = nil)
+    {
+        do {
+            guard let event = try WatchMessagingPayloadCodec.parseInboundPayload(payload, transport: transport) else {
+                acknowledgment?.reject(reason: "unsupported_payload")
+                return
+            }
+            guard let handler = self.callbacksSnapshot().inboundEventHandler else {
+                throw WatchMessagingError.admissionUnavailable
+            }
+            Task { @MainActor in
+                do {
+                    // A transfer is not custody. The application must finish its commit before ACK.
+                    try await handler(event)
+                    acknowledgment?.accept()
+                } catch {
+                    Self.rejectInbound(error, acknowledgment: acknowledgment)
+                }
+            }
+        } catch {
+            Self.rejectInbound(error, acknowledgment: acknowledgment)
         }
-        Task { @MainActor in
-            handler(event)
-        }
+    }
+
+    private static func rejectInbound(_ error: any Error, acknowledgment: WatchMessageAcknowledgment?) {
+        let code = (error as? OpenClawWatchChatDeliveryError)?.code ?? "admission_unavailable"
+        acknowledgment?.reject(reason: code)
+        // Background userInfo has no reply channel; retain a local diagnostic without payload text.
+        GatewayDiagnostics.log("watch messaging: inbound rejected code=\(code)")
     }
 
     private nonisolated static func status(for session: WCSession) -> WatchMessagingStatus {
@@ -272,12 +298,7 @@ extension WatchConnectivityTransport: WCSessionDelegate {
     func session(_: WCSession, didReceiveMessage message: [String: Any]) {
         let type = (message["type"] as? String) ?? "unknown"
         GatewayDiagnostics.log("watch messaging: didReceiveMessage type=\(type)")
-        if let event = WatchMessagingPayloadCodec.parseInboundPayload(
-            message,
-            transport: "sendMessage")
-        {
-            self.emitInboundEvent(event)
-        }
+        self.receivePayload(message, transport: "sendMessage")
     }
 
     func session(
@@ -287,26 +308,16 @@ extension WatchConnectivityTransport: WCSessionDelegate {
     {
         let type = (message["type"] as? String) ?? "unknown"
         GatewayDiagnostics.log("watch messaging: didReceiveMessageWithReply type=\(type)")
-        guard let event = WatchMessagingPayloadCodec.parseInboundPayload(
+        self.receivePayload(
             message,
-            transport: "sendMessage")
-        else {
-            replyHandler(["ok": false, "error": "unsupported_payload"])
-            return
-        }
-        replyHandler(["ok": true])
-        self.emitInboundEvent(event)
+            transport: "sendMessage",
+            acknowledgment: WatchMessageAcknowledgment(replyHandler: replyHandler))
     }
 
     func session(_: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
         let type = (userInfo["type"] as? String) ?? "unknown"
         GatewayDiagnostics.log("watch messaging: didReceiveUserInfo type=\(type)")
-        if let event = WatchMessagingPayloadCodec.parseInboundPayload(
-            userInfo,
-            transport: "transferUserInfo")
-        {
-            self.emitInboundEvent(event)
-        }
+        self.receivePayload(userInfo, transport: "transferUserInfo")
     }
 
     func sessionReachabilityDidChange(_ session: WCSession) {

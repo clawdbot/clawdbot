@@ -5,7 +5,9 @@ export function convertBmpToPngWithPhoton(buffer: Buffer): Buffer {
   let image: InstanceType<typeof photon.PhotonImage> | undefined;
   try {
     image = photon.PhotonImage.new_from_byteslice(buffer);
-    return Buffer.from(image.get_bytes());
+    const bytes = image.get_bytes();
+    // Photon copies PNG bytes out of WASM, so this view survives image.free().
+    return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   } finally {
     image?.free();
   }

@@ -44,7 +44,7 @@ import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   realtimeVoiceAudioDurationMs,
   resamplePcm,
-} from "openclaw/plugin-sdk/realtime-voice";
+} from "openclaw/plugin-sdk/realtime-voice-provider";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
@@ -478,6 +478,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private sessionReadyFired = false;
   private consecutiveSilenceMs = 0;
   private audioStreamEnded = false;
+  private responseInterrupted = false;
   private pendingFunctionNames = new Map<string, string>();
   private seenFunctionCallIds = new Set<string>();
   private pendingToolResponses: GooglePendingToolResponse[] = [];
@@ -549,6 +550,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.config.sessionResumption !== false && Boolean(this.resumptionHandle);
     this.resumingSession = resumesExistingSession;
     if (!resumesExistingSession) {
+      this.responseInterrupted = false;
       this.resetToolCallOwnership();
     }
     const ai = createGoogleGenAI({
@@ -871,12 +873,16 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private handleMessage(message: LiveServerMessage): void {
+    const owner = this.connectionOwner;
     this.captureSessionLifecycle(message);
     if (message.setupComplete) {
       this.handleSetupComplete();
     }
     if (message.serverContent) {
       this.handleServerContent(message.serverContent);
+      if (this.connectionOwner !== owner) {
+        return;
+      }
     }
     if (message.toolCall) {
       this.handleToolCall(message.toolCall);
@@ -943,6 +949,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private handleServerContent(content: LiveServerContent): void {
     const owner = this.connectionOwner;
     if (content.interrupted) {
+      this.responseInterrupted = true;
       this.config.onClearAudio("barge-in");
       if (this.connectionOwner !== owner) {
         return;
@@ -990,6 +997,13 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     // is independently ordered and must not be finalized by an assistant turn.
     if (content.generationComplete || content.interrupted || content.turnComplete) {
       this.flushPendingTranscript("assistant");
+    }
+    if (content.turnComplete && this.connectionOwner === owner) {
+      // Google finishes interrupted turns with turnComplete too. generationComplete
+      // can precede playback completion, so only the native turn boundary releases output.
+      const status = this.responseInterrupted ? "cancelled" : "completed";
+      this.responseInterrupted = false;
+      this.config.onResponseDone?.({ status });
     }
   }
 
@@ -1051,6 +1065,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private resetPendingTranscripts(): void {
+    this.responseInterrupted = false;
     this.pendingTranscripts.user = { text: "", byteCount: 0 };
     this.pendingTranscripts.assistant = { text: "", byteCount: 0 };
   }
@@ -1091,6 +1106,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       return;
     }
     this.clearPendingAudio();
+    this.responseInterrupted = false;
     this.closeNotified = true;
     this.config.onClose?.(reason);
   }

@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureUiProof,
   controlUiSessionUrl,
@@ -9,6 +10,7 @@ import {
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite(true);
+const rosterMatch = { includeGlobal: true };
 
 suite.define(() => {
   it("keeps one failed child load and alert until the operator retries", async () => {
@@ -31,11 +33,7 @@ suite.define(() => {
     const childResponse = sessionsListResponse([
       sessionRow(childKey, "Recovered child", 40, { spawnedBy: parentKey }),
     ]);
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {
@@ -87,7 +85,7 @@ suite.define(() => {
       await captureUiProof(suite, page, "child-session-load-error.png");
 
       for (let revision = 1; revision <= 3; revision += 1) {
-        const listRequests = (await gateway.getRequests("sessions.list")).length;
+        const listRequests = (await gateway.getRequests("sessions.list", rosterMatch)).length;
         await gateway.emitGatewayEvent("sessions.changed", {
           key: unrelatedKey,
           reason: "run",
@@ -95,7 +93,7 @@ suite.define(() => {
           updatedAt: 30 + revision,
         });
         await expect
-          .poll(async () => (await gateway.getRequests("sessions.list")).length)
+          .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
           .toBeGreaterThan(listRequests);
         expect(await childRequestCount()).toBe(1);
         expect(await alert.count()).toBe(1);

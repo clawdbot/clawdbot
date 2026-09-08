@@ -39,12 +39,12 @@ describe("buildCopilotPromptGuidance", () => {
     expect(guidance).toContain("Need announced results before reply: `sessions_yield`");
     expect(guidance).toContain("Collectors require explicit result collection instead.");
     expect(guidance).toContain("`subagents(action=list)` only for requested status/debug.");
-    expect(guidance).toContain("For the current source conversation, reply normally");
+    expect(guidance).toContain("You can participate in the conversation throughout your work.");
     expect(guidance?.indexOf("## Skill Workshop")).toBeLessThan(
       guidance?.indexOf("## Delegation") ?? 0,
     );
     expect(guidance?.indexOf("## Delegation")).toBeLessThan(
-      guidance?.indexOf("For the current source conversation") ?? 0,
+      guidance?.indexOf("You can participate in the conversation throughout your work.") ?? 0,
     );
   });
 
@@ -65,7 +65,7 @@ describe("buildCopilotPromptGuidance", () => {
     const guidance = buildGuidance(attempt);
 
     expect(guidance).not.toContain("## Delegation");
-    expect(guidance).toContain("For the current source conversation, reply normally");
+    expect(guidance).toContain("You can participate in the conversation throughout your work.");
   });
 
   it.each([
@@ -82,10 +82,40 @@ describe("buildCopilotPromptGuidance", () => {
         "sessions_spawn",
       ]),
     ).toContain("Visible source replies are not automatically delivered");
-    expect(
-      buildGuidance({ sourceReplyDeliveryMode: "message_tool_only" }, ["sessions_spawn"]),
-    ).toContain("reply normally in your final assistant message");
+    const unavailable = buildGuidance({ sourceReplyDeliveryMode: "message_tool_only" }, [
+      "sessions_spawn",
+    ]);
+    expect(unavailable).toContain("remains private");
+    expect(unavailable).not.toContain("Use `message`");
+    expect(unavailable).not.toContain("OpenClaw delivers your final response automatically");
   });
+
+  it.each([false, true])(
+    "teaches the prepared target requirement (%s) only with message",
+    (required) => {
+      const attempt = {
+        agentId: "main",
+        config: {},
+        sessionKey: "agent:main:main",
+        sourceReplyDeliveryMode: "message_tool_only" as const,
+      } as AttemptParamsLike;
+      const guidance = buildCopilotPromptGuidance({
+        attempt,
+        callableToolNames: ["message"],
+        requireExplicitMessageTarget: required,
+      });
+      expect(guidance).toContain(
+        required ? "target required this turn" : "current source is default target",
+      );
+      const unavailable = buildCopilotPromptGuidance({
+        attempt,
+        callableToolNames: [],
+        requireExplicitMessageTarget: required,
+      });
+      expect(unavailable).toContain("remains private");
+      expect(unavailable).not.toContain("`target`");
+    },
+  );
 
   it("renders only the delegation operations present in the callable inventory", () => {
     const guidance = buildGuidance({}, [" sessions_spawn ", "sessions_spawn"]);

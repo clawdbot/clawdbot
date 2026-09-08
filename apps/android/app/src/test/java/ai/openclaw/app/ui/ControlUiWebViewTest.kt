@@ -29,6 +29,17 @@ import java.security.MessageDigest
 @RunWith(RobolectricTestRunner::class)
 class ControlUiWebViewTest {
   @Test
+  @Config(sdk = [31])
+  fun viewportSizedPagesDoNotUseWrapContentLayout() {
+    val mounted = mountControlUiWebView(AppearanceThemeMode.System)
+    try {
+      assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, mounted.webView.layoutParams.height)
+    } finally {
+      mounted.close()
+    }
+  }
+
+  @Test
   @Config(sdk = [31], qualifiers = "notnight")
   fun darkAndSystemAppearancesConfigureWebViewForLightSystem() {
     assertMountedAppearance(AppearanceThemeMode.Dark, dark = true)

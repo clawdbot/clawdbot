@@ -44,8 +44,10 @@ class AppTopbar extends OpenClawLightDomContentsElement {
                 aria-hidden="true"
               />
               <span class="topbar-brand__title">OpenClaw</span>
-              ${this.environment &&
-              html`<span class="control-ui-environment-pill">${this.environment.label}</span>`}
+              ${
+                this.environment &&
+                html`<span class="control-ui-environment-pill">${this.environment.label}</span>`
+              }
             </div>
           </div>
           <div class="topnav-shell__actions">

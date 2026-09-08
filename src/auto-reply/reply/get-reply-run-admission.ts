@@ -6,7 +6,7 @@ import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   resolveSessionFilePathCore,
@@ -21,6 +21,7 @@ import {
   getSessionWorkAdmissionOwnerRelease,
   interruptSessionWorkAdmissions,
 } from "../../sessions/session-lifecycle-admission.js";
+import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import {
   formatThinkingLevels,
@@ -59,7 +60,7 @@ import {
   resolveRoutedDeliveryThreadId,
 } from "./routed-delivery-thread.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
-import { getReplySystemEventSessionKey } from "./system-event-session-key.js";
+import { getReplySystemEventContext } from "./system-event-session-key.js";
 
 export async function prepareReplyRunAdmission(context: PreparedReplyRunContext) {
   const {
@@ -105,6 +106,10 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   } = params;
   let { sessionEntry, prefixedBodyBase } = context;
   let { resolvedThinkLevel } = params;
+  let thinkLevelOverride =
+    explicitThinkingLevelOverride ??
+    directives.thinkLevel ??
+    (directives.clearThinkLevel ? ("default" as const) : undefined);
 
   // Extract first-token think hint from the user body BEFORE prepending system events.
   // If done after, the System: prefix becomes the first token and silently shadows any
@@ -128,6 +133,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       })
     ) {
       resolvedThinkLevel = maybeLevel;
+      thinkLevelOverride = maybeLevel;
       prefixedBodyBase = removeDirectiveSpan(prefixedBodyBase, 0, firstToken.length);
     }
   }
@@ -144,9 +150,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     if (useFastReplyRuntime) {
       return;
     }
-    const routeSystemEventSessionKey = normalizeOptionalString(getReplySystemEventSessionKey(opts));
-    const systemEventSessionKeys =
-      routeSystemEventSessionKey && routeSystemEventSessionKey !== sessionKey
+    const eventContext = getReplySystemEventContext(opts);
+    const routeSystemEventSessionKey = normalizeOptionalString(eventContext?.sessionKey);
+    const systemEventSessionKeys = context.isHeartbeat
+      ? [routeSystemEventSessionKey ?? sessionKey]
+      : routeSystemEventSessionKey && routeSystemEventSessionKey !== sessionKey
         ? [routeSystemEventSessionKey, sessionKey]
         : [sessionKey];
     for (const systemEventSessionKey of systemEventSessionKeys) {
@@ -157,7 +165,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         sessionKey: systemEventSessionKey,
         isMainSession: isCurrentSession && isMainSession,
         isNewSession: isCurrentSession && isNewSession,
-        suppressHeartbeatOwnedEvents: context.isHeartbeat,
+        // A heartbeat may consume only its prepared generic selection, never
+        // dedicated reminders or arrivals that were not part of this turn.
+        events: context.isHeartbeat ? (eventContext?.events ?? []) : undefined,
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
@@ -219,14 +229,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     sessionEntryHandle?.replaceCurrent(sessionEntry);
   }
   const skillsSnapshot = skillResult.skillsSnapshot;
-  let {
-    prefixedCommandBody,
-    queuedBody,
-    transcriptBody,
-    transcriptCommandBody,
-    media: promptMedia,
-    currentInboundContext,
-  } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies());
+  let promptBodies = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies());
   const isRoomEvent = inboundEventKind === "room_event";
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await traceRunPhase("reply.resolve_default_thinking", () =>
@@ -415,7 +418,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     if (useFastReplyRuntime) {
       return {
         authProfileId: preparedSessionState.sessionEntry?.authProfileOverride,
-        authProfileIdSource: resolveSessionAuthProfileOverrideSource(
+        authProfileIdSource: resolveCollapsedSessionAuthPinSource(
           preparedSessionState.sessionEntry,
         ),
       };
@@ -444,6 +447,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       sessionKey: authSessionKey,
       storePath: shouldUseEphemeralSession ? undefined : storePath,
       isNewSession,
+      // Only an authenticated Gateway profile establishes a person-linked pin;
+      // channel senders read as observations and resolve to undefined here.
+      requesterProfileId: readSessionInputProfileId(ctx),
     });
     return {
       authProfileId: selection?.profileId,
@@ -510,6 +516,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   };
   if (commandTurnContinuationTargetKey && providedReplyOperation) {
     const adoption = await admitReplyTurn({
+      agentId,
       sessionKey: commandTurnContinuationTargetKey,
       sessionId: providedReplyOperation.sessionId,
       expectedSessionId: preparedSessionState.sessionEntry?.sessionId,
@@ -612,14 +619,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         // The interrupted run may have changed goal or suggestion state while admission waited.
         await refreshInboundContextAfterAdmissionWait();
         sessionEntry = context.getSessionEntry();
-        ({
-          prefixedCommandBody,
-          queuedBody,
-          transcriptBody,
-          transcriptCommandBody,
-          media: promptMedia,
-          currentInboundContext,
-        } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
+        promptBodies = await traceRunPhase("reply.build_prompt_bodies", () =>
+          rebuildPromptBodies(),
+        );
       },
       resolveBusyState: resolveQueueBusyState,
     });
@@ -630,20 +632,23 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   }
   if (activeRunQueueAction !== "drop") {
     await traceRunPhase("reply.drain_system_events", () => drainSystemEventBlocks());
-    ({
-      prefixedCommandBody,
-      queuedBody,
-      transcriptBody,
-      transcriptCommandBody,
-      media: promptMedia,
-      currentInboundContext,
-    } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
+    promptBodies = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies());
   }
 
+  const {
+    prefixedCommandBody,
+    queuedBody,
+    transcriptBody,
+    transcriptCommandBody,
+    media: promptMedia,
+    inboundMediaIndexes,
+    currentInboundContext,
+  } = promptBodies;
   return {
     kind: "ready",
     context,
     resolvedThinkLevel,
+    thinkLevelOverride,
     thinkingCatalog,
     sessionEntry,
     skillsSnapshot,
@@ -652,6 +657,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     transcriptBody,
     transcriptCommandBody,
     promptMedia,
+    inboundMediaIndexes,
     currentInboundContext,
     isRoomEvent,
     providedReplyOperation,

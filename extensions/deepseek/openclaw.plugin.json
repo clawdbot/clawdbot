@@ -1,6 +1,5 @@
 {
   "id": "deepseek",
-  "icon": "https://cdn.simpleicons.org/deepseek",
   "activation": {
     "onStartup": false
   },
@@ -24,6 +23,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "deepseek": "deepseek"
+    },
     "providers": {
       "deepseek": {
         "baseUrl": "https://api.deepseek.com",

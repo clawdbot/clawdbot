@@ -20,9 +20,8 @@ import type { ChannelId } from "./types.public.js";
 /**
  * Loaded channel plugin shape after id/meta normalization.
  */
-type LoadedChannelPlugin = ActiveChannelPluginRuntimeShape & {
-  id: string;
-  meta: NonNullable<ActiveChannelPluginRuntimeShape["meta"]>;
+type LoadedChannelPlugin = ChannelPlugin & {
+  meta: NonNullable<ChannelPlugin["meta"]>;
 };
 
 /**
@@ -48,12 +47,7 @@ function coerceLoadedChannelPlugin(
   if (!plugin || !id) {
     return null;
   }
-  if (!plugin.meta || typeof plugin.meta !== "object") {
-    // Loaded plugin metadata is optional at the runtime-state boundary, but
-    // channel sorting expects an object so normalize it once at read time.
-    plugin.meta = {};
-  }
-  return plugin as LoadedChannelPlugin;
+  return plugin;
 }
 
 function resolveChannelPlugins(registry?: ActivePluginChannelRegistry): ChannelPluginView {
@@ -122,7 +116,7 @@ export function listLoadedChannelPlugins(): LoadedChannelPlugin[] {
 export function listLoadedChannelPluginsForRegistry(
   registry: ActivePluginChannelRegistry,
 ): ChannelPlugin[] {
-  return resolveChannelPlugins(registry).sorted.slice() as ChannelPlugin[];
+  return resolveChannelPlugins(registry).sorted.slice();
 }
 
 /**
@@ -138,7 +132,7 @@ export function getLoadedChannelPluginById(id: string): LoadedChannelPlugin | un
 
 /** Returns one loaded channel plugin without triggering bundled discovery. */
 export function getLoadedChannelPluginForRead(id: ChannelId): ChannelPlugin | undefined {
-  return getLoadedChannelPluginById(id) as ChannelPlugin | undefined;
+  return getLoadedChannelPluginById(id);
 }
 
 /**

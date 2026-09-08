@@ -114,11 +114,15 @@ async function runCliShimInner(moduleUrl, options, nodeArgs) {
   for (const signal of FORWARDED_SIGNALS) {
     const handler = () => {
       signalChild(child, signal, detached);
-      forceKillTimer ??= setTimeout(
-        () => signalChild(child, "SIGKILL", detached),
-        forceKillDelayMs,
-      );
-      forceKillTimer.unref();
+      // A lifecycle-owning implementation must finish killing its own child groups.
+      // A competing shim deadline can kill that owner and orphan those children.
+      if (options.terminationOwner !== "implementation") {
+        forceKillTimer ??= setTimeout(
+          () => signalChild(child, "SIGKILL", detached),
+          forceKillDelayMs,
+        );
+        forceKillTimer.unref();
+      }
     };
     signalHandlers.set(signal, handler);
     process.on(signal, handler);

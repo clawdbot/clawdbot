@@ -292,10 +292,10 @@ export function formatDuelingScopesWarning(
   const { user, system } = installation;
   // Deliberately no copy-paste removal command: this formatter has no ownership
   // evidence, and blindly deleting the user unit can remove the only working
-  // gateway. `doctor --fix` decides that behind the active+enabled probe.
+  // gateway. Guided Doctor decides that behind the active+enabled probe.
   return (
     `detected BOTH a user-scope (${user.unitPath}) and a system-scope (${system.unitPath}) ` +
     `gateway unit bound to port ${port}; they will SIGTERM each other in a restart loop. ` +
-    `Run \`openclaw doctor --fix\` to resolve which unit should own this gateway.`
+    `Run \`openclaw doctor\` interactively to inspect both scopes and review supported cleanup.`
   );
 }

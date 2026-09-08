@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 
@@ -53,4 +53,48 @@ describe("buildSystemPrompt", () => {
     expect(renderedNames).toEqual(renderedNames.toSorted((a, b) => a.localeCompare(b, "en")));
     expect(skillsPrompt).toContain("⚠️ Skills truncated:");
   });
+
+  it.each(["default", "custom"] as const)(
+    "appends the same ordered project suffix to the %s prompt without a read tool",
+    (mode) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 8, 4, 12));
+      try {
+        const prompt = buildSystemPrompt({
+          cwd: "C:\\project\\workspace",
+          customPrompt: mode === "custom" ? "Custom replacement prompt" : undefined,
+          selectedTools: [],
+          appendSystemPrompt: "Appended instructions",
+          contextFiles: [{ path: "/project/AGENTS.md", content: "Project instructions" }],
+          skills: [
+            createCanonicalFixtureSkill({
+              name: "hidden-skill",
+              description: "Requires a read tool",
+              filePath: "/skills/hidden-skill/SKILL.md",
+              baseDir: "/skills/hidden-skill",
+              source: "test",
+            }),
+          ],
+        });
+        const suffix = [
+          "\n\nAppended instructions\n\n<project_context>\n",
+          "Project-specific instructions and guidelines:\n",
+          '<project_instructions path="/project/AGENTS.md">',
+          "Project instructions",
+          "</project_instructions>\n",
+          "</project_context>\n",
+          "Current date: 2026-09-04",
+          "Current working directory: C:/project/workspace",
+        ].join("\n");
+        expect(prompt.endsWith(suffix)).toBe(true);
+        expect(prompt.match(/<project_context>/g)).toHaveLength(1);
+        expect(prompt).not.toContain("<available_skills>");
+        if (mode === "custom") {
+          expect(prompt).toBe(`Custom replacement prompt${suffix}`);
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });

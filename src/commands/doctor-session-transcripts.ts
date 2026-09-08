@@ -16,7 +16,13 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
+import { createLegacyStateMigrationStepReceipt } from "../infra/state-migrations.messages.js";
 import { runPostSessionPluginDoctorStateRepairs } from "../infra/state-migrations.plugin-doctor.js";
+import type {
+  LegacyStateMigrationStepReceipt,
+  MigrationMessages,
+  PreparedPostSessionPluginMigration,
+} from "../infra/state-migrations.types.js";
 import { shortenHomePath } from "../utils.js";
 import {
   repairCanonicalSessionKeys,
@@ -116,7 +122,9 @@ async function repairBrokenSessionTranscriptFile(params: {
       .replace(/[:.]/g, "-")}.bak`;
     await fs.copyFile(params.filePath, backupPath);
     result.backupPath = backupPath;
-    const dirMode = (await fs.stat(path.dirname(params.filePath))).mode;
+    // Keep the directory's current permission bits; raw stat.mode includes
+    // file-type bits that fs-safe's final directory-mode check rejects.
+    const dirMode = (await fs.stat(path.dirname(params.filePath))).mode & 0o7777;
     // A copy fallback can truncate the source on failure. Keep the completed backup
     // and require rename without changing file or directory permissions.
     await replaceFileAtomic({
@@ -213,14 +221,23 @@ export async function noteSessionTranscriptHealth(params?: {
   sessionSqlite?: boolean;
   shouldRepair?: boolean;
   sessionDirs?: string[];
-}) {
+  postSessionPluginMigration?: PreparedPostSessionPluginMigration;
+  postSessionPluginMigrationPlanBound?: boolean;
+  onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
+}): Promise<LegacyStateMigrationStepReceipt | undefined> {
   if (params?.sessionDirs === undefined || params.sessionSqlite === true) {
-    await noteSessionSqliteMigrationHealth({
+    return await noteSessionSqliteMigrationHealth({
       cfg: params?.cfg,
       env: params?.env ?? process.env,
       shouldRepair: params?.shouldRepair === true,
+      ...(params?.postSessionPluginMigration
+        ? { postSessionPluginMigration: params.postSessionPluginMigration }
+        : {}),
+      ...(params?.postSessionPluginMigrationPlanBound
+        ? { postSessionPluginMigrationPlanBound: true }
+        : {}),
+      ...(params?.onStepReceipt ? { onStepReceipt: params.onStepReceipt } : {}),
     });
-    return;
   }
   const shouldRepair = params?.shouldRepair === true;
   let sessionDirs = params?.sessionDirs;
@@ -228,7 +245,7 @@ export async function noteSessionTranscriptHealth(params?: {
     sessionDirs ??= await resolveAgentSessionDirs(resolveStateDir(process.env));
   } catch (err) {
     note(`- Failed to inspect session transcripts: ${String(err)}`, "Session transcripts");
-    return;
+    return undefined;
   }
 
   const results: TranscriptRepairResult[] = [];
@@ -271,13 +288,17 @@ export async function noteSessionTranscriptHealth(params?: {
     }
     note(lines.join("\n"), "Session transcripts");
   }
+  return undefined;
 }
 
 async function noteSessionSqliteMigrationHealth(params: {
   cfg?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   shouldRepair: boolean;
-}): Promise<void> {
+  postSessionPluginMigration?: PreparedPostSessionPluginMigration;
+  postSessionPluginMigrationPlanBound?: boolean;
+  onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
+}): Promise<LegacyStateMigrationStepReceipt | undefined> {
   // Public doctor owns the operator-facing SQLite import; the targeted
   // --session-sqlite subcommand remains the diagnostic/proof surface.
   const { runDoctorSessionSqlite } = await import("./doctor-session-sqlite.js");
@@ -307,6 +328,18 @@ async function noteSessionSqliteMigrationHealth(params: {
         >
       >
     | undefined;
+  let postSessionPluginReceipt: LegacyStateMigrationStepReceipt | undefined;
+  const recordPostSessionRefusal = (refusal: { code: string; message: string }) => {
+    if (!params.postSessionPluginMigration || postSessionPluginReceipt) {
+      return postSessionPluginReceipt;
+    }
+    postSessionPluginReceipt = createLegacyStateMigrationStepReceipt(
+      { ...params.postSessionPluginMigration.step, refusal },
+      { changes: [], warnings: [refusal.message] },
+    );
+    params.onStepReceipt?.(postSessionPluginReceipt);
+    return postSessionPluginReceipt;
+  };
   const runSessionSqlite = async (maintenanceAuthority?: DoctorSqliteMaintenanceAuthority) => {
     const report = await runDoctorSessionSqlite({
       allAgents: true,
@@ -333,11 +366,46 @@ async function noteSessionSqliteMigrationHealth(params: {
     reservedKeyReport = repairReservedIncognitoSessionKeys(repairParams);
     deliveryReport = repairCanonicalSessionDeliveryStates(repairParams);
     repairLegacySessionExecPolicy(repairParams);
-    const pluginRepair = await runPostSessionPluginDoctorStateRepairs({
-      config: params.cfg ?? {},
-      env: params.env,
-      maintenanceAuthority,
-    });
+    if (params.postSessionPluginMigrationPlanBound && !params.postSessionPluginMigration) {
+      return report;
+    }
+    if (params.postSessionPluginMigration?.step.requiredness === "not-required") {
+      postSessionPluginReceipt = createLegacyStateMigrationStepReceipt(
+        params.postSessionPluginMigration.step,
+        { changes: [], warnings: [] },
+      );
+      params.onStepReceipt?.(postSessionPluginReceipt);
+      return report;
+    }
+    if (!params.shouldRepair && params.postSessionPluginMigration) {
+      recordPostSessionRefusal({
+        code: "repair-not-authorized",
+        message: "Post-session plugin repair was planned but Doctor repair was not authorized.",
+      });
+      return report;
+    }
+    let pluginRepair: MigrationMessages;
+    let receiptStep = params.postSessionPluginMigration?.step;
+    try {
+      pluginRepair = await runPostSessionPluginDoctorStateRepairs({
+        config: params.cfg ?? {},
+        env: params.env,
+        maintenanceAuthority,
+        ...(params.postSessionPluginMigration
+          ? { plannedActions: params.postSessionPluginMigration.plannedActions }
+          : {}),
+      });
+    } catch (error) {
+      const message = `Plugin session repair failed before the planned step completed: ${String(error)}`;
+      pluginRepair = { changes: [], warnings: [message] };
+      if (receiptStep) {
+        receiptStep = { ...receiptStep, refusal: { code: "step-threw", message } };
+      }
+    }
+    if (receiptStep) {
+      postSessionPluginReceipt = createLegacyStateMigrationStepReceipt(receiptStep, pluginRepair);
+      params.onStepReceipt?.(postSessionPluginReceipt);
+    }
     const pluginMessages = [...pluginRepair.changes, ...pluginRepair.warnings];
     if (pluginMessages.length > 0) {
       note(pluginMessages.join("\n"), "Plugin session repair");
@@ -355,13 +423,21 @@ async function noteSessionSqliteMigrationHealth(params: {
       : await runSessionSqlite();
   } catch (error) {
     if (!(error instanceof DoctorSqliteMaintenanceLockUnavailableError)) {
+      recordPostSessionRefusal({
+        code: "blocked-by-session-repair-failure",
+        message: `Post-session plugin repair was blocked because prerequisite session repair failed: ${String(error)}`,
+      });
       throw error;
     }
     note(
       `- Skipped: Gateway or another SQLite maintenance command owns the state directory. Stop the Gateway, then run "${formatCliCommand("openclaw doctor --fix", params.env)}" for session-store maintenance.`,
       "Session SQLite",
     );
-    return;
+    recordPostSessionRefusal({
+      code: "sqlite-maintenance-unavailable",
+      message: "Session SQLite maintenance ownership was unavailable.",
+    });
+    return postSessionPluginReceipt;
   }
   if (reservedKeyReport.found > 0) {
     note(
@@ -412,7 +488,7 @@ async function noteSessionSqliteMigrationHealth(params: {
     report.totals.unreferencedJsonlFiles === 0 &&
     report.totals.issues === 0
   ) {
-    return;
+    return postSessionPluginReceipt;
   }
   const lines = [
     `- Legacy entries: ${report.totals.legacyEntries}; SQLite entries: ${report.totals.sqliteEntries}.`,
@@ -444,4 +520,5 @@ async function noteSessionSqliteMigrationHealth(params: {
     );
   }
   note(lines.join("\n"), "Session SQLite");
+  return postSessionPluginReceipt;
 }

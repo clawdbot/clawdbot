@@ -17,7 +17,7 @@ vi.mock("../config/io.js", () => ({
 }));
 
 vi.mock("./server-model-catalog.js", () => ({
-  loadGatewayModelCatalog: () => loadGatewayModelCatalogMock(),
+  loadGatewayModelCatalog: (...args: unknown[]) => loadGatewayModelCatalogMock(...args),
 }));
 
 import { resolveOpenAiCompatModelOverride } from "./http-utils.js";
@@ -30,6 +30,8 @@ describe("resolveOpenAiCompatModelOverride", () => {
   beforeEach(() => {
     loadConfigMock.mockReset().mockReturnValue({
       agents: {
+        ownership: "explicit",
+        list: [{ id: "main" }, { id: "beta" }],
         defaults: {
           model: { primary: "openai/gpt-5.4" },
           models: {
@@ -55,14 +57,14 @@ describe("resolveOpenAiCompatModelOverride", () => {
     });
   });
 
-  it("reads the prepared catalog without requesting a full refresh", async () => {
+  it.each(["main", "beta"])("reads the prepared catalog for selected agent %s", async (agentId) => {
     await expect(
       resolveOpenAiCompatModelOverride({
         req: createReq({ "x-openclaw-model": "openai/gpt-5.4" }),
-        agentId: "main",
+        agentId,
         model: "openclaw",
       }),
     ).resolves.toEqual({ modelOverride: "openai/gpt-5.4" });
-    expect(loadGatewayModelCatalogMock).toHaveBeenCalledExactlyOnceWith();
+    expect(loadGatewayModelCatalogMock).toHaveBeenCalledExactlyOnceWith({ agentId });
   });
 });

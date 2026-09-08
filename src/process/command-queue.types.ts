@@ -33,6 +33,8 @@ export type CommandQueueTaskDeadline =
   | { kind: "unlimited" };
 
 export type CommandQueueEnqueueOptions = {
+  /** Cancels queued admission; the task owns cancellation after it starts. */
+  abortSignal?: AbortSignal;
   /** Called only when this entry remains queued after immediate lane admission. */
   onQueued?: () => void;
   warnAfterMs?: number;

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -10,9 +11,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOfficialExternalProviderPluginIds } from "../plugins/official-external-plugin-catalog.js";
 import { isPubliclyKnownPluginId } from "../plugins/plugin-public-identity.js";
 import { listEnabledPluginRecords } from "../plugins/plugin-runtime-inventory.js";
-import { readConfigMachineState, writeConfigMachineState } from "../state/config-machine-state.js";
+import { updateConfigMachineState } from "../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { VERSION } from "../version.js";
 import { isTruthyEnvValue } from "./env.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
@@ -23,6 +26,7 @@ const TELEMETRY_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const TELEMETRY_FAILURE_BACKOFF_MS = 60 * 1000;
 const TELEMETRY_TIMEOUT_MS = 3000;
 const TELEMETRY_NOTE_MAX_LENGTH = 500;
+const TELEMETRY_PENDING_SUCCESS_LIMIT = 32;
 const SAFE_FEATURE_NAME = /^[a-z][a-z0-9_-]{0,63}$/;
 
 type TelemetrySurface = "gateway" | "cli";
@@ -36,6 +40,11 @@ type TelemetryState = {
   lastPingAt?: number;
   latestVersion?: string;
   note?: string;
+};
+
+type SuccessfulTelemetryState = TelemetryState & {
+  lastPingAt: number;
+  latestVersion: string;
 };
 
 type TelemetryPayload = {
@@ -74,6 +83,7 @@ const TelemetryResponseSchema = z.object({
 
 let lastFailedAttempt: { at: number; endpoint: string; stateDirectory?: string } | undefined;
 let inFlightUpdate: Promise<TelemetryUpdate | null> | undefined;
+const pendingSuccesses = new Map<string, SuccessfulTelemetryState>();
 
 /**
  * CI jobs are not installs. Left unchecked they outnumber operators by orders of
@@ -132,12 +142,44 @@ export function buildTelemetryUserAgent(surface: TelemetrySurface): string {
   return `openclaw/${VERSION} (${process.platform}; node/${process.versions.node}; ${process.arch}; ${surface})`;
 }
 
-function readTelemetryState(): TelemetryState {
+function readTelemetryState(databasePath?: string): TelemetryState {
   try {
-    const state = readConfigMachineState<TelemetryState>(TELEMETRY_STATE_KEY);
+    const state = readConfigMachineState<TelemetryState>(TELEMETRY_STATE_KEY, {
+      path: databasePath,
+    });
     return state && isRecord(state) ? state : {};
   } catch {
     return {};
+  }
+}
+
+function persistTelemetrySuccess(
+  key: string,
+  state: SuccessfulTelemetryState,
+  databasePath: string,
+): SuccessfulTelemetryState {
+  try {
+    const persisted = updateConfigMachineState<SuccessfulTelemetryState>(
+      TELEMETRY_STATE_KEY,
+      (current) =>
+        current?.lastPingAt !== undefined && current.lastPingAt >= state.lastPingAt
+          ? current
+          : state,
+      { path: databasePath },
+    );
+    pendingSuccesses.delete(key);
+    return persisted;
+  } catch {
+    // A failed local write must not discard an accepted response or trigger another daily report.
+    pendingSuccesses.delete(key);
+    pendingSuccesses.set(key, state);
+    if (pendingSuccesses.size > TELEMETRY_PENDING_SUCCESS_LIMIT) {
+      const oldestKey = pendingSuccesses.keys().next().value;
+      if (oldestKey !== undefined) {
+        pendingSuccesses.delete(oldestKey);
+      }
+    }
+    return state;
   }
 }
 
@@ -236,12 +278,22 @@ export async function checkTelemetryUpdate(
     return null;
   }
 
-  const state = readTelemetryState();
+  const endpoint = resolveTelemetryEndpoint();
+  const databasePath = path.resolve(resolveOpenClawStateSqlitePath());
+  const pendingKey = JSON.stringify([endpoint, databasePath]);
+  let state = readTelemetryState(databasePath);
+  const pending = pendingSuccesses.get(pendingKey);
+  if (pending) {
+    if (state.lastPingAt === undefined || pending.lastPingAt > state.lastPingAt) {
+      state = persistTelemetrySuccess(pendingKey, pending, databasePath);
+    } else {
+      pendingSuccesses.delete(pendingKey);
+    }
+  }
   const cached = state.latestVersion
     ? { version: state.latestVersion, ...(state.note ? { note: state.note } : {}) }
     : null;
   const nowMs = options.nowMs ?? Date.now();
-  const endpoint = resolveTelemetryEndpoint();
   const stateDirectory = process.env.OPENCLAW_STATE_DIR;
   if (
     state.lastPingAt !== undefined &&
@@ -294,13 +346,20 @@ export async function checkTelemetryUpdate(
         version: parsed.version,
         ...(note ? { note } : {}),
       };
-      writeConfigMachineState(TELEMETRY_STATE_KEY, {
-        lastPingAt: nowMs,
-        latestVersion: update.version,
-        ...(update.note ? { note: update.note } : {}),
-      });
+      const persisted = persistTelemetrySuccess(
+        pendingKey,
+        {
+          lastPingAt: nowMs,
+          latestVersion: update.version,
+          ...(update.note ? { note: update.note } : {}),
+        },
+        databasePath,
+      );
       lastFailedAttempt = undefined;
-      return update;
+      return {
+        version: persisted.latestVersion,
+        ...(persisted.note ? { note: persisted.note } : {}),
+      };
     } catch {
       lastFailedAttempt = { at: nowMs, endpoint, stateDirectory };
       return cached;

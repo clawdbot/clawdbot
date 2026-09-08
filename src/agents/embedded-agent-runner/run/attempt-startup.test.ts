@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { prepareEmbeddedSkills } from "../skill-runtime.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -38,9 +39,7 @@ vi.mock("../sandbox-skills.js", () => ({
   mapSandboxSkillUsagePaths: vi.fn(() => []),
 }));
 
-import { prepareEmbeddedAttemptSkills } from "./attempt-setup.js";
-
-describe("prepareEmbeddedAttemptSkills", () => {
+describe("prepareEmbeddedSkills", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -53,7 +52,8 @@ describe("prepareEmbeddedAttemptSkills", () => {
     });
 
     expect(() =>
-      prepareEmbeddedAttemptSkills({
+      prepareEmbeddedSkills({
+        includeCodeModeSkills: true,
         attempt: { config: {} } as EmbeddedRunAttemptParams,
         effectiveWorkspace: "/tmp/workspace",
         sandbox: null,
@@ -64,7 +64,8 @@ describe("prepareEmbeddedAttemptSkills", () => {
   });
 
   it("does not load skills or apply their environment during settled finalization", () => {
-    const prepared = prepareEmbeddedAttemptSkills({
+    const prepared = prepareEmbeddedSkills({
+      includeCodeModeSkills: true,
       attempt: { operation: "settled-tool-finalization" } as EmbeddedRunAttemptParams,
       effectiveWorkspace: "/tmp/workspace",
       sandbox: null,

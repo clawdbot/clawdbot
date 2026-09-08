@@ -60,6 +60,8 @@ export async function handleBrowserGatewayRequest({
   params,
   respond,
   context,
+  client,
+  hasCurrentClientAuthority,
 }: Parameters<GatewayRequestHandlers["browser.request"]>[0]) {
   const typed = params as BrowserRequestParams;
   const methodRaw = (normalizeOptionalString(typed.method) ?? "").toUpperCase();
@@ -132,6 +134,19 @@ export async function handleBrowserGatewayRequest({
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
       return;
     }
+  }
+
+  if (nodeTarget && path === "/screencast") {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "browser screencast is not available over a node proxy",
+        { details: { code: "SCREENCAST_UNSUPPORTED", reason: "node" } },
+      ),
+    );
+    return;
   }
 
   if (nodeTarget && isPersistentBrowserProfileMutation(methodRaw, path)) {
@@ -276,6 +291,19 @@ export async function handleBrowserGatewayRequest({
     return;
   }
 
+  // Invalidation precedes the socket's close event; retain live authority separately.
+  const requesterSignal = client?.connectionSignal;
+  const requester =
+    client && requesterSignal
+      ? {
+          connId: client.connId,
+          signal: requesterSignal,
+          isCurrent: () =>
+            client.invalidated !== true &&
+            !requesterSignal.aborted &&
+            hasCurrentClientAuthority?.() !== false,
+        }
+      : undefined;
   let result;
   try {
     result = timeoutMs
@@ -287,6 +315,7 @@ export async function handleBrowserGatewayRequest({
               query,
               body,
               signal,
+              ...(requester ? { requester } : {}),
             }),
           timeoutMs,
           "browser request",
@@ -296,6 +325,7 @@ export async function handleBrowserGatewayRequest({
           path,
           query,
           body,
+          ...(requester ? { requester } : {}),
         });
   } catch (err) {
     respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));

@@ -577,47 +577,80 @@ test.each([
   },
 );
 
-test("sessions.compaction.branch rejects model-selection-locked session identities", async () => {
-  const { dir, storePath } = await createSessionStoreDir();
-  const fixture = await createCheckpointFixture(dir, { legacyPreCompactionSnapshot: false });
-  const checkpointEntry = compactionCheckpointEntry(fixture, {
-    checkpointId: "checkpoint-locked-branch",
-    sessionKey: "agent:main:main",
-    createdAt: Date.now(),
-    reason: "manual",
-    summary: "locked checkpoint",
-  });
-  await seedSessionEntry({
-    entry: sessionStoreEntry(fixture.sessionId, {
-      sessionFile: fixture.sessionFile,
-      compactionCheckpoints: [checkpointEntry],
-      modelSelectionLocked: true,
-    }),
-    sessionKey: "agent:main:main",
-    storePath,
-  });
-  const { ws } = await openClient();
-  try {
-    await expect(
-      rpcReq(ws, "sessions.compaction.branch", {
-        key: "main",
-        checkpointId: "checkpoint-locked-branch",
+test.each(["branch", "restore"] as const)(
+  "sessions.compaction.%s preserves rejection messages and leaves the source unchanged",
+  async (action) => {
+    const { storePath } = await createSessionStoreDir();
+    const source = { sessionKey: "agent:main:main", storePath };
+    await seedSessionEntry({ ...source, entry: sessionStoreEntry("sess-checkpoint-invalid") });
+    const before = loadSessionEntry(source);
+    const { ws } = await openClient();
+    try {
+      for (const [params, message] of [
+        [{ key: " ", checkpointId: "checkpoint-1" }, "key required"],
+        [{ key: "main", checkpointId: " " }, "checkpointId required"],
+        [
+          { key: "agent:main:missing", checkpointId: "checkpoint-1" },
+          "session not found: agent:main:missing",
+        ],
+        [{ key: "main", checkpointId: "missing" }, "checkpoint not found: missing"],
+      ] as const) {
+        await expect(rpcReq(ws, `sessions.compaction.${action}`, params)).resolves.toMatchObject({
+          ok: false,
+          error: { code: "INVALID_REQUEST", message },
+        });
+        expect(loadSessionEntry(source)).toEqual(before);
+      }
+    } finally {
+      ws.close();
+    }
+  },
+);
+
+test.each(["branch", "restore"] as const)(
+  "sessions.compaction.%s rejects model-selection-locked session identities",
+  async (action) => {
+    const { dir, storePath } = await createSessionStoreDir();
+    const fixture = await createCheckpointFixture(dir, { legacyPreCompactionSnapshot: false });
+    const checkpointEntry = compactionCheckpointEntry(fixture, {
+      checkpointId: "checkpoint-locked-branch",
+      sessionKey: "agent:main:main",
+      createdAt: Date.now(),
+      reason: "manual",
+      summary: "locked checkpoint",
+    });
+    await seedSessionEntry({
+      entry: sessionStoreEntry(fixture.sessionId, {
+        sessionFile: fixture.sessionFile,
+        compactionCheckpoints: [checkpointEntry],
+        modelSelectionLocked: true,
       }),
-    ).resolves.toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "Checkpoint branch and restore are unavailable while model selection is locked.",
-      },
+      sessionKey: "agent:main:main",
+      storePath,
     });
-    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
-      modelSelectionLocked: true,
-      sessionId: fixture.sessionId,
-    });
-  } finally {
-    ws.close();
-  }
-});
+    const { ws } = await openClient();
+    try {
+      await expect(
+        rpcReq(ws, `sessions.compaction.${action}`, {
+          key: "main",
+          checkpointId: "checkpoint-locked-branch",
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "Checkpoint branch and restore are unavailable while model selection is locked.",
+        },
+      });
+      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+        modelSelectionLocked: true,
+        sessionId: fixture.sessionId,
+      });
+    } finally {
+      ws.close();
+    }
+  },
+);
 
 test("sessions.compaction list/get scopes selected global checkpoints to the requested agent", async () => {
   const { mainStorePath, storeTemplate, workStorePath } = await createSelectedGlobalSessionStore();
@@ -709,6 +742,11 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
         "codex-cli": { sessionId: "codex-session" },
       },
       claudeCliSessionId: "claude-session",
+      inputTokens: 60,
+      outputTokens: 10,
+      cacheRead: 40,
+      cacheWrite: 10,
+      estimatedCostUsd: 0.02,
       contextBudgetStatus: {
         schemaVersion: 1,
         source: "pre-prompt-estimate",
@@ -929,6 +967,11 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
         cliSessionBindings?: unknown;
         cliSessionIds?: unknown;
         claudeCliSessionId?: string;
+        inputTokens?: number;
+        outputTokens?: number;
+        cacheRead?: number;
+        cacheWrite?: number;
+        estimatedCostUsd?: number;
         contextBudgetStatus?: unknown;
         totalTokens?: number;
         totalTokensFresh?: boolean;
@@ -939,6 +982,11 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   expect(storedEntry?.cliSessionBindings).toBeUndefined();
   expect(storedEntry?.cliSessionIds).toBeUndefined();
   expect(storedEntry?.claudeCliSessionId).toBeUndefined();
+  expect(storedEntry?.inputTokens).toBeUndefined();
+  expect(storedEntry?.outputTokens).toBeUndefined();
+  expect(storedEntry?.cacheRead).toBeUndefined();
+  expect(storedEntry?.cacheWrite).toBeUndefined();
+  expect(storedEntry?.estimatedCostUsd).toBeUndefined();
   expect(storedEntry?.contextBudgetStatus).toBeUndefined();
   expect(storedEntry?.totalTokens).toBe(80);
   expect(storedEntry?.totalTokensFresh).toBe(true);

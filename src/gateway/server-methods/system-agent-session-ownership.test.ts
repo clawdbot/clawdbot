@@ -254,7 +254,11 @@ describe("openclaw.chat session ownership", () => {
   it("preserves the live session and pending approval when reset persistence fails", async () => {
     const engine = makeEngine();
     const session = seededSession({ engine });
-    session.pendingApproval = { id: "approval-1", proposalHash: "proposal-1" };
+    session.pendingApproval = {
+      id: "approval-1",
+      proposalHash: "proposal-1",
+      completion: Promise.resolve({ text: "Denied", action: "none" }),
+    };
     const sessions = new Map<string, SystemAgentChatSession>([["owned-session", session]]);
     const expire = vi.fn();
     const context = {
@@ -274,6 +278,7 @@ describe("openclaw.chat session ownership", () => {
     expect(session.pendingApproval).toEqual({
       id: "approval-1",
       proposalHash: "proposal-1",
+      completion: expect.any(Promise),
     });
     expect(expire).not.toHaveBeenCalled();
     expect(engine.dispose).not.toHaveBeenCalled();

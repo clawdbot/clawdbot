@@ -15,6 +15,7 @@ export function buildPluginCatalogMock() {
     installed: boolean;
     enabled?: boolean;
     featured?: boolean;
+    hasIcon?: boolean;
     install?: { source: "official"; pluginId: string };
   }) => ({
     id: params.id,
@@ -28,17 +29,28 @@ export function buildPluginCatalogMock() {
     category: params.category,
     featured: params.featured ?? false,
     removable: params.installed && params.origin !== "bundled",
+    ...(params.hasIcon ? { hasIcon: true } : {}),
     ...(params.install ? { install: params.install } : {}),
   });
   return {
     plugins: [
       entry({
-        id: "telegram",
-        name: "Telegram",
-        description: "Chat with your agent from Telegram DMs and groups.",
+        id: "whatsapp",
+        name: "WhatsApp",
+        description: "OpenClaw WhatsApp channel plugin for WhatsApp Web chats.",
         category: "channel",
         origin: "bundled",
         installed: true,
+        hasIcon: true,
+      }),
+      entry({
+        id: "telegram",
+        name: "Telegram",
+        description: "OpenClaw Telegram channel plugin.",
+        category: "channel",
+        origin: "bundled",
+        installed: true,
+        hasIcon: true,
       }),
       entry({
         id: "discord",
@@ -48,6 +60,52 @@ export function buildPluginCatalogMock() {
         origin: "global",
         installed: true,
         enabled: false,
+        hasIcon: true,
+      }),
+      entry({
+        id: "googlechat",
+        name: "Google Chat",
+        description: "OpenClaw Google Chat channel plugin for spaces and direct messages.",
+        category: "channel",
+        origin: "bundled",
+        installed: true,
+        hasIcon: true,
+      }),
+      entry({
+        id: "slack",
+        name: "Slack",
+        description: "OpenClaw Slack channel plugin for channels, DMs, commands, and app events.",
+        category: "channel",
+        origin: "bundled",
+        installed: true,
+        hasIcon: true,
+      }),
+      entry({
+        id: "signal",
+        name: "Signal",
+        description: "OpenClaw Signal channel plugin.",
+        category: "channel",
+        origin: "bundled",
+        installed: true,
+        hasIcon: true,
+      }),
+      entry({
+        id: "imessage",
+        name: "iMessage",
+        description: "OpenClaw iMessage channel plugin using imsg on a signed-in Mac.",
+        category: "channel",
+        origin: "bundled",
+        installed: true,
+        hasIcon: true,
+      }),
+      entry({
+        id: "nostr",
+        name: "Nostr",
+        description: "OpenClaw Nostr channel plugin for NIP-04 encrypted direct messages.",
+        category: "channel",
+        origin: "bundled",
+        installed: true,
+        hasIcon: true,
       }),
       entry({
         id: "memory-wiki",
@@ -104,6 +162,7 @@ export function buildPluginInspectMock() {
       trust?: PluginsInspectResult["trust"];
     }
   >([
+    ["whatsapp", { source: { kind: "bundled" }, declared: { channels: ["whatsapp"] } }],
     [
       "telegram",
       {
@@ -111,6 +170,11 @@ export function buildPluginInspectMock() {
         declared: { channels: ["telegram"], cliCommands: ["telegram"] },
       },
     ],
+    ["googlechat", { source: { kind: "bundled" }, declared: { channels: ["googlechat"] } }],
+    ["slack", { source: { kind: "bundled" }, declared: { channels: ["slack"] } }],
+    ["signal", { source: { kind: "bundled" }, declared: { channels: ["signal"] } }],
+    ["imessage", { source: { kind: "bundled" }, declared: { channels: ["imessage"] } }],
+    ["nostr", { source: { kind: "bundled" }, declared: { channels: ["nostr"] } }],
     [
       "discord",
       {

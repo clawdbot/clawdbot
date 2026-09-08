@@ -12,6 +12,7 @@ export function createEmbeddedRunHandle(
     isStopped?: () => boolean;
     messageInjection?: RunHandle["messageInjection"];
     runId?: string;
+    toolAuthorityFingerprint?: string;
     queueMessage?: RunHandle["queueMessage"];
     supportsQueueMessageImages?: boolean;
     supportsTranscriptCommitWait?: boolean;
@@ -22,6 +23,7 @@ export function createEmbeddedRunHandle(
   const abort = overrides.abort ?? (() => {});
   return {
     runId: overrides.runId,
+    toolAuthorityFingerprint: overrides.toolAuthorityFingerprint,
     queueMessage: overrides.queueMessage ?? (async () => {}),
     ...(overrides.messageInjection ? { messageInjection: overrides.messageInjection } : {}),
     isStreaming: () => overrides.isStreaming ?? true,

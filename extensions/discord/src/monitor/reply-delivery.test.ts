@@ -8,15 +8,13 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RequestClient } from "../internal/discord.js";
 
 const sendDurableMessageBatchMock = vi.hoisted(() =>
-  vi.fn(
-    async (): Promise<unknown> => ({
-      status: "sent" as const,
+  vi.fn(async (): Promise<unknown> => ({
+    status: "sent" as const,
+    results: [{ messageId: "msg-1", channelId: "channel-1" }],
+    receipt: createMessageReceiptFromOutboundResults({
       results: [{ messageId: "msg-1", channelId: "channel-1" }],
-      receipt: createMessageReceiptFromOutboundResults({
-        results: [{ messageId: "msg-1", channelId: "channel-1" }],
-      }),
     }),
-  ),
+  })),
 );
 const sendMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendVoiceMessageDiscordMock = vi.hoisted(() => vi.fn());

@@ -3,9 +3,9 @@ import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identit
 import { sha256Hex } from "../infra/crypto-digest.js";
 import {
   deleteConfigMachineState,
-  readConfigMachineState,
   updateConfigMachineState,
-} from "./config-machine-state.js";
+} from "./config-machine-state-write.js";
+import { readConfigMachineState } from "./config-machine-state.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 
 const OnboardingRecommendationMatchSchema = z.object({

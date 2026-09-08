@@ -3,7 +3,7 @@ import type {
   QueueMode,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import {
   isUiGlobalSessionKey,
   normalizeAgentId,
@@ -17,6 +17,7 @@ export async function requestChatSend(
   state: ChatState,
   params: {
     message: string;
+    mentions?: readonly HumanMention[];
     attachments?: ChatAttachment[];
     runId: string;
     sessionKey?: string;
@@ -29,7 +30,7 @@ export async function requestChatSend(
   },
 ): Promise<ChatSendAck> {
   const routing = resolveChatSendRouting(state, params);
-  const sessionId = params.intent ? params.sessionId : routing.sessionId;
+  const sessionId = params.sessionId ?? (params.intent ? undefined : routing.sessionId);
   const controlUiReconnectResume = Boolean(
     !params.intent && sessionId && state.reconnectResumeSessionId === sessionId,
   );
@@ -41,6 +42,7 @@ export async function requestChatSend(
     ...(sessionId ? { sessionId } : {}),
     ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
     message: params.message,
+    ...(params.mentions?.length ? { mentions: params.mentions } : {}),
     ...(params.intent ? { intent: params.intent } : {}),
     deliver: false,
     ...(params.replyToId ? { replyToId: params.replyToId } : {}),

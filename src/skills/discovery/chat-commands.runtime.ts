@@ -1,6 +1,7 @@
 // Runtime facade for chat command discovery without importing the full discovery module.
 export {
   expandExplicitSkillReferences,
+  findBundledSkillCommandForWorkspace,
   hasSkillReferenceCandidate,
   listSkillCommandsForAgents,
   listSkillCommandsForWorkspace,

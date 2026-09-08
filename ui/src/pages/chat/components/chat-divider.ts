@@ -22,27 +22,31 @@ function renderSystemLine(params: {
     >
       <span class="chat-divider__line"></span>
       <span class="chat-divider__label">
-        ${params.compaction
-          ? html`<span class="chat-compaction__glyph" aria-hidden="true">
-              <span class="chat-compaction__line"></span>
-              <span class="chat-compaction__line"></span>
-              <span class="chat-compaction__line"></span>
-              <span class="chat-compaction__line"></span>
-              <span class="chat-compaction__line"></span>
-              ${icons.check}
-            </span>`
-          : params.icon
-            ? html`<span class="chat-divider__icon" aria-hidden="true"
-                >${toolIcons[params.icon]}</span
-              >`
-            : nothing}
+        ${
+          params.compaction
+            ? html`<span class="chat-compaction__glyph" aria-hidden="true">
+                <span class="chat-compaction__line"></span>
+                <span class="chat-compaction__line"></span>
+                <span class="chat-compaction__line"></span>
+                <span class="chat-compaction__line"></span>
+                <span class="chat-compaction__line"></span>
+                ${icons.check}
+              </span>`
+            : params.icon
+              ? html`<span class="chat-divider__icon" aria-hidden="true"
+                  >${toolIcons[params.icon]}</span
+                >`
+              : nothing
+        }
         <span class="chat-divider__title">${params.label}</span>
-        ${params.metric
-          ? html`
-              <span class="chat-divider__separator" aria-hidden="true">·</span>
-              <span class="chat-divider__metric">${params.metric}</span>
-            `
-          : nothing}
+        ${
+          params.metric
+            ? html`
+                <span class="chat-divider__separator" aria-hidden="true">·</span>
+                <span class="chat-divider__metric">${params.metric}</span>
+              `
+            : nothing
+        }
       </span>
       <span class="chat-divider__line"></span>
     </div>
@@ -59,36 +63,46 @@ export function renderChatDivider(
       : undefined;
   return html`
     <div
-      class="chat-divider ${item.compaction
-        ? `chat-compaction chat-compaction--${item.compaction}`
-        : ""}"
+      class="chat-divider ${
+        item.compaction ? `chat-compaction chat-compaction--${item.compaction}` : ""
+      }"
       data-chat-row-key=${item.key}
       data-ts=${String(item.timestamp)}
     >
       ${renderSystemLine(item)}
-      ${item.description || action
-        ? html`
-            <div class="chat-divider__details">
-              ${item.description
-                ? html`<span class="chat-divider__description">${item.description}</span>`
-                : nothing}
-              ${item.description && action
-                ? html`<span class="chat-divider__details-separator" aria-hidden="true">·</span>`
-                : nothing}
-              ${action
-                ? html`
-                    <button
-                      type="button"
-                      class="chat-divider__action"
-                      @click=${() => onOpenSessionCheckpoints?.()}
-                    >
-                      ${action.label}
-                    </button>
-                  `
-                : nothing}
-            </div>
-          `
-        : nothing}
+      ${
+        item.description || action
+          ? html`
+              <div class="chat-divider__details">
+                ${
+                  item.description
+                    ? html`<span class="chat-divider__description">${item.description}</span>`
+                    : nothing
+                }
+                ${
+                  item.description && action
+                    ? html`<span class="chat-divider__details-separator" aria-hidden="true"
+                        >·</span
+                      >`
+                    : nothing
+                }
+                ${
+                  action
+                    ? html`
+                        <button
+                          type="button"
+                          class="chat-divider__action"
+                          @click=${() => onOpenSessionCheckpoints?.()}
+                        >
+                          ${action.label}
+                        </button>
+                      `
+                    : nothing
+                }
+              </div>
+            `
+          : nothing
+      }
     </div>
   `;
 }
@@ -109,14 +123,16 @@ export function renderChatNotice(item: Extract<ChatItem, { kind: "notice" }>) {
       role=${item.tone === "danger" ? "alert" : nothing}
     >
       ${item.label ? renderSystemLine({ icon: item.icon, label: item.label }) : nothing}
-      ${item.collapsedBody && item.text
-        ? html`
-            <details class="chat-notice__collapse">
-              <summary class="chat-notice__toggle">${t("chat.systemNotice.showContent")}</summary>
-              ${body}
-            </details>
-          `
-        : body}
+      ${
+        item.collapsedBody && item.text
+          ? html`
+              <details class="chat-notice__collapse">
+                <summary class="chat-notice__toggle">${t("chat.systemNotice.showContent")}</summary>
+                ${body}
+              </details>
+            `
+          : body
+      }
     </div>
   `;
 }

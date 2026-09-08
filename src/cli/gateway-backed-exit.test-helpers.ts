@@ -18,6 +18,11 @@ import {
 
 const activeServers = new Set<WebSocketServer>();
 
+// Cached device credentials must not also claim shared auth and suppress human identity.
+type ExpectedGatewayAuth =
+  | { token: string; deviceToken?: never }
+  | { token?: never; deviceToken: string };
+
 export const EMPTY_STABILITY_SNAPSHOT = {
   capacity: 100,
   count: 0,
@@ -105,7 +110,7 @@ export async function startRateLimitedGateway(): Promise<{ url: string }> {
 }
 
 export async function startNodePairingGateway(
-  token: string,
+  expectedAuth: ExpectedGatewayAuth,
   issuedDeviceToken?: string,
 ): Promise<{
   calls: string[];
@@ -125,7 +130,7 @@ export async function startNodePairingGateway(
         return;
       }
       if (frame.method === "connect") {
-        expect(frame.params?.auth?.token).toBe(token);
+        expect(frame.params?.auth).toEqual(expectedAuth);
         sendMinimalGatewayResponse(
           ws,
           frame.id,
@@ -172,14 +177,14 @@ export async function startNodePairingGateway(
 }
 
 export async function startGatewayStabilityRpcServer(
-  token: string,
+  expectedAuth: ExpectedGatewayAuth,
   issuedDeviceToken: string,
 ): Promise<{
-  authTokens: Array<string | undefined>;
+  authInputs: unknown[];
   calls: string[];
   url: string;
 }> {
-  const authTokens: Array<string | undefined> = [];
+  const authInputs: unknown[] = [];
   const calls: string[] = [];
   const wss = new WebSocketServer({ host: "0.0.0.0", port: 0 });
   activeServers.add(wss);
@@ -191,8 +196,8 @@ export async function startGatewayStabilityRpcServer(
         return;
       }
       if (frame.method === "connect") {
-        expect(frame.params?.auth?.token).toBe(token);
-        authTokens.push(frame.params?.auth?.token);
+        expect(frame.params?.auth).toEqual(expectedAuth);
+        authInputs.push(frame.params?.auth);
         sendMinimalGatewayResponse(
           ws,
           frame.id,
@@ -234,7 +239,7 @@ export async function startGatewayStabilityRpcServer(
   if (!host) {
     throw new Error("test host has no non-loopback private IPv4 address");
   }
-  return { authTokens, calls, url: `ws://${host}:${address.port}` };
+  return { authInputs, calls, url: `ws://${host}:${address.port}` };
 }
 
 export async function startStateDirStatusGateway(target: {

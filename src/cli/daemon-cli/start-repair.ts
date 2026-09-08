@@ -197,11 +197,8 @@ export async function repairLoadedGatewayServiceForStart(
 
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,
-    configSnapshot,
-    configWriteOptions,
     env: installEnv,
-    autoGenerateWhenMissing: true,
-    persistGeneratedToken: true,
+    generateIfMissing: { snapshot: configSnapshot, writeOptions: configWriteOptions },
   });
   if (tokenResolution.unavailableReason) {
     throw new Error(tokenResolution.unavailableReason);
@@ -247,11 +244,9 @@ export async function repairLoadedGatewayServiceForStart(
     environmentValueSources,
   });
 
-  let loaded;
-  try {
-    loaded = await params.service.isLoaded({ env: installEnv });
-  } catch {
-    loaded = true;
+  const loaded = await params.service.isLoaded({ env: installEnv });
+  if (!loaded) {
+    throw new Error("Gateway service is not loaded after repair.");
   }
 
   return {

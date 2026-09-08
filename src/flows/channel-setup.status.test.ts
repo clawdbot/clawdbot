@@ -1,4 +1,5 @@
 // Channel setup status tests cover status text and docs link rendering.
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import {
@@ -83,17 +84,6 @@ import {
   resolveChannelSelectionNoteLines,
   resolveChannelSetupSelectionContributions,
 } from "./channel-setup.status.js";
-
-function requireFirstMockCall<const Calls extends readonly unknown[][]>(
-  calls: Calls,
-  label: string,
-): Calls[number] {
-  const call = calls.at(0);
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call as Calls[number];
-}
 
 describe("resolveChannelSetupSelectionContributions", () => {
   beforeEach(() => {
@@ -474,7 +464,10 @@ describe("resolveChannelSetupSelectionContributions", () => {
     );
 
     expect(formatChannelPrimerLine).toHaveBeenCalledOnce();
-    const [primerMeta] = requireFirstMockCall(formatChannelPrimerLine.mock.calls, "primer line");
+    const [primerMeta] = expectDefined(
+      formatChannelPrimerLine.mock.calls.at(0),
+      "primer line call",
+    );
     expect(primerMeta?.id).toBe("bad\\nid");
     expect(primerMeta?.label).toBe("bad\\nid");
     expect(primerMeta?.selectionLabel).toBe("bad\\nid");
@@ -549,9 +542,9 @@ describe("resolveChannelSetupSelectionContributions", () => {
     });
 
     expect(formatChannelSelectionLine).toHaveBeenCalledOnce();
-    const [selectionMeta, docsLink] = requireFirstMockCall(
-      formatChannelSelectionLine.mock.calls,
-      "selection line",
+    const [selectionMeta, docsLink] = expectDefined(
+      formatChannelSelectionLine.mock.calls.at(0),
+      "selection line call",
     );
     expect(selectionMeta?.label).toBe("Zalo\\nBot");
     expect(selectionMeta?.blurb).toBe("Setup\\nhelp");
@@ -594,9 +587,9 @@ describe("resolveChannelSetupSelectionContributions", () => {
       selection: ["custom-chat"],
     });
 
-    const [selectionMeta] = requireFirstMockCall(
-      formatChannelSelectionLine.mock.calls,
-      "selection line",
+    const [selectionMeta] = expectDefined(
+      formatChannelSelectionLine.mock.calls.at(0),
+      "selection line call",
     );
     expect(selectionMeta?.selectionDocsPrefix).toBe(expected);
   });

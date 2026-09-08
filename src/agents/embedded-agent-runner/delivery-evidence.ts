@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
+import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../delivery-evidence-values.js";
 /**
  * Extracts visible delivery evidence from embedded-agent run results.
  */
@@ -35,8 +36,12 @@ export type AgentDeliveryEvidence = {
   /** Durable recovery evidence sets this when its bounded target projection omitted entries. */
   messagingToolSentTargetsTruncated?: unknown;
   acceptedSessionSpawns?: unknown;
+  requesterContinuationSettled?: unknown;
   successfulCronAdds?: unknown;
   meta?: {
+    yielded?: unknown;
+    error?: unknown;
+    aborted?: unknown;
     toolSummary?: {
       calls?: unknown;
     };
@@ -111,10 +116,6 @@ export function hasCompletedTerminalDeliveryEvidence(
 
 function hasNonEmptyArray(value: unknown): boolean {
   return Array.isArray(value) && value.length > 0;
-}
-
-function hasNonEmptyStringArray(value: unknown): boolean {
-  return Array.isArray(value) && value.some(hasNonEmptyString);
 }
 
 function hasAcceptedSessionSpawnEvidence(value: unknown): boolean {

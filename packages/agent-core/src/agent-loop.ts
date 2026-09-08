@@ -1,19 +1,21 @@
 // Keep the runtime class on the public package specifier so OpenClaw and
 // external consumers share one constructor identity.
 import { EventStream as LlmEventStream } from "@openclaw/ai/event-stream";
-import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import type {
   AssistantMessage,
-  AssistantMessageEvent,
-  Context,
   EventStream,
   ToolResultMessage,
   EventStream as SourceEventStream,
 } from "@openclaw/llm-core";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  streamAgentResponse,
+  type AgentEventSink,
+  type AsyncToolBatchScheduling,
+  type ExecutedToolCallBatch,
+} from "./agent-stream-response.js";
 import { TranscriptNotContinuableError } from "./errors.js";
-import { uuidv7 } from "./harness/session/uuid.js";
 import {
   appendToolLoopWarning,
   copyInternalToolResultState,
@@ -24,7 +26,7 @@ import {
   type InternalToolBatchLifecycle,
 } from "./internal-hooks.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
-import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
+import type { AgentCoreStreamRuntimeDeps } from "./runtime-deps.js";
 import {
   type AgentToolExecutionContext,
   runWithAgentToolExecutionContext,
@@ -34,7 +36,6 @@ import {
   createFailureMessage,
   createInterruptedTurnMessage,
   isTurnHandoffAbort,
-  normalizeCoreContextMessages,
 } from "./turn-interruption.js";
 import type {
   ToolResultContentSource,
@@ -52,25 +53,9 @@ import type {
 import { validateToolArguments } from "./validation.js";
 
 /** Callback used by synchronous loop runners to publish agent lifecycle events. */
-export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
+export type { AgentEventSink } from "./agent-stream-response.js";
 
 const EventStreamConstructor: typeof SourceEventStream = LlmEventStream;
-
-type AssistantMessageUpdateEvent = Extract<
-  AssistantMessageEvent,
-  {
-    type:
-      | "text_start"
-      | "text_delta"
-      | "text_end"
-      | "thinking_start"
-      | "thinking_delta"
-      | "thinking_end"
-      | "toolcall_start"
-      | "toolcall_delta"
-      | "toolcall_end";
-  }
->;
 
 const TOOL_LOOP_RECOVERY_TERMINATED_MESSAGE =
   "OpenClaw stopped this run because tool-loop recovery encountered another critical loop. No blocked tool action was executed.";
@@ -89,51 +74,6 @@ function getSteeringAtCheckpoint(
     return [];
   }
   return getInternalSyncSteeringGetter(callback)?.() ?? callback.call(config);
-}
-
-function appendTextDeltaToAssistantMessage(
-  message: AssistantMessage,
-  contentIndex: number,
-  delta: string,
-): AssistantMessage {
-  const content = [...message.content];
-  const currentContent = content[contentIndex];
-  content[contentIndex] =
-    currentContent?.type === "text"
-      ? { ...currentContent, text: currentContent.text + delta }
-      : { type: "text", text: delta };
-  return { ...message, content };
-}
-
-function resolveAssistantMessageUpdate(
-  event: AssistantMessageUpdateEvent,
-  currentMessage: AssistantMessage,
-): AssistantMessage {
-  if ("partial" in event && event.partial) {
-    return event.partial;
-  }
-  if (event.type === "text_delta") {
-    return appendTextDeltaToAssistantMessage(currentMessage, event.contentIndex, event.delta);
-  }
-  return currentMessage;
-}
-
-function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessage {
-  if (message.stopReason === "toolUse") {
-    return message;
-  }
-  const content = message.content.filter((item) => item.type !== "toolCall");
-  return content.length === message.content.length
-    ? message
-    : replaceCompactionReplayOwnerContent(message, content);
-}
-
-function ensureToolTurnIdentity(message: AssistantMessage): AssistantMessage {
-  if (message.stopReason !== "toolUse" || message.responseId?.trim() || message.turnId?.trim()) {
-    return message;
-  }
-  // message_end persists this local identity before any tool can execute.
-  return { ...message, turnId: uuidv7() };
 }
 
 /**
@@ -393,19 +333,50 @@ async function runLoop(
       }
 
       // Stream assistant response
-      const message = await streamAssistantResponse(
+      let streamedSteering: AgentMessage[] = [];
+      const streamedConfig: AgentLoopConfig = {
+        ...config,
+        getSteeringMessages: async () => {
+          if (streamedSteering.length === 0) {
+            streamedSteering = await getSteeringAtCheckpoint(config);
+          }
+          return streamedSteering;
+        },
+      };
+      const streamed = await streamAgentResponse(
         state.context,
         config,
         signal,
         emit,
+        newMessages,
+        async (assistantMessage, toolCalls, executionSignal, toolEmit, scheduling) => {
+          const batch = await executeToolCalls(
+            state.context,
+            assistantMessage,
+            streamedConfig,
+            executionSignal,
+            toolEmit,
+            toolLoopRecoveryState.criticalToolLoopSeen,
+            toolCalls,
+            scheduling,
+          );
+          if (batch.intervention) {
+            toolLoopRecoveryState.criticalToolLoopSeen = true;
+          }
+          return batch;
+        },
+        (message) => withAssistantTurnTaint(message, turnTainted),
         streamFn,
         runtime,
-        turnTainted,
       );
-      newMessages.push(message);
+      const { message } = streamed;
 
       if (message.stopReason === "error" || message.stopReason === "aborted") {
-        await emit({ type: "turn_end", message, toolResults: [] });
+        await emit({
+          type: "turn_end",
+          message,
+          toolResults: streamed.batches.flatMap((batch) => batch.messages),
+        });
         if (message.stopReason === "aborted" && signal?.aborted && !isTurnHandoffAbort(signal)) {
           await appendInterruptedTurnMessage(newMessages, emit);
         }
@@ -413,26 +384,45 @@ async function runLoop(
         return newMessages;
       }
 
-      // Only completed toolUse turns dispatch; length/stop can carry partial stream blocks.
-      const executedToolBatch =
-        message.stopReason === "toolUse" && message.content.some((c) => c.type === "toolCall")
+      const remainingToolCalls = message.content.filter(
+        (item): item is AgentToolCall =>
+          item.type === "toolCall" &&
+          !streamed.executedIds.has(item.id) &&
+          (message.stopReason === "toolUse" || item.async === true),
+      );
+      const terminalToolBatch =
+        remainingToolCalls.length > 0
           ? await executeToolCalls(
               state.context,
               message,
-              config,
+              streamedSteering.length > 0 ? streamedConfig : config,
               signal,
               emit,
               toolLoopRecoveryState.criticalToolLoopSeen,
+              remainingToolCalls,
             )
           : undefined;
+      const batches = [...streamed.batches, ...(terminalToolBatch ? [terminalToolBatch] : [])];
+      const executedToolBatch: ExecutedToolCallBatch | undefined = batches.length
+        ? {
+            messages: batches.flatMap((batch) => batch.messages),
+            steeringMessages: [...new Set(batches.flatMap((batch) => batch.steeringMessages))],
+            terminate: batches.every((batch) => batch.terminate),
+            terminateRun: batches.some((batch) => batch.terminateRun),
+            intervention: batches.find((batch) => batch.intervention)?.intervention,
+            fatal: batches.find((batch) => batch.fatal)?.fatal,
+          }
+        : undefined;
       const toolResults = executedToolBatch?.messages ?? [];
       turnTainted ||= toolResults.some(toolResultTaintsTurn);
-      hasMoreToolCalls = executedToolBatch !== undefined && !executedToolBatch.terminate;
+      hasMoreToolCalls =
+        streamed.continuationRequired ||
+        (executedToolBatch !== undefined && !executedToolBatch.terminate);
       pendingMessages = executedToolBatch?.steeringMessages ?? [];
       if (executedToolBatch?.intervention) {
         toolLoopRecoveryState.criticalToolLoopSeen = true;
       }
-      for (const result of toolResults) {
+      for (const result of terminalToolBatch?.messages ?? []) {
         state.context.messages.push(result);
         newMessages.push(result);
       }
@@ -530,110 +520,6 @@ async function runLoop(
 }
 
 /**
- * Stream an assistant response from the LLM.
- * This is where AgentMessage[] gets transformed to Message[] for the LLM.
- */
-async function streamAssistantResponse(
-  context: AgentContext,
-  config: AgentLoopConfig,
-  signal: AbortSignal | undefined,
-  emit: AgentEventSink,
-  streamFn?: StreamFn,
-  runtime?: AgentCoreStreamRuntimeDeps,
-  turnTainted = false,
-): Promise<AssistantMessage> {
-  // Apply context transform if configured (AgentMessage[] → AgentMessage[])
-  let messages = context.messages;
-  if (config.transformContext) {
-    messages = await config.transformContext(messages, signal);
-  }
-  messages = normalizeCoreContextMessages(messages);
-
-  // Convert to LLM-compatible messages (AgentMessage[] → Message[])
-  const llmMessages = await config.convertToLlm(messages);
-
-  // Build LLM context
-  const llmContext: Context = {
-    systemPrompt: context.systemPrompt,
-    messages: llmMessages,
-    tools: context.tools,
-  };
-
-  const streamFunction = resolveAgentCoreStreamFn(runtime, streamFn);
-
-  // Resolve API key (important for expiring tokens)
-  const resolvedApiKey =
-    (config.getApiKey ? await config.getApiKey(config.model.provider) : undefined) || config.apiKey;
-
-  const response = await streamFunction(config.model, llmContext, {
-    ...config,
-    apiKey: resolvedApiKey,
-    signal,
-  });
-
-  let partialMessage: AssistantMessage | null = null;
-  let addedPartial = false;
-
-  for await (const event of response) {
-    switch (event.type) {
-      case "start": {
-        const message = event.partial;
-        partialMessage = message;
-        context.messages.push(message);
-        addedPartial = true;
-        await emit({ type: "message_start", message: { ...message } });
-        break;
-      }
-
-      case "text_start":
-      case "text_delta":
-      case "text_end":
-      case "thinking_start":
-      case "thinking_delta":
-      case "thinking_end":
-      case "toolcall_start":
-      case "toolcall_delta":
-      case "toolcall_end":
-        if (partialMessage) {
-          const message = resolveAssistantMessageUpdate(event, partialMessage);
-          partialMessage = message;
-          context.messages[context.messages.length - 1] = message;
-          await emit({
-            type: "message_update",
-            assistantMessageEvent: event,
-            message: { ...message },
-          });
-        }
-        break;
-
-      case "done":
-      case "error":
-        return await finalizeAssistantMessage();
-    }
-  }
-
-  // Stream ended without a terminal event: result() either carries an explicit
-  // end(result) value or rejects with the EventStream terminal-contract error,
-  // so a contract-violating producer surfaces loudly instead of hanging here.
-  return await finalizeAssistantMessage();
-
-  async function finalizeAssistantMessage(): Promise<AssistantMessage> {
-    const finalMessage = withAssistantTurnTaint(
-      ensureToolTurnIdentity(removeNonExecutableToolCalls(await response.result())),
-      turnTainted,
-    );
-    if (addedPartial) {
-      context.messages[context.messages.length - 1] = finalMessage;
-    } else {
-      context.messages.push(finalMessage);
-      await emit({ type: "message_start", message: { ...finalMessage } });
-    }
-    await emit({ type: "message_end", message: finalMessage });
-    return finalMessage;
-  }
-}
-
-/**
  * Execute tool calls from an assistant message.
  */
 async function executeToolCalls(
@@ -643,8 +529,9 @@ async function executeToolCalls(
   signal: AbortSignal | undefined,
   emit: AgentEventSink,
   criticalToolLoopSeen: boolean,
+  toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall"),
+  scheduling?: AsyncToolBatchScheduling,
 ): Promise<ExecutedToolCallBatch> {
-  const toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
   const batch: ToolBatchContext = {
     currentContext,
     assistantMessage,
@@ -653,6 +540,7 @@ async function executeToolCalls(
     emit,
     resolved: new Map(),
     validated: new Map(),
+    onParallelStarted: scheduling?.onParallelStarted,
   };
   if (config.beforeToolBatch) {
     for (const toolCall of toolCalls) {
@@ -699,21 +587,12 @@ async function executeToolCalls(
       }
     }
   }
-  return executeToolCallGroups(
-    batch,
-    toolCalls,
-    config.toolExecution === "sequential" || hasSequentialToolCall,
-  );
+  const sequential = config.toolExecution === "sequential" || hasSequentialToolCall;
+  if (sequential && scheduling) {
+    await scheduling.waitForPrevious();
+  }
+  return executeToolCallGroups(batch, toolCalls, sequential);
 }
-
-type ExecutedToolCallBatch = {
-  messages: ToolResultMessage[];
-  steeringMessages: AgentMessage[];
-  terminate: boolean;
-  terminateRun: boolean;
-  intervention?: ToolLoopIntervention;
-  fatal?: { error: unknown };
-};
 
 type ToolBatchContext = {
   currentContext: AgentContext;
@@ -725,6 +604,7 @@ type ToolBatchContext = {
   validated: Map<AgentToolCall, ValidatedToolCallOutcome>;
   lifecycle?: InternalToolBatchLifecycle;
   warnings?: ToolLoopWarning[];
+  onParallelStarted?: () => void;
 };
 
 type ResolvedToolCallOutcome =
@@ -824,6 +704,11 @@ async function executeToolCallGroups(
         steeringMessages.length > 0 || (sequential && !hasReady)
           ? undefined
           : await launchParallelToolCalls(entries, batch.lifecycle);
+      // Streamed batches serialize admission until source execution begins.
+      // Parallel bodies may overlap; exclusive tools retain the gate until finalization.
+      if (!sequential && launched?.started.length && !launched.rejected) {
+        batch.onParallelStarted?.();
+      }
       for (const { index, entry, outcome } of launched?.completed ?? []) {
         await settle(index, entry, outcome);
       }
@@ -1299,7 +1184,7 @@ async function prepareToolCallExecution(
     return {
       kind: "immediate",
       outcome: {
-        result: createErrorToolResult(coerceErrorMessage(error)),
+        result: createToolExecutionErrorResult(error),
         isError: true,
         executionStarted: false,
       },
@@ -1352,7 +1237,7 @@ async function prepareToolCallExecution(
               throw implementationStartError.error;
             }
             return {
-              result: createErrorToolResult(coerceErrorMessage(error)),
+              result: createToolExecutionErrorResult(error),
               isError: true,
               executionStarted,
               ...(executionStarted && signal?.aborted && error === signal.reason
@@ -1413,7 +1298,7 @@ async function prepareToolCallExecution(
               executionStarted: false,
             }
           : {
-              result: createErrorToolResult(coerceErrorMessage(internalPreparation.outcome.error)),
+              result: createToolExecutionErrorResult(internalPreparation.outcome.error),
               isError: true,
               executionStarted: false,
             },
@@ -1663,6 +1548,13 @@ async function completeUnstartedToolCall(
   );
   await emitToolExecutionEnd(finalized, batch.emit);
   return finalized;
+}
+
+function createToolExecutionErrorResult(error: unknown): AgentToolResult<unknown> {
+  const result = createErrorToolResult(coerceErrorMessage(error));
+  return typeof error === "object" && error !== null
+    ? copyInternalToolResultState(error, result)
+    : result;
 }
 
 function createErrorToolResult(message: string, details: unknown = {}): AgentToolResult<unknown> {

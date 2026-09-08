@@ -35,13 +35,17 @@ The built-in `computer` tool takes one action per call. Coordinates are non-nega
 - Pointer: `left_click`, `right_click`, `middle_click`, `double_click`, `triple_click`, `mouse_move`, `left_click_drag` (with `startCoordinate`), `left_mouse_down`, `left_mouse_up`.
 - Scroll: `scroll` with `scrollDirection` (`up|down|left|right`) and `scrollAmount` (wheel ticks).
 - Keyboard: `type` (text), `key` (combo such as `cmd+shift+t` or `Return`), `hold_key` (`text` combo held for `duration` seconds).
-- Pacing: `wait` (`duration` seconds).
+- Pacing: `wait` (`duration` seconds), followed by a screenshot. This action runs locally and is available whenever the selected provider supports screenshots; it does not require a native wait command.
 
 Providers with the v2 window/element family can additionally expose `list_apps`, `list_windows`, `get_accessibility_tree`, `get_cursor_position`, `get_window_state`, `launch_app`, `kill_app`, `bring_to_front`, `set_value`, `zoom`, `escalate_scope`, and `invoke_menu`. The provider descriptor is authoritative; unavailable actions are omitted rather than emulated through another provider.
+
+Window input coordinates follow the observation's `details.coordinateSpace`. CUA reports `image-pixels`: use pixels in the delivered image, including when OpenClaw resized it. Peekaboo reports `global-logical-points`: use desktop logical points. Accessibility element bounds retain their native screen coordinates; prefer `elementRef` when targeting those elements. Browser coordinate inputs use viewport CSS pixels.
 
 The CUA provider also exposes the v2 browser family: `get_browser_state`, `browser_prepare`, `browser_navigate`, `browser_click`, `browser_type`, `browser_dialog`, `browser_set_input_files`, `browser_download`, and `browser_pointer`. Bind a discovered native browser window with `get_browser_state`, then use the returned opaque `browserRef`, `pageRef`, observation, and element references. These references belong to one Computer Use execution and driver generation; navigation invalidates page-element observations, and a driver restart invalidates the complete browser reference set.
 
 CUA additionally exposes `get_recording_state`, `start_recording`, `stop_recording`, and `replay_trajectory`. Recording and browser file operations use opaque `openclaw:computer-resource` handles. The node creates and validates the underlying files and directories; agent actions never accept native paths, output roots, or helper executable paths. Handles belong to one Computer Use execution and cannot be reused by another execution.
+
+On the macOS Peekaboo provider, screen-coordinate scrolling uses foreground wheel input at the requested coordinate or current pointer. Background scrolling requires a window and an element from its current observation; it never falls back to global wheel input.
 
 Modifier keys ride the `text` field on click and scroll actions (`shift`, `ctrl`, `alt`, `cmd`). After an input action the tool returns a fresh screenshot so the model can observe the result. When the screen is pixel-identical to the previous frame still in model context, the tool returns metadata only — "screen unchanged since previous frame" — and the previous `frameId` stays valid, so duplicate screenshots never re-enter model context. If more than one computer-capable node is connected, pass `node` explicitly.
 
@@ -81,6 +85,8 @@ Browser targets, pages, page elements, and dialogs are opaque capabilities. Reta
 
 The repository includes a development rig that preserves the real vertical path: agent-facing `computer` tool, Gateway `node.invoke`, paired node, and the selected node-local provider. It is deliberately isolated from the operator app and Gateway. The macOS path uses the signed app node; the Linux path uses the opt-in `cua-computer` plugin in a real X11 session.
 
+Both paths generate a fresh proof-only token in private config files: `gateway.auth.token` for the isolated Gateway and `gateway.remote.token` for the app or node. The Gateway launches with `--auth token --bind loopback`. The rig clears inherited Gateway credentials, URL/port overrides, and config/state/profile overrides so operator settings cannot replace the proof setup. Tokens never appear in emitted commands or `rig.json`; do not publish the generated configs or the whole scratch directory as proof.
+
 #### macOS
 
 Build a signed app from a clean, committed checkout, choose a fresh profile and non-default loopback port, and prepare the two config views:
@@ -93,7 +99,7 @@ scripts/dev/computer-use-macos-live-rig.sh prepare \
 
 Run the emitted `gateway` and `app` commands in separate terminals. The split config is intentional: the externally launched daemon reads a scratch config with `gateway.mode: "local"`, while the app profile reads `gateway.mode: "remote"`, direct transport, and the daemon's loopback URL. If the app reads local mode, its Port Guardian owns the route instead of joining the external daemon. The rig keeps its validated launch fields in non-executable `rig.json`; later commands reject unknown fields or paths that do not match the scratch/profile layout. It also seeds a dedicated `node` identity, completed onboarding, unpaused state, Computer Control, and the checkout path used to start the debug node worker. There is no separate node-mode toggle.
 
-In a third terminal, rerun the emitted `nodes` command until the paired entry is connected and advertises `computer.act` plus a `computerUse` descriptor. No operator-device approval step is involved: the loopback gateway silently pairs the rig's CLI identity on its first connect, and the proof runner is admitted as a local backend client without pairing at all. The rig keeps those two identities in separate state directories (`cli-state` and `agent-state`) because a paired operator device is pinned to the scopes of its first connect, and a CLI pairing would otherwise cap the proof client below `operator.write`.
+In a third terminal, rerun the emitted `nodes` command until the paired entry is connected and advertises `computer.act` plus a `computerUse` descriptor. No operator-device approval step is involved: the read-only CLI does not create an identity in fresh `cli-state`, and the proof token authenticates its loopback operator calls. The proof runner uses the same token as a local backend client in separate `agent-state`, retaining `operator.write`. Node device identity and pairing checks remain enabled; do not copy identities or disable device authentication to bootstrap the rig.
 
 If the node's command surface is still pending approval, take `.pending[0].requestId` from that `nodes` output and run `scripts/dev/computer-use-macos-live-rig.sh approve "$scratch" <request-id>`.
 
@@ -134,6 +140,8 @@ scripts/dev/computer-use-macos-live-rig.sh proof \
 ```
 
 The result and `window-before.png` / `window-after.png` stay under the scratch directory. A confirmed mutation must preserve the sentinel as the active X11 window and leave the pointer unchanged. An upstream `background_unavailable` or `background_occluded` result is valid refusal evidence only when it remains structured and no foreground retry is attempted. The rig rejects native Wayland even when `DISPLAY` is also present for XWayland; switch to X11 instead of claiming Wayland coverage.
+
+After either proof, stop only the Gateway, app/node, and fixture processes you launched for the rig. Retain only inspected proof results and synthetic captures, then remove the task-owned scratch directory. On macOS, also remove the fresh proof profile directory (`~/.openclaw-<profile>`) and its `ai.openclaw.mac.profile.<profile>` defaults domain. Never clean up the operator profile or Gateway.
 
 ### Windows and Linux (experimental, direct SDK)
 
@@ -242,6 +250,12 @@ On macOS, default-on means a paired gateway can drive pointer and keyboard input
 - CUA recording, replay, browser upload, and browser download paths are node-owned. The model receives only opaque execution-scoped resource handles; traversal, absolute paths, symlink escapes, and helper selection are rejected before driver dispatch.
 - Screenshots are model-only and never auto-sent to chat (issue [#44759](https://github.com/openclaw/openclaw/issues/44759)).
 - Treat screen content as untrusted; it can carry prompt injection.
+
+## Desktop stream troubleshooting
+
+For a disconnected web Desktop panel, check the [Gateway logs](/gateway/logging) for `desktop observer closed` and `node stream closed`, and the node logs for `node stream closed`. The records separate the first local cleanup `trigger` from the observed WebSocket `closeCode`; observer records also include the requested `cleanupCode`.
+
+A `closeCode` of `1006` alone does not identify a network or proxy failure: intentional owner teardown can produce it too. Compare the trigger and available source/connection identities across the Gateway and node. These records omit peer close-reason text, observer tokens, attach tickets, credentials, and desktop payloads.
 
 ## macOS permission troubleshooting
 

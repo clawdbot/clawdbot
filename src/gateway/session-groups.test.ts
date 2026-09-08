@@ -4,10 +4,14 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -42,10 +46,13 @@ describe("session groups catalog", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  async function seedSessionStore(entries: Record<string, SessionEntry>): Promise<string> {
-    const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
+  async function seedSessionStore(
+    entries: Record<string, SessionEntry>,
+    agentId = "main",
+  ): Promise<string> {
+    const storePath = path.join(root, "agents", agentId, "sessions", "sessions.json");
     for (const [sessionKey, entry] of Object.entries(entries)) {
-      await replaceSessionEntry({ agentId: "main", storePath, sessionKey }, entry);
+      await replaceSessionEntry({ agentId, storePath, sessionKey }, entry);
     }
     return storePath;
   }
@@ -340,6 +347,107 @@ describe("session groups catalog", () => {
     ).toBeUndefined();
   });
 
+  it.each(
+    [
+      { action: "rename", targetExists: false },
+      { action: "rename", targetExists: true },
+      { action: "delete", targetExists: false },
+    ].flatMap(({ action, targetExists }) =>
+      ["main", "other"].map((stopAgent) => ({ action, targetExists, stopAgent })),
+    ),
+  )(
+    "keeps group state coherent when $action stops in $stopAgent (target exists: $targetExists)",
+    async ({ action, targetExists, stopAgent }) => {
+      const groupCfg: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, other: {} },
+        },
+      };
+      putSessionGroups({
+        cfg: groupCfg,
+        names: targetExists ? ["Old", "New"] : ["Old"],
+        sectionOrder: ["category:Old", "work", ...(targetExists ? ["category:New"] : [])],
+        env,
+      });
+      updateSessionGroupDefaults("Old", { cwd: "/repos/old", worktree: true }, env);
+      if (targetExists) {
+        updateSessionGroupDefaults("New", { cwd: "/repos/new", worktree: false }, env);
+      }
+      const stores = new Map<string, string>();
+      for (const agentId of ["main", "other"]) {
+        stores.set(
+          agentId,
+          await seedSessionStore(
+            {
+              [`agent:${agentId}:dashboard:closing-caller`]: {
+                sessionId: `${agentId}-closing-caller`,
+                updatedAt: Date.now(),
+                category: "Old",
+              },
+            },
+            agentId,
+          ),
+        );
+      }
+      const category = (agentId: string) =>
+        loadSessionEntry({
+          agentId,
+          storePath: stores.get(agentId),
+          sessionKey: `agent:${agentId}:dashboard:closing-caller`,
+        })?.category;
+      let current = true;
+      const assertCurrent = () => {
+        if (!current) {
+          throw new Error("caller authority closed");
+        }
+      };
+      const params = {
+        cfg: groupCfg,
+        name: "Old",
+        env,
+        assertCurrent,
+        assertTargetCurrent: ({ agentId }: { agentId: string }) => {
+          assertCurrent();
+          if (agentId === stopAgent) {
+            queueMicrotask(() => {
+              current = false;
+            });
+          }
+        },
+      };
+      await expect(
+        action === "rename"
+          ? renameSessionGroup({ ...params, to: "New" })
+          : deleteSessionGroup(params),
+      ).rejects.toThrow("caller authority closed");
+      expect(category("main")).toBe(
+        stopAgent === "main" ? "Old" : action === "rename" ? "New" : undefined,
+      );
+      expect(category("other")).toBe("Old");
+      expect(listSessionGroups(env)).toContainEqual({ name: "Old", position: 0 });
+      expect(listSidebarSectionOrder(env)).toContain("category:Old");
+      if (action === "rename") {
+        expect(listSessionGroupDefaults(env)).toContainEqual({
+          name: "New",
+          cwd: targetExists ? "/repos/new" : "/repos/old",
+          worktree: !targetExists,
+        });
+      }
+      const retry = { cfg: groupCfg, name: "Old", env };
+      await (action === "rename"
+        ? renameSessionGroup({ ...retry, to: "New" })
+        : deleteSessionGroup(retry));
+      expect(category("main")).toBe(action === "rename" ? "New" : undefined);
+      expect(category("other")).toBe(action === "rename" ? "New" : undefined);
+      expect(listSessionGroups(env).map(({ name }) => name)).toEqual(
+        action === "rename" ? ["New"] : [],
+      );
+      expect(listSidebarSectionOrder(env)).not.toContain("category:Old");
+    },
+  );
+
   it("merges a rename into an existing target group", async () => {
     putSessionGroups({
       cfg,
@@ -354,6 +462,144 @@ describe("session groups catalog", () => {
     expect(result.groups).toEqual([{ name: "B", position: 1 }]);
     expect(result.sectionOrder).toEqual(["ungrouped", "category:B"]);
     expect(result.updatedSessions).toBe(1);
+  });
+
+  it("stops a rename if its empty destination is removed during member planning", async () => {
+    putSessionGroups({ cfg, names: ["Old"], env });
+    const sessionKey = "agent:main:dashboard:removed-destination";
+    const storePath = await seedSessionStore({
+      [sessionKey]: { sessionId: "removed-destination", updatedAt: Date.now(), category: "Old" },
+    });
+    let removed = false;
+    await expect(
+      renameSessionGroup({
+        cfg,
+        name: "Old",
+        to: "New",
+        env,
+        assertTargetCurrent: () => {
+          if (!removed) {
+            removed = true;
+            queueMicrotask(() => {
+              putSessionGroups({ cfg, names: ["Old"], env });
+            });
+          }
+        },
+      }),
+    ).rejects.toThrow(/New/);
+    expect(loadSessionEntry({ agentId: "main", storePath, sessionKey })?.category).toBe("Old");
+    expect(listSessionGroups(env)).toContainEqual({ name: "Old", position: 0 });
+  });
+
+  it("keeps absent-group deletion and same-name rename idempotent", async () => {
+    const sessionKey = "agent:main:dashboard:orphan-group";
+    const storePath = await seedSessionStore({
+      [sessionKey]: { sessionId: "orphan-group", updatedAt: Date.now(), category: "Missing" },
+    });
+    expect(await renameSessionGroup({ cfg, name: "Missing", to: "Missing", env })).toMatchObject({
+      groups: [],
+      updatedSessions: 0,
+    });
+    expect(await deleteSessionGroup({ cfg, name: "Missing", env })).toMatchObject({
+      groups: [],
+      updatedSessions: 1,
+    });
+    expect(loadSessionEntry({ agentId: "main", storePath, sessionKey })?.category).toBeUndefined();
+    expect(await deleteSessionGroup({ cfg, name: "Missing", env })).toMatchObject({
+      groups: [],
+      updatedSessions: 0,
+    });
+  });
+
+  it("retains source defaults changed while a rename moves its members", async () => {
+    putSessionGroups({ cfg, names: ["Old"], sectionOrder: ["category:Old"], env });
+    updateSessionGroupDefaults("Old", { cwd: "/repos/before", worktree: false }, env);
+    const sessionKey = "agent:main:dashboard:changed-group";
+    const storePath = await seedSessionStore({
+      [sessionKey]: { sessionId: "changed-group", updatedAt: Date.now(), category: "Old" },
+    });
+    await expect(
+      renameSessionGroup({
+        cfg,
+        name: "Old",
+        to: "New",
+        env,
+        assertTargetCurrent: () => {
+          updateSessionGroupDefaults("Old", { cwd: "/repos/after", worktree: true }, env);
+        },
+      }),
+    ).rejects.toThrow(/changed/);
+    expect(loadSessionEntry({ agentId: "main", storePath, sessionKey })?.category).toBe("New");
+    expect(listSessionGroupDefaults(env)).toEqual(
+      expect.arrayContaining([
+        { name: "Old", cwd: "/repos/after", worktree: true },
+        { name: "New", cwd: "/repos/before", worktree: false },
+      ]),
+    );
+    expect(listSidebarSectionOrder(env)).toContain("category:Old");
+  });
+
+  it("retains a group when a member is assigned after its store was swept", async () => {
+    const groupCfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, other: {} },
+      },
+    };
+    putSessionGroups({ cfg: groupCfg, names: ["Old"], sectionOrder: ["category:Old"], env });
+    const mainKey = "agent:main:dashboard:existing";
+    const lateKey = "agent:main:dashboard:late";
+    const mainStore = await seedSessionStore({
+      [mainKey]: { sessionId: "existing", updatedAt: Date.now(), category: "Old" },
+    });
+    await seedSessionStore(
+      {
+        "agent:other:dashboard:existing": {
+          sessionId: "other-existing",
+          updatedAt: Date.now(),
+          category: "Old",
+        },
+      },
+      "other",
+    );
+    let inserted = false;
+    await expect(
+      renameSessionGroup({
+        cfg: groupCfg,
+        name: "Old",
+        to: "New",
+        env,
+        assertTargetCurrent: ({ agentId }) => {
+          if (agentId !== "other" || inserted) {
+            return;
+          }
+          inserted = true;
+          expect(
+            loadSessionEntry({ agentId: "main", storePath: mainStore, sessionKey: mainKey })
+              ?.category,
+          ).toBe("New");
+          runOpenClawAgentWriteTransaction(
+            (database) => {
+              writeSessionEntry(database, lateKey, {
+                sessionId: "late",
+                updatedAt: Date.now(),
+                category: "Old",
+              });
+            },
+            { agentId: "main", env },
+          );
+        },
+      }),
+    ).rejects.toThrow("still has members");
+    expect(inserted).toBe(true);
+    expect(
+      loadSessionEntry({ agentId: "main", storePath: mainStore, sessionKey: lateKey })?.category,
+    ).toBe("Old");
+    expect(listSessionGroups(env).map(({ name }) => name)).toEqual(
+      expect.arrayContaining(["Old", "New"]),
+    );
+    expect(listSidebarSectionOrder(env)).toContain("category:Old");
   });
 
   it("keeps the source sidebar slot when the merge target has no stored slot", async () => {

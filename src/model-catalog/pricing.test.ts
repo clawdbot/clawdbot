@@ -23,10 +23,7 @@ import {
   resolveModelCostConfig,
   resolveModelCostConfigFingerprint,
 } from "../utils/usage-format.js";
-import {
-  resetRemoteModelCatalogOverlayForTest,
-  setRemoteModelCatalogOverlaySourcesForTest,
-} from "./remote-overlay.test-support.js";
+import { setRemoteModelCatalogOverlaySourcesForTest } from "./remote-overlay.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const readStoredCatalog = vi.fn();
@@ -34,7 +31,6 @@ const readStoredCatalog = vi.fn();
 beforeEach(() => {
   clearRuntimeConfigSnapshot();
   resetUsageFormatCachesForTest();
-  resetRemoteModelCatalogOverlayForTest();
   readStoredCatalog.mockReset().mockReturnValue({
     source_url: "https://catalog.openclaw.ai/models/v1/catalog.json",
     bundle_json: JSON.stringify({
@@ -104,7 +100,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   setRemoteModelCatalogOverlaySourcesForTest();
-  resetRemoteModelCatalogOverlayForTest();
 });
 
 function configFor(baseUrl: string): OpenClawConfig {
@@ -934,7 +929,6 @@ describe("hosted model pricing", () => {
       source_url: "https://catalog.openclaw.ai/models/v1/catalog.json",
       bundle_json: bundleJson,
     });
-    resetRemoteModelCatalogOverlayForTest();
 
     const fingerprint = resolveModelCostConfigFingerprint(configFor("https://api.openai.com/v1"));
     const withoutHostedPricing = configFor("https://api.openai.com/v1");

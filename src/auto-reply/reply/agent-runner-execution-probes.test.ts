@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { FailoverError } from "../../agents/failover-error.js";
+import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
 import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -21,6 +21,7 @@ import type {
   FallbackRunnerParams,
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 
 const state = await setupAgentRunnerExecutionTestState();
 
@@ -555,6 +556,7 @@ describe("executeAgentTurn: primary probe routing", () => {
     followupRun.run.provider = "codex-cli";
     followupRun.run.model = "gpt-5.4";
     const { replyOperation, failMock, retainFailureUntilCompleteMock } = createMockReplyOperation();
+    replyOperation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
     const emitAgentEvent = vi.mocked((await import("../../infra/agent-events.js")).emitAgentEvent);
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
@@ -566,6 +568,7 @@ describe("executeAgentTurn: primary probe routing", () => {
       }),
     );
 
+    expect(state.runCliAgentMock).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
       kind: "success",
       fallbackExhausted: true,
@@ -600,7 +603,16 @@ describe("executeAgentTurn: primary probe routing", () => {
       }
     });
     state.runCliAgentMock.mockRejectedValueOnce(
-      new FailoverError("CLI produced no output", { reason: "timeout" }),
+      createCliTimeoutError(
+        { provider: "codex-cli", model: "gpt-5.4" },
+        {
+          mode: "no-output",
+          timeoutSeconds: 1,
+          observedActivity: false,
+          activeToolCount: 0,
+          backgroundTaskCount: 0,
+        },
+      ),
     );
     const followupRun = createFollowupRun();
     followupRun.run.provider = "codex-cli";

@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { HeartbeatSchema } from "../../../config/zod-schema.agent-runtime.js";
 import { runPluginSetupConfigMigrations } from "../../../plugins/setup-registry.js";
 import { migrateLegacySecretRefEnvMarkers } from "../../../secrets/legacy-secretref-env-marker.js";
+import { migrateLegacyCommandOwners } from "../../doctor-command-owner.js";
 import { applyChannelDoctorCompatibilityMigrations } from "./channel-legacy-config-migrate.js";
 import type { LegacyCodexModelIdentity } from "./codex-route-model-ref.js";
 import { pruneBindingsForMissingAgents } from "./legacy-config-binding-repair.js";
@@ -174,6 +175,7 @@ export function normalizeCompatibilityConfigValues(
   next = normalizeLegacyOpenAICodexModelsAddMetadata(next, changes);
   next = repairInvalidHeartbeatActiveHours(next, changes);
   next = repairNullAgentWorkspaces(next, changes);
+  next = migrateLegacyCommandOwners(next, changes);
   next = pruneBindingsForMissingAgents(next, changes);
 
   return {

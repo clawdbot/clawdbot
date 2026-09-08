@@ -43,7 +43,7 @@ import type {
   SpeechVoiceOption,
 } from "../tts/provider-types.js";
 import type { VideoGenerationProvider } from "../video-generation/types.js";
-import type { PluginJsonValue } from "./host-hooks.js";
+import type { PluginJsonValue } from "./host-hook-json.js";
 
 /** JSON-compatible provider settings for one configured worker profile. */
 export type WorkerProfile = Readonly<Record<string, PluginJsonValue>>;
@@ -110,6 +110,14 @@ export type WorkerDesktopEndpoint = {
 
 /** Placement execution modes a worker provider can carry. */
 export type WorkerExecutionMode = "worker-turn" | "remote-exec";
+
+/** Grant-free identity of the runtime bytes a provider may retain in a prepared image. */
+export type WorkerNodeRuntimeIdentity = {
+  nodeBootstrapSha256: string;
+  executionMode: WorkerExecutionMode;
+  /** Present only when project preparation retains the independent worker archive. */
+  workerBundleSha256?: string;
+};
 
 type WorkerNodeBootstrapAccess = {
   /** Immutable node distribution prepared by the Gateway for this provision operation. */
@@ -252,6 +260,7 @@ export type WorkerProvider = {
       signal?: AbortSignal;
       executionMode?: WorkerExecutionMode;
       machineClass?: string;
+      nodeRuntimeIdentity?: WorkerNodeRuntimeIdentity;
       prepareNodeRuntime?: () => Promise<WorkerNodeRuntimePreparation>;
       beginNodeEnrollment?: () => Promise<WorkerNodeEnrollment>;
       project?: {
@@ -267,6 +276,14 @@ export type WorkerProvider = {
       };
     },
   ) => Promise<WorkerLease>;
+  /**
+   * Prepare without allocating, renewing, enrolling, or changing a provider resource. The
+   * returned operation carries prepared facts; core records allocation intent before calling it.
+   * Replay preparation cannot attest that an earlier operation allocated nothing.
+   */
+  prepareProvision?: (
+    ...args: Parameters<WorkerProvider["provision"]>
+  ) => Promise<() => Promise<WorkerLease>>;
   /** Maximum core wait for one provision attempt, including provider-owned setup and cleanup. */
   resolveProvisionTimeoutMs?: (profile: WorkerProfile) => number;
   /**

@@ -16,7 +16,11 @@ type TitleProbeDatabase = Pick<
   | "session_windows"
   | "transcript_events"
   | "transcript_rewrite_watermarks"
->;
+> & {
+  transcript_event_identities: OpenClawAgentKyselyDatabase["transcript_event_identities"] & {
+    rowid: number;
+  };
+};
 
 export type SessionTranscriptTitleProbe = {
   generation: string | null;
@@ -28,20 +32,10 @@ export type SessionTranscriptTitleProbe = {
 
 const SESSION_TITLE_PROBE_MESSAGES = 20;
 
-function parseEventType(eventJson: string | null): string | undefined {
-  if (!eventJson) {
-    return undefined;
-  }
-  try {
-    const event = JSON.parse(eventJson) as { type?: unknown };
-    return typeof event.type === "string" ? event.type : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function sqliteTranscriptBoundaryEventType() {
-  return /* kysely-allow-raw: boundary type lives inside canonical transcript JSON. */ sql<string>`json_extract(boundary_event.event_json, '$.type')`;
+function sqliteTitleBoundaryType() {
+  // Exact SQLite handoffs can omit identities. Only those rows need their raw JSON;
+  // ordinary transcript metadata already has its type in the identity projection.
+  return /* kysely-allow-raw: exact imports retain raw events without identity rows. */ sql<string>`coalesce(identity.event_type, json_extract(boundary_event.event_json, '$.type'))`;
 }
 
 function readTitleProbeChunk(
@@ -83,19 +77,32 @@ function readTitleProbeChunk(
               .as("latest_seq"),
             eb
               .selectFrom("session_transcript_active_events as boundary")
-              .innerJoin("transcript_events as boundary_event", (join) =>
+              .leftJoin("transcript_event_identities as identity", (join) =>
+                // Resolve a covered sequence key first: directly joining while selecting type
+                // can make SQLite scan its type index once per metadata row.
+                join.on("identity.rowid", "=", (lookup) =>
+                  lookup
+                    .selectFrom("transcript_event_identities as identity_key")
+                    .select("identity_key.rowid")
+                    .whereRef("identity_key.session_id", "=", "boundary.session_id")
+                    .whereRef("identity_key.seq", "=", "boundary.event_seq")
+                    .limit(1),
+                ),
+              )
+              .leftJoin("transcript_events as boundary_event", (join) =>
                 join
                   .onRef("boundary_event.session_id", "=", "boundary.session_id")
-                  .onRef("boundary_event.seq", "=", "boundary.event_seq"),
+                  .onRef("boundary_event.seq", "=", "boundary.event_seq")
+                  .on("identity.event_type", "is", null),
               )
-              .select("boundary_event.event_json")
+              .select(sqliteTitleBoundaryType().as("event_type"))
               .whereRef("boundary.session_id", "=", "window.session_id")
               .where("boundary.message_position", "is", null)
               // Excluding latest-reset sessions prevents pre-reset text from leaking.
-              .where(sqliteTranscriptBoundaryEventType(), "in", ["reset", "compaction"])
+              .where(sqliteTitleBoundaryType(), "in", ["reset", "compaction"])
               .orderBy("boundary.active_position", "desc")
               .limit(1)
-              .as("latest_boundary_json"),
+              .as("latest_boundary_type"),
           ])
           .where("window.session_id", "in", sessionIds),
       ).rows;
@@ -103,10 +110,7 @@ function readTitleProbeChunk(
       for (const row of windows) {
         const emptyTranscript = row.latest_seq === null;
         const projectionCurrent = row.needs_rebuild === 0 && row.indexed_seq === row.latest_seq;
-        if (
-          (!emptyTranscript && !projectionCurrent) ||
-          parseEventType(row.latest_boundary_json) === "reset"
-        ) {
+        if ((!emptyTranscript && !projectionCurrent) || row.latest_boundary_type === "reset") {
           continue;
         }
         probes.set(row.session_id, {

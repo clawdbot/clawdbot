@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   parseArgs,
-  resolveDefaultReleaseUpgradeBaseline,
-  resolveFrozenExtendedStableUpgradeBaseline,
+  resolveReleaseUpgradeBaseline,
 } from "../../scripts/lib/release-upgrade-baseline.mjs";
 
 describe("release upgrade baseline resolver", () => {
@@ -22,7 +21,7 @@ describe("release upgrade baseline resolver", () => {
     { candidate: "2026.7.1", expected: "2026.6.34" },
   ])("selects the stable predecessor of $candidate", ({ candidate, expected }) => {
     expect(
-      resolveDefaultReleaseUpgradeBaseline(candidate, [
+      resolveReleaseUpgradeBaseline(candidate, [
         "2026.8.1-beta.1",
         "2026.7.1-1",
         "2026.9.1",
@@ -37,10 +36,10 @@ describe("release upgrade baseline resolver", () => {
     ).toBe(`openclaw@${expected}`);
   });
 
-  it("uses the same stable version only when no older stable exists", () => {
-    expect(
-      resolveDefaultReleaseUpgradeBaseline("2026.7.1", ["2026.7.1-beta.2", "2026.7.1", "2026.8.1"]),
-    ).toBe("openclaw@2026.7.1");
+  it("rejects the candidate itself as an upgrade baseline", () => {
+    expect(() =>
+      resolveReleaseUpgradeBaseline("2026.7.1", ["2026.7.1-beta.2", "2026.7.1", "2026.8.1"]),
+    ).toThrow("no published stable OpenClaw baseline predates candidate");
   });
 
   it.each([
@@ -48,48 +47,78 @@ describe("release upgrade baseline resolver", () => {
     ["2026.7.1", ["2026.8.1", "invalid"]],
     ["2026.7.1", []],
   ])("rejects missing stable baselines for %s", (candidate, versions) => {
-    expect(() => resolveDefaultReleaseUpgradeBaseline(candidate, versions)).toThrow(
+    expect(() => resolveReleaseUpgradeBaseline(candidate, versions)).toThrow(
       "no published stable OpenClaw baseline",
     );
   });
 
-  it("selects an older final release from the frozen extended-stable line", () => {
+  it("requires a published candidate to occur in the same npm versions snapshot", () => {
+    expect(() =>
+      resolveReleaseUpgradeBaseline("2026.8.1-beta.2", ["2026.7.1", "2026.8.1-beta.1"], {
+        candidatePublished: true,
+      }),
+    ).toThrow("published candidate 2026.8.1-beta.2 is absent from npm versions");
+  });
+
+  it("allows a local candidate absent from npm metadata to use an older stable release", () => {
+    expect(resolveReleaseUpgradeBaseline("2026.8.1-beta.2", ["2026.7.1", "2026.8.1-beta.1"])).toBe(
+      "openclaw@2026.7.1",
+    );
+  });
+
+  it.each([
+    ["2026.7.1", "2026.7.1"],
+    ["2026.8.1", "2026.7.1"],
+    ["2026.7.1-1", "2026.7.1-1"],
+  ])("rejects non-older explicit baseline %s for %s", (previousVersion, candidateVersion) => {
+    expect(() =>
+      resolveReleaseUpgradeBaseline(candidateVersion, ["2026.7.1", "2026.7.1-1", "2026.8.1"], {
+        previousVersion,
+      }),
+    ).toThrow("is not a published stable predecessor");
+  });
+
+  it("selects the latest stable release from the frozen release month", () => {
     expect(
-      resolveFrozenExtendedStableUpgradeBaseline(
+      resolveReleaseUpgradeBaseline(
         "2026.6.35",
         ["2026.6.34", "2026.6.33", "2026.6.35", "2026.7.1", "2026.6.34-1"],
         {
           targetContextRef: "extended-stable/2026.6.33",
         },
       ),
-    ).toBe("openclaw@2026.6.34");
+    ).toBe("openclaw@2026.6.34-1");
+  });
+
+  it("selects a stable predecessor for the first frozen .33 candidate", () => {
+    expect(
+      resolveReleaseUpgradeBaseline(
+        "2026.7.33",
+        ["2026.6.34", "2026.7.1", "2026.7.1-1", "2026.7.1-2", "2026.8.1"],
+        {
+          targetContextRef: "extended-stable/2026.7.33",
+        },
+      ),
+    ).toBe("openclaw@2026.7.1-2");
   });
 
   it("honors an explicit published predecessor from the frozen extended-stable line", () => {
     expect(
-      resolveFrozenExtendedStableUpgradeBaseline(
-        "2026.6.35",
-        ["2026.6.33", "2026.6.34", "2026.6.35"],
-        {
-          previousVersion: "2026.6.33",
-          targetContextRef: "extended-stable/2026.6.33",
-        },
-      ),
+      resolveReleaseUpgradeBaseline("2026.6.35", ["2026.6.33", "2026.6.34", "2026.6.35"], {
+        previousVersion: "2026.6.33",
+        targetContextRef: "extended-stable/2026.6.33",
+      }),
     ).toBe("openclaw@2026.6.33");
   });
 
-  it.each(["2026.6.35", "2026.6.34-1", "2026.7.1", "2026.6.32", "2026.6.31"])(
+  it.each(["2026.6.35", "2026.7.1", "2026.6.31"])(
     "rejects an incompatible explicit frozen baseline %s",
     (previousVersion) => {
       expect(() =>
-        resolveFrozenExtendedStableUpgradeBaseline(
-          "2026.6.35",
-          ["2026.6.33", "2026.6.34", "2026.6.35"],
-          {
-            previousVersion,
-            targetContextRef: "extended-stable/2026.6.33",
-          },
-        ),
+        resolveReleaseUpgradeBaseline("2026.6.35", ["2026.6.33", "2026.6.34", "2026.6.35"], {
+          previousVersion,
+          targetContextRef: "extended-stable/2026.6.33",
+        }),
       ).toThrow("previous_version");
     },
   );
@@ -103,18 +132,10 @@ describe("release upgrade baseline resolver", () => {
     "rejects incompatible frozen extended-stable targets",
     (candidateVersion, targetContextRef) => {
       expect(() =>
-        resolveFrozenExtendedStableUpgradeBaseline(candidateVersion, ["2026.6.34", "2026.6.33"], {
+        resolveReleaseUpgradeBaseline(candidateVersion, ["2026.6.34", "2026.6.33"], {
           targetContextRef,
         }),
       ).toThrow();
     },
   );
-
-  it("leaves non-extended-stable contexts on their latest baseline policy", () => {
-    expect(
-      resolveFrozenExtendedStableUpgradeBaseline("2026.6.35", ["2026.6.34"], {
-        targetContextRef: "release/2026.6.35",
-      }),
-    ).toBeUndefined();
-  });
 });

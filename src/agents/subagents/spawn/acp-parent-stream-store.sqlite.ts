@@ -4,6 +4,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../../infra/kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../../../infra/sqlite-number.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../../state/openclaw-agent-db.generated.js";
 import {
   runOpenClawAgentWriteTransaction,
@@ -16,10 +17,6 @@ export type AcpParentStreamEvent = Record<string, unknown>;
 
 function getAcpParentStreamKysely(database: import("node:sqlite").DatabaseSync) {
   return getNodeSqliteKysely<AcpParentStreamDatabase>(database);
-}
-
-function normalizeSqliteNumber(value: number | bigint): number {
-  return typeof value === "bigint" ? Number(value) : value;
 }
 
 /** Records one ordered batch in the same synchronous commit section as sequence allocation. */
@@ -58,9 +55,7 @@ export function recordAcpParentStreamEvents(
         .where("run_id", "=", options.runId),
     );
     const firstSeq =
-      row?.max_seq === null || row?.max_seq === undefined
-        ? 0
-        : normalizeSqliteNumber(row.max_seq) + 1;
+      row?.max_seq === null || row?.max_seq === undefined ? 0 : sqliteNumber(row.max_seq) + 1;
     executeSqliteQuerySync(
       database.db,
       db.insertInto("acp_parent_stream_events").values(

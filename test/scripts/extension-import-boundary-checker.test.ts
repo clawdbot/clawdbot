@@ -96,9 +96,27 @@ describe("extension import boundary checker", () => {
       kind: "commonjs-require",
     },
     {
+      name: "import after a quote-containing regexp",
+      createSource: (specifier: string) =>
+        'const pattern = /"/; import ' + JSON.stringify(specifier),
+      kind: "import",
+    },
+    {
+      name: "CommonJS require after a quote-containing regexp",
+      createSource: (specifier: string) =>
+        'const pattern = /"/; require(' + JSON.stringify(specifier) + ")",
+      kind: "commonjs-require",
+    },
+    {
       name: "import.meta URL",
       createSource: (specifier: string) =>
         "new URL(" + JSON.stringify(specifier) + ", import.meta.url)",
+      kind: "import-meta-url",
+    },
+    {
+      name: "import.meta URL with an escaped meta property",
+      createSource: (specifier: string) =>
+        "new URL(" + JSON.stringify(specifier) + ", import.m\\u0065ta.url)",
       kind: "import-meta-url",
     },
     {

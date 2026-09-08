@@ -8,6 +8,7 @@ import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runti
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { t } from "../../i18n/index.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
+import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { requestPlaceCatalog } from "../new-session/cloud-target.ts";
 import {
@@ -20,9 +21,10 @@ import { resolveChatPaneWorkerPresentation } from "./chat-pane-placement.ts";
 async function loadPlacementMoveCatalog(
   client: GatewayBrowserClient,
   includeProfiles: boolean,
+  runtimeId: string | undefined,
   requirement?: DevicePlacementRequirement,
 ) {
-  const catalog = await requestPlaceCatalog(client);
+  const catalog = await requestPlaceCatalog(client, runtimeId);
   return {
     profiles: includeProfiles ? catalog.profiles : [],
     devices: projectDevicePlacements(catalog.environments, requirement),
@@ -57,6 +59,7 @@ async function selectChatPanePlacementTarget(params: {
       await loadPlacementMoveCatalog(
         params.client,
         hasOperatorAdminAccess(params.gatewaySnapshot.hello?.auth ?? null),
+        runtime?.id,
         runtime?.devicePlacement,
       ),
   });
@@ -71,7 +74,7 @@ export async function moveChatPanePlacement(params: {
   isCurrent: (client: GatewayBrowserClient, generation: number) => boolean;
   onMovingChange: (movingKey: string | null) => void;
   publishError: (error: unknown) => void;
-  refreshReplacement: (agentId?: string | null) => Promise<void>;
+  refreshReplacement: SessionCapability["refreshReplacement"];
   requestUpdate: () => void;
 }): Promise<void> {
   const client = params.client;
@@ -157,7 +160,7 @@ export async function restartChatPanePlacement(params: {
   isCurrent: (client: GatewayBrowserClient, generation: number) => boolean;
   onRestartingChange: (restartingKey: string | null) => void;
   publishError: (error: unknown) => void;
-  refreshReplacement: (agentId?: string | null) => Promise<void>;
+  refreshReplacement: SessionCapability["refreshReplacement"];
   requestUpdate: () => void;
 }): Promise<void> {
   const client = params.client;
@@ -228,7 +231,7 @@ export async function reclaimChatPanePlacement(params: {
   isCurrent: (client: GatewayBrowserClient, generation: number) => boolean;
   onReclaimingChange: (reclaimingKey: string | null) => void;
   publishError: (error: unknown) => void;
-  refreshReplacement: (agentId?: string | null) => Promise<void>;
+  refreshReplacement: SessionCapability["refreshReplacement"];
   requestUpdate: () => void;
 }): Promise<void> {
   const client = params.client;

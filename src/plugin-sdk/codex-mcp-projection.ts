@@ -26,6 +26,11 @@ export {
 export type CodexScheduledToolProjectionFactory = AgentHarnessScheduledToolProjectionFactory;
 export type CodexTtsProvenanceTransfer = AgentHarnessTtsProvenanceTransfer;
 
+// Native mode pins shell_tool after managed-policy preflight; the pinned registry has no disabled shells.
+// A shell-disabled custom model invalidates read/exec inference; Codex exposes no shell_type fact.
+// Write, patch, and process remain unobserved model/sandbox capabilities and are never inferred.
+const CODEX_NATIVE_CRON_CREATOR_AUTHORITY = ["read", "exec"] as const;
+
 /** Resolve the private scheduled-tool projection issuer for the Codex harness owner. */
 export function resolveCodexScheduledToolProjectionFactory(
   hostCapabilities: AgentHarnessHostCapabilities,
@@ -73,8 +78,13 @@ export async function captureFinalCodexCronCreatorToolAllowlist(
   target: CronCreatorToolAllowlistEntry[],
   captureRef: CronToolsAllowCaptureRef,
   tools: readonly AnyAgentTool[],
+  options: { nativeToolSurfaceEnabled?: boolean } = {},
 ) {
   const { captureFinalEffectiveCronCreatorToolAllowlist: capture } =
     await import("../agents/tools/cron-tool.js");
-  return capture(target, captureRef, tools, (tool) => getPluginToolMeta(tool));
+  return capture(target, captureRef, tools, (tool) => getPluginToolMeta(tool), {
+    canonicalToolNames: options.nativeToolSurfaceEnabled
+      ? CODEX_NATIVE_CRON_CREATOR_AUTHORITY
+      : undefined,
+  });
 }

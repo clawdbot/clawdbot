@@ -2,7 +2,7 @@
  * Arcee AI provider plugin entry. It supports direct Arcee auth and OpenRouter
  * routing while normalizing OpenRouter model ids and base URLs.
  */
-import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { buildOpenAICompatibleLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   readConfiguredProviderCatalogEntries,
   type ProviderCatalogContext,
@@ -32,14 +32,14 @@ const ARCEE_WIZARD_GROUP = {
 async function resolveArceeCatalog(ctx: ProviderCatalogContext) {
   const directAuth = ctx.resolveProviderApiKey(PROVIDER_ID);
   if (directAuth.apiKey) {
-    return {
-      provider: await buildOpenAICompatibleLiveModelProviderConfig({
-        providerId: PROVIDER_ID,
-        providerConfig: buildArceeProvider(),
-        apiKey: directAuth.apiKey,
-        discoveryApiKey: directAuth.discoveryApiKey,
-      }),
-    };
+    return await buildOpenAICompatibleLiveProviderCatalog({
+      discoveryMode: "strict",
+      providerId: PROVIDER_ID,
+      providerConfig: buildArceeProvider(),
+      apiKey: directAuth.apiKey,
+      discoveryApiKey: directAuth.discoveryApiKey,
+      profileId: directAuth.profileId,
+    });
   }
 
   const openRouterKey = ctx.resolveProviderApiKey("openrouter").apiKey;

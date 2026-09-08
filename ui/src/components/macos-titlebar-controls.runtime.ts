@@ -20,15 +20,17 @@ class MacosTitlebarControls extends OpenClawLightDomContentsElement {
     const toggleLabel = this.navCollapsed ? t("nav.expand") : t("nav.collapse");
     return html`
       <nav class="macos-titlebar-controls" @mousedown=${beginNativeWindowDrag}>
-        ${this.historyOnly
-          ? nothing
-          : this.renderButton({
-              label: toggleLabel,
-              icon: this.navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose,
-              ariaExpanded: !this.navCollapsed,
-              onClick: this.onToggleSidebar,
-              className: "macos-titlebar-controls__sidebar-toggle",
-            })}
+        ${
+          this.historyOnly
+            ? nothing
+            : this.renderButton({
+                label: toggleLabel,
+                icon: this.navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose,
+                ariaExpanded: !this.navCollapsed,
+                onClick: this.onToggleSidebar,
+                className: "macos-titlebar-controls__sidebar-toggle",
+              })
+        }
         ${this.renderButton({
           label: t("nav.back"),
           icon: icons.chevronLeft,
@@ -43,29 +45,33 @@ class MacosTitlebarControls extends OpenClawLightDomContentsElement {
           onClick: () => globalThis.history.forward(),
           className: "macos-titlebar-controls__forward",
         })}
-        ${!this.historyOnly
-          ? html`
-              ${this.renderButton({
-                label: t("chat.openCommandPalette"),
-                tooltip: t("chat.commandPaletteTitle"),
-                icon: icons.search,
-                onClick: this.onOpenPalette,
-                className: "macos-titlebar-controls__search",
-              })}
-              ${this.navCollapsed
-                ? this.renderButton({
-                    // While the sidebar rail is collapsed, this mirrors the native
-                    // new-session item and its current Gateway authorization.
-                    label: t("chat.runControls.newSession"),
-                    tooltip: this.newSessionDisabledReason,
-                    icon: icons.plus,
-                    disabled: Boolean(this.newSessionDisabledReason),
-                    onClick: this.onOpenNewSession,
-                    className: "macos-titlebar-controls__new-session",
-                  })
-                : nothing}
-            `
-          : nothing}
+        ${
+          !this.historyOnly
+            ? html`
+                ${this.renderButton({
+                  label: t("chat.openCommandPalette"),
+                  tooltip: t("chat.commandPaletteTitle"),
+                  icon: icons.search,
+                  onClick: this.onOpenPalette,
+                  className: "macos-titlebar-controls__search",
+                })}
+                ${
+                  this.navCollapsed
+                    ? this.renderButton({
+                        // While the sidebar rail is collapsed, this mirrors the native
+                        // new-session item and its current Gateway authorization.
+                        label: t("chat.runControls.newSession"),
+                        tooltip: this.newSessionDisabledReason,
+                        icon: icons.plus,
+                        disabled: Boolean(this.newSessionDisabledReason),
+                        onClick: this.onOpenNewSession,
+                        className: "macos-titlebar-controls__new-session",
+                      })
+                    : nothing
+                }
+              `
+            : nothing
+        }
       </nav>
     `;
   }
@@ -85,9 +91,9 @@ class MacosTitlebarControls extends OpenClawLightDomContentsElement {
           type="button"
           class="topbar-icon-btn macos-titlebar-controls__button ${options.className}"
           aria-label=${options.label}
-          aria-expanded=${options.ariaExpanded === undefined
-            ? nothing
-            : String(options.ariaExpanded)}
+          aria-expanded=${
+            options.ariaExpanded === undefined ? nothing : String(options.ariaExpanded)
+          }
           ?disabled=${options.disabled || !options.onClick}
           @click=${options.onClick}
         >

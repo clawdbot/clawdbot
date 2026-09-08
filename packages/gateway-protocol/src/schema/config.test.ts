@@ -6,6 +6,8 @@ import {
   UpdateAvailableSchema,
   UpdateHoldParamsSchema,
   UpdateHoldResultSchema,
+  UpdateReportParamsSchema,
+  UpdateReportResultSchema,
   UpdateRunParamsSchema,
   UpdateScheduleStateSchema,
   UpdateStatusParamsSchema,
@@ -57,6 +59,72 @@ describe("ConfigSchemaLookupResultSchema", () => {
 });
 
 describe("update protocol schemas", () => {
+  it("requires an explicit report action and reviewed digest", () => {
+    const attemptId = "handoff-failed";
+    const previewDigest = "a".repeat(64);
+    expect(Value.Check(UpdateReportParamsSchema, { action: "preview", attemptId })).toBe(true);
+    expect(
+      Value.Check(UpdateReportParamsSchema, { action: "submit", attemptId, previewDigest }),
+    ).toBe(true);
+    expect(Value.Check(UpdateReportParamsSchema, { action: "submit", attemptId })).toBe(false);
+    expect(
+      Value.Check(UpdateReportParamsSchema, {
+        action: "submit",
+        attemptId,
+        previewDigest,
+        confirmed: true,
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(UpdateReportResultSchema, {
+        status: "ready",
+        attemptId,
+        body: "sanitized",
+        previewDigest,
+        title: "Update failure",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(UpdateReportResultSchema, {
+        status: "ready",
+        attemptId,
+        body: "sanitized",
+        previewDigest,
+        savedReportPath: "/private/report.md",
+        title: "Update failure",
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(UpdateReportResultSchema, {
+        status: "created",
+        message: "Local receipt persistence failed; do not submit again.",
+        url: "https://github.com/openclaw/openclaw/issues/123",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(UpdateReportResultSchema, {
+        status: "pending",
+        message: "GitHub issue submission may have completed; do not submit again.",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(UpdateReportResultSchema, {
+        status: "retryable",
+        message: "No issue submission was started; retry this action later.",
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts optional admitted update requester identity and rejects extra authority", () => {
+    const requester = { channel: "slack", accountId: "primary", senderId: "owner" };
+    expect(Value.Check(UpdateRunParamsSchema, {})).toBe(true);
+    expect(Value.Check(UpdateRunParamsSchema, { requester })).toBe(true);
+    expect(
+      Value.Check(UpdateRunParamsSchema, { requester: { ...requester, senderIsOwner: true } }),
+    ).toBe(false);
+    expect(Value.Check(UpdateRunParamsSchema, { requester: { senderId: 123 } })).toBe(false);
+  });
+
   it("accepts only closed, exact tracked Git targets for update.run", () => {
     const target = {
       kind: "git",

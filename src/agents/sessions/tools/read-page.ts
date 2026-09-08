@@ -7,7 +7,10 @@ import { toolResultFitsBudget, type ToolResultBudget } from "../../tool-result-l
 import type { ReadToolContinuation, ReadToolDetails } from "./tool-contracts.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.js";
 
-type BoundedReadTextPage = Extract<ReadToolDetails, { kind: "text" | "truncated" }>;
+type BoundedReadTextPage = {
+  details: Extract<ReadToolDetails, { kind: "text" | "truncated" }>;
+  text: string;
+};
 
 /** Format model-visible pagination guidance from its exact structured continuation. */
 export function formatReadContinuationNotice(
@@ -35,6 +38,8 @@ export function createBoundedReadTextPage(params: {
   startLine: number;
   endLine: number;
   totalLines: number;
+  /** A source page can already be partial before this tighter budget is applied. */
+  continuation?: ReadToolContinuation;
   cursor?: number;
   limit?: number;
   maxBytes: number;
@@ -46,18 +51,50 @@ export function createBoundedReadTextPage(params: {
 }): BoundedReadTextPage {
   const maxBytes = params.pageMaxBytes ?? Math.min(DEFAULT_MAX_BYTES, params.maxBytes);
   const remainingLines = params.totalLines - params.endLine;
-  const limitNotice =
-    params.limit !== undefined && remainingLines > 0
-      ? `\n\n[${remainingLines} more lines in file. Use offset=${params.endLine + 1} to continue.]`
+  const limitNotice = params.continuation
+    ? formatReadContinuationNotice(params.continuation, params.maxBytes)
+    : params.limit !== undefined && remainingLines > 0
+      ? `\n\n[${remainingLines} more line${remainingLines === 1 ? "" : "s"} in file. Use offset=${params.endLine + 1} to continue.]`
       : "";
   const contentBytes = Buffer.byteLength(params.content, "utf8");
   const resultPrefix = params.prefix ?? "";
+  const completeSelectedPage = (content: string): BoundedReadTextPage => ({
+    text: `${content}${limitNotice}`,
+    // A complete requested slice is not EOF. Keep the next page machine-readable
+    // instead of forcing Code Mode callers to parse the display-only notice.
+    details: limitNotice
+      ? {
+          kind: "truncated",
+          content,
+          continuation: params.continuation ?? {
+            kind: "line",
+            offset: params.endLine + 1,
+            limit: params.limit,
+          },
+          truncation: {
+            truncated: true,
+            truncatedBy: params.continuation?.kind === "cursor" ? "bytes" : "lines",
+            totalLines: params.totalLines,
+            totalBytes: contentBytes,
+            outputLines:
+              params.continuation?.kind === "cursor"
+                ? params.continuation.offset - params.startLine
+                : params.endLine - params.startLine + 1,
+            outputBytes: Buffer.byteLength(content, "utf8"),
+            lastLinePartial: params.continuation?.kind === "cursor",
+            firstLineExceedsLimit: false,
+            maxLines: params.limit ?? DEFAULT_MAX_LINES,
+            maxBytes,
+          },
+        }
+      : { kind: "text", content },
+  });
   if (
     params.endLine - params.startLine < DEFAULT_MAX_LINES &&
     contentBytes + Buffer.byteLength(limitNotice, "utf8") <= maxBytes &&
     toolResultFitsBudget(`${resultPrefix}${params.content}${limitNotice}`, params.modelBudget)
   ) {
-    return { kind: "text", content: `${params.content}${limitNotice}` };
+    return completeSelectedPage(params.content);
   }
 
   const range = params.adaptive
@@ -99,7 +136,7 @@ export function createBoundedReadTextPage(params: {
   const contentBudgetBytes = Buffer.byteLength(prefix, "utf8");
   const truncation = truncateHead(params.content, { maxBytes: contentBudgetBytes });
   if (!truncation.truncated) {
-    return { kind: "text", content: `${truncation.content}${limitNotice}` };
+    return completeSelectedPage(truncation.content);
   }
 
   let continuation: ReadToolContinuation;
@@ -125,15 +162,18 @@ export function createBoundedReadTextPage(params: {
 
   const { content: _content, ...truncationDetails } = truncation;
   return {
-    kind: "truncated",
-    content: `${content}${formatReadContinuationNotice(continuation, params.maxBytes, range)}`,
-    truncation: {
-      ...truncationDetails,
-      outputBytes: Buffer.byteLength(content, "utf8"),
-      firstLineExceedsLimit: false,
-      lastLinePartial: continuation.kind === "cursor",
-      totalLines: params.totalLines,
+    text: `${content}${formatReadContinuationNotice(continuation, params.maxBytes, range)}`,
+    details: {
+      kind: "truncated",
+      content,
+      truncation: {
+        ...truncationDetails,
+        outputBytes: Buffer.byteLength(content, "utf8"),
+        firstLineExceedsLimit: false,
+        lastLinePartial: continuation.kind === "cursor",
+        totalLines: params.totalLines,
+      },
+      continuation,
     },
-    continuation,
   };
 }

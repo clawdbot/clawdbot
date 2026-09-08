@@ -66,6 +66,7 @@ export async function runQaRuntimeParitySuite(params: {
   progressEnabled: boolean;
   scenarioIds?: readonly string[];
   runtimePair: [RuntimeId, RuntimeId];
+  sutOpenClawCommand?: QaSuiteRunParams["sutOpenClawCommand"];
   mutateConfig?: QaSuiteRunParams["mutateConfig"];
   writeEvidenceFile?: boolean;
 }) {
@@ -165,6 +166,7 @@ export async function runQaRuntimeParitySuite(params: {
                 startLab,
                 controlUiEnabled: params.controlUiEnabled ?? scenarioRequiresControlUi(scenario),
                 mutateConfig: params.mutateConfig,
+                sutOpenClawCommand: params.sutOpenClawCommand,
                 forcedRuntime: runtime,
                 captureRuntimeParityCell: true,
                 writeEvidenceFile: params.writeEvidenceFile,

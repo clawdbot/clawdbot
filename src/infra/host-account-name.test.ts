@@ -64,7 +64,7 @@ describe("resolveHostAccountName", () => {
     { gecos: ",Room 42", expected: null },
     { gecos: "", expected: null },
     { gecos: "ada", expected: null },
-    { gecos: "A".repeat(300), expected: "A".repeat(256) },
+    { gecos: `${"A".repeat(255)}🤖`, expected: "A".repeat(255) },
   ])("uses only a bounded human name from Linux GECOS: $gecos", async ({ gecos, expected }) => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     runExecMock.mockResolvedValue({

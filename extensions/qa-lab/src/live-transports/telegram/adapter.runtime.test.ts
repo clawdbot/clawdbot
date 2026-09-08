@@ -126,15 +126,22 @@ describe("Telegram QA transport adapter", () => {
   });
 
   it("targets the SUT DM for direct-message-only scenarios", async () => {
-    mocks.userbotStart.mockResolvedValueOnce({
-      assertHealthy: mocks.userbotAssertHealthy,
-      chatId: 200,
-      close: mocks.userbotClose,
-      send: mocks.userbotSend,
+    let onUpdate: ((update: unknown) => Promise<void>) | undefined;
+    mocks.userbotStart.mockImplementationOnce(async (params) => {
+      onUpdate = params.onUpdate;
+      return {
+        assertHealthy: mocks.userbotAssertHealthy,
+        chatId: 200,
+        close: mocks.userbotClose,
+        send: mocks.userbotSend,
+      };
     });
+    mocks.userbotSend.mockResolvedValueOnce({ messageId: 10 });
+    const addInboundMessage = vi.fn().mockResolvedValue({ id: "in-1" });
+    const addOutboundMessage = vi.fn().mockResolvedValue({ id: "out-1" });
     const adapter = await createTelegramQaTransportAdapter({
       adapterOptions: { transportPolicy: { directMessageOnly: true } },
-      messages: {},
+      messages: { addInboundMessage, addOutboundMessage },
     } as never);
 
     expect(mocks.userbotStart).toHaveBeenCalledWith(
@@ -155,6 +162,24 @@ describe("Telegram QA transport adapter", () => {
       replyChannel: "telegram",
       replyTo: "100",
     });
+
+    await adapter.sendInbound?.({
+      conversation: { id: "logical-dm", kind: "direct" },
+      senderId: "driver",
+      text: "ping",
+    });
+    await onUpdate?.({
+      kind: "message",
+      chatId: 200,
+      messageId: 11,
+      senderId: 200,
+      timestamp: 100_000,
+      text: "pong",
+      entities: [],
+    });
+    expect(addOutboundMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "dm:logical-dm", text: "pong" }),
+    );
 
     await adapter.cleanup?.();
     await adapter.cleanupAfterGatewayStop?.();

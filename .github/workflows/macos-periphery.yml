@@ -1,4 +1,7 @@
 name: macOS Periphery Dead Code
+# Job conclusions cannot distinguish passive draft events from scope loss.
+# Record source admission for the commenter before either job runs.
+run-name: ${{ github.workflow }} [${{ github.event_name == 'workflow_dispatch' && 'manual' || github.event.pull_request.draft == false && 'report' || github.event.action == 'converted_to_draft' && 'draft' || 'passive' }}]
 
 on:
   pull_request:
@@ -6,7 +9,12 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: macos-periphery-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  # Admission precedes scope skips: isolate passive drafts before they can cancel useful work.
+  # Keep conversion events in the PR group as an intentional cancellation signal.
+  group: >-
+    ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.action != 'converted_to_draft'
+      && format('{0}-passive-draft-{1}', github.workflow, github.run_id)
+      || format('macos-periphery-{0}-{1}', github.workflow, github.event.pull_request.number || github.sha) }}
   cancel-in-progress: true
 
 env:
@@ -68,7 +76,7 @@ jobs:
     name: Scan macOS dead code
     needs: scope
     if: ${{ needs.scope.outputs.should-scan == 'true' }}
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
+    runs-on: macos-26
     timeout-minutes: 45
     steps:
       - name: Checkout

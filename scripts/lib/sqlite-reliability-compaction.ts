@@ -5,24 +5,29 @@ import { fileURLToPath } from "node:url";
 import type { SnapshotDatabaseIdentity } from "../../src/snapshot/snapshot-provider.js";
 import {
   assertSameCompactionPayload,
+  assertSameReliabilityState,
   formatReliabilityStderr,
   type CompactionPayloadProof,
   type ReliabilityReport,
   type ReliabilityStateProof,
 } from "./sqlite-reliability-contract.js";
+import {
+  assertReliabilityForcedExit,
+  waitForReliabilityWorkerExit,
+} from "./sqlite-reliability-process.js";
 
 type CompactionTarget = {
   identity: SnapshotDatabaseIdentity;
   path: string;
 };
 
-type CompactionExit = ReliabilityReport["maintenanceProof"]["vacuumInterruption"]["exit"];
-
 const COMPACTION_WORKER_PATH = fileURLToPath(
   new URL("./sqlite-reliability-compaction-worker.ts", import.meta.url),
 );
 const COMPACTION_TIMEOUT_MS = 120_000;
 const MIN_ACTIVE_SIDECAR_BYTES = 1024 * 1024;
+const WORKER_EXIT_TIMEOUT_MESSAGE =
+  "SQLite compaction worker did not exit after forced termination.";
 
 function fileSize(filePath: string): number {
   try {
@@ -32,22 +37,6 @@ function fileSize(filePath: string): number {
       return 0;
     }
     throw error;
-  }
-}
-
-function assertSameState(
-  actual: ReliabilityStateProof,
-  expected: ReliabilityStateProof,
-  label: string,
-): void {
-  if (
-    actual.batches !== expected.batches ||
-    actual.rows !== expected.rows ||
-    actual.sha256 !== expected.sha256
-  ) {
-    throw new Error(
-      `${label} changed reliability state: expected batches=${expected.batches} rows=${expected.rows} sha256=${expected.sha256}, got batches=${actual.batches} rows=${actual.rows} sha256=${actual.sha256}`,
-    );
   }
 }
 
@@ -108,33 +97,6 @@ async function waitForWorkerReady(params: {
   });
 }
 
-async function waitForChildExit(child: ChildProcess): Promise<CompactionExit> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return { code: child.exitCode, signal: child.signalCode };
-  }
-  return await new Promise<CompactionExit>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error("SQLite compaction worker did not exit after forced termination."));
-    }, 30_000);
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      cleanup();
-      resolve({ code, signal });
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const cleanup = () => {
-      clearTimeout(timeout);
-      child.off("exit", onExit);
-      child.off("error", onError);
-    };
-    child.on("exit", onExit);
-    child.on("error", onError);
-  });
-}
-
 async function waitForActiveVacuum(params: {
   child: ChildProcess;
   databasePath: string;
@@ -157,23 +119,6 @@ async function waitForActiveVacuum(params: {
   throw new Error(
     `SQLite compaction did not produce ${MIN_ACTIVE_SIDECAR_BYTES} bytes of active journal evidence within 120 seconds.`,
   );
-}
-
-function assertForcedExit(exit: CompactionExit): void {
-  if (exit.code === 0) {
-    throw new Error("SQLite compaction worker exited cleanly before forced termination.");
-  }
-  if (process.platform === "win32") {
-    if (exit.code === null && exit.signal === null) {
-      throw new Error("SQLite compaction worker reported no forced Windows exit.");
-    }
-    return;
-  }
-  if (exit.signal !== "SIGKILL") {
-    throw new Error(
-      `SQLite compaction worker exited without SIGKILL: code=${String(exit.code)} signal=${String(exit.signal)}`,
-    );
-  }
 }
 
 export async function runVacuumInterruptionProof(params: {
@@ -208,11 +153,11 @@ export async function runVacuumInterruptionProof(params: {
     if (!child.kill("SIGKILL")) {
       throw new Error("SQLite compaction worker exited before the crash signal was delivered.");
     }
-    const exit = await waitForChildExit(child);
-    assertForcedExit(exit);
+    const exit = await waitForReliabilityWorkerExit(child, WORKER_EXIT_TIMEOUT_MESSAGE);
+    assertReliabilityForcedExit(exit, "SQLite compaction worker");
 
     const stateAfterRecovery = params.recoverAndVerifyDatabase();
-    assertSameState(stateAfterRecovery, params.expectedState, "vacuum crash recovery");
+    assertSameReliabilityState(stateAfterRecovery, params.expectedState, "vacuum crash recovery");
     const autoVacuumAfterRecovery = params.readAutoVacuum();
     if (autoVacuumAfterRecovery !== params.expectedAutoVacuum) {
       throw new Error(
@@ -248,7 +193,7 @@ export async function runVacuumInterruptionProof(params: {
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGKILL");
-      await waitForChildExit(child).catch(() => undefined);
+      await waitForReliabilityWorkerExit(child, WORKER_EXIT_TIMEOUT_MESSAGE).catch(() => undefined);
     }
   }
 }

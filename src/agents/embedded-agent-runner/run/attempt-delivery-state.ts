@@ -5,6 +5,7 @@ export function copyAttemptDeliveryState(attempt: EmbeddedRunAttemptResult) {
     latestMcpAppChannelView: attempt.latestMcpAppChannelView,
     latestMcpConnectAction: attempt.latestMcpConnectAction,
     didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+    sourceReplyDelivered: attempt.sourceReplyDelivered,
     didDeliverSourceReplyViaMessageTool: attempt.didDeliverSourceReplyViaMessageTool === true,
     didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
     messagingToolSentTexts: attempt.messagingToolSentTexts,
@@ -14,5 +15,6 @@ export function copyAttemptDeliveryState(attempt: EmbeddedRunAttemptResult) {
     heartbeatToolResponse: attempt.heartbeatToolResponse,
     successfulCronAdds: attempt.successfulCronAdds,
     acceptedSessionSpawns: attempt.acceptedSessionSpawns,
+    requesterContinuationSettled: attempt.requesterContinuationSettled,
   };
 }

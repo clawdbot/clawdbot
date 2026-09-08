@@ -1,10 +1,15 @@
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ModelsProbeResult } from "../../api/types.ts";
+import type {
+  ModelAuthStatusProvider,
+  ModelAuthStatusResult,
+  ModelsProbeResult,
+} from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { DefaultModelSelection, ModelProviderLogoutTarget } from "./data.ts";
-import type { ModelProvidersData } from "./load.ts";
+import type { DefaultModelSelection } from "./data.ts";
+import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
 import type { ModelBehaviorConfig } from "./model-behavior.ts";
+import type { ModelProviderProfileActionsController } from "./profile-actions-controller.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import "./model-providers-page.ts";
 
@@ -20,9 +25,9 @@ export type ModelProvidersPageTestElement = HTMLElement & {
   defaultsDraft: (DefaultModelSelection & Partial<ModelBehaviorConfig>) | null;
   keyDraft: string;
   keyEditorProvider: string | null;
-  logout: (cardId: string, targets: ModelProviderLogoutTarget[]) => Promise<void>;
+  profileActions: Pick<ModelProviderProfileActionsController, "logout" | "setOrder">;
   messages: Record<string, { kind: "success" | "error"; text: string; warning?: string }>;
-  pendingLogoutProvider: string | null;
+  profileOrders: Record<string, string[]>;
   probe: (cardId: string, providers: string[]) => Promise<void>;
   probeResults: Record<string, ModelsProbeResult>;
   refresh: (opts: { force: boolean }) => Promise<void>;
@@ -36,6 +41,25 @@ export type ModelProvidersPageTestElement = HTMLElement & {
 export type AgentSelectElement = HTMLElement & {
   onSelect: (value: string) => void;
 };
+
+export function createAuthStatus(
+  providers: Partial<ModelAuthStatusProvider>[] = [{}],
+  ts = 1,
+): ModelAuthStatusResult {
+  return {
+    ts,
+    providers: providers.map((overrides): ModelAuthStatusProvider => ({
+      provider: "openai",
+      displayName: "OpenAI",
+      status: "ok",
+      profiles: [
+        { profileId: "openai:one", type: "oauth", status: "ok" },
+        { profileId: "openai:two", type: "oauth", status: "ok" },
+      ],
+      ...overrides,
+    })),
+  };
+}
 
 export function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -114,6 +138,7 @@ export function createHarness(initialScopeId: string) {
       };
     },
   };
+  let runtimeConfigListener: (() => void) | undefined;
   const subscribe = () => () => undefined;
   const runtimeConfig = {
     canPatch: true,
@@ -140,7 +165,12 @@ export function createHarness(initialScopeId: string) {
     save: vi.fn(async () => true),
     apply: vi.fn(async () => true),
     discardDraft: vi.fn(async () => undefined),
-    subscribe,
+    subscribe(listener: () => void) {
+      runtimeConfigListener = listener;
+      return () => {
+        runtimeConfigListener = undefined;
+      };
+    },
   };
   const context = {
     gateway: gatewaySource.gateway,
@@ -175,6 +205,7 @@ export function createHarness(initialScopeId: string) {
     context,
     deferNextAuthStatus,
     notifySelection: () => selectionListener?.(),
+    notifyRuntimeConfig: () => runtimeConfigListener?.(),
     request,
     runtimeConfig,
     snapshot,
@@ -228,11 +259,25 @@ export function focusDocument(): void {
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
 }
 
+export function createEmptyModelProvidersRouteData(
+  context: ApplicationContext,
+): ModelProvidersRouteData {
+  // A loader completed before connection; the connected page now owns recovery.
+  return {
+    gateway: context.gateway,
+    gatewaySnapshot: { ...context.gateway.snapshot, phase: "stopped", client: null },
+    data: EMPTY_MODEL_PROVIDERS_DATA,
+    client: null,
+    agentId: context.agentSelection.state.selectedId,
+  };
+}
+
 export function appendPage(context: ApplicationContext) {
   const page = document.createElement(
     "openclaw-model-providers-page",
   ) as ModelProvidersPageTestElement;
   page.context = context;
+  page.routeData = createEmptyModelProvidersRouteData(context);
   document.body.append(page);
   return page;
 }

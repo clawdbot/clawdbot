@@ -5,7 +5,34 @@ import { runAbortableTimeout } from "./with-timeout.js";
 
 describe("runAbortableTimeout", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("names the operation pending when the deadline fires", async () => {
+    vi.useFakeTimers();
+    let stage = "queued";
+    let signal: AbortSignal | undefined;
+    let reportProgress!: () => void;
+    const pending = runAbortableTimeout(
+      (timeoutSignal, resetTimeout) => {
+        signal = timeoutSignal;
+        reportProgress = resetTimeout;
+        return new Promise<never>(() => {});
+      },
+      30,
+      () => `publication: ${stage}`,
+    );
+    const result = Promise.allSettled([pending]);
+    stage = "credentials";
+    await vi.advanceTimersByTimeAsync(30);
+    expect(await result).toEqual([
+      { status: "rejected", reason: new Error("publication: credentials timed out") },
+    ]);
+    expect(signal?.aborted).toBe(true);
+    await expect(pending).rejects.toBe(signal?.reason);
+    reportProgress();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("caps huge finite timeoutMs before scheduling the timer", async () => {

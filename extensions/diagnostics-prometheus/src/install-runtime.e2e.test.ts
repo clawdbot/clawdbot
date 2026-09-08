@@ -1,5 +1,6 @@
 // Proves the external Prometheus plugin's managed install and trusted runtime boundary.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
@@ -254,7 +255,9 @@ async function waitForGateway(params: {
 }
 
 describe("diagnostics-prometheus managed install runtime", () => {
-  it("installs the exact official package and exports metrics at Gateway startup", async () => {
+  it("installs the exact official package and exports metrics at Gateway startup", async ({
+    signal,
+  }) => {
     const workspace = await tempWorkspace({
       rootDir: resolvePreferredOpenClawTmpDir(),
       prefix: "openclaw-prometheus-install-",
@@ -265,7 +268,7 @@ describe("diagnostics-prometheus managed install runtime", () => {
     const stateDir = path.join(root, "state");
     const configPath = path.join(stateDir, "openclaw.json");
     const gatewayLog = path.join(root, "gateway.log");
-    const gatewayToken = "prometheus-managed-install-test-token";
+    const gatewayPassword = "prometheus-managed-install-test-password";
     const gatewayPort = await reservePort();
     await fs.mkdir(home, { recursive: true });
     await fs.mkdir(stateDir, { recursive: true });
@@ -278,7 +281,27 @@ describe("diagnostics-prometheus managed install runtime", () => {
             mode: "local",
             bind: "loopback",
             port: gatewayPort,
-            auth: { mode: "token", token: gatewayToken },
+            trustedProxies: ["127.0.0.1"],
+            auth: {
+              mode: "trusted-proxy",
+              password: gatewayPassword,
+              trustedProxy: {
+                allowLoopback: true,
+                allowUsers: ["restricted-scraper@example.com"],
+                requiredHeaders: ["x-forwarded-proto"],
+                userHeader: "x-forwarded-user",
+              },
+            },
+            roles: {
+              default: "metrics-denied",
+              definitions: {
+                "metrics-denied": {
+                  agents: "*",
+                  scopes: ["operator.approvals"],
+                  sessions: { others: "none" },
+                },
+              },
+            },
           },
         },
         null,
@@ -355,6 +378,9 @@ describe("diagnostics-prometheus managed install runtime", () => {
       },
     );
     children.push(gateway);
+    const gatewayClosed = once(gateway, "close", { signal });
+    // Setup can fail before this waiter is awaited; afterEach still owns forced cleanup.
+    void gatewayClosed.catch(() => {});
     await gatewayLogHandle.close();
     await waitForGateway({ child: gateway, logPath: gatewayLog, port: gatewayPort });
 
@@ -362,7 +388,7 @@ describe("diagnostics-prometheus managed install runtime", () => {
     const unauthenticated = await fetch(url);
     expect([401, 403]).toContain(unauthenticated.status);
     const authenticated = await fetch(url, {
-      headers: { authorization: `Bearer ${gatewayToken}` },
+      headers: { authorization: `Bearer ${gatewayPassword}` },
     });
     const body = await authenticated.text();
     expect(authenticated.status).toBe(200);
@@ -370,9 +396,108 @@ describe("diagnostics-prometheus managed install runtime", () => {
     expect(body).toContain(
       'openclaw_telemetry_exporter_total{exporter="diagnostics-prometheus",reason="configured",signal="metrics",status="started"} 1',
     );
+    const restrictedHeaders = {
+      "x-forwarded-for": "203.0.113.25",
+      "x-forwarded-proto": "https",
+      "x-forwarded-user": "restricted-scraper@example.com",
+    };
+    const restricted = await fetch(url, { headers: restrictedHeaders });
+    const restrictedBody = await restricted.text();
+    expect(restricted.status).toBe(403);
+    expect(restricted.headers.get("cache-control")).toBe("no-store");
+    expect(restrictedBody).toBe("missing scope: operator.read");
+    expect(restrictedBody).not.toContain("openclaw_telemetry_exporter_total");
+
+    const restrictedHead = await fetch(url, { headers: restrictedHeaders, method: "HEAD" });
+    expect(restrictedHead.status).toBe(403);
+    expect(restrictedHead.headers.get("cache-control")).toBe("no-store");
+    expect(restrictedHead.headers.get("content-length")).not.toBe(
+      authenticated.headers.get("content-length"),
+    );
+    expect(await restrictedHead.text()).toBe("");
+    const scrapeEventLoopMetrics = async () => {
+      const response = await fetch(url, {
+        headers: { authorization: `Bearer ${gatewayPassword}` },
+      });
+      expect(response.status).toBe(200);
+      const lines = (await response.text())
+        .split("\n")
+        .filter((line) => line.startsWith("openclaw_gateway_event_loop_"));
+      const value = (name: string) =>
+        Number(
+          lines
+            .find((line) => line.startsWith(`${name} `))
+            ?.split(" ")
+            .at(-1),
+        );
+      return {
+        lines,
+        count: value("openclaw_gateway_event_loop_delay_max_seconds_count"),
+        sum: value("openclaw_gateway_event_loop_delay_max_seconds_sum"),
+        observed: value("openclaw_gateway_event_loop_observed_seconds_total"),
+      };
+    };
+    const readCompletedWindow = async () => {
+      // Healthy monitor windows complete after one second; readiness owns this read.
+      await delay(1_100);
+      const response = await fetch(`http://127.0.0.1:${gatewayPort}/readyz`, {
+        headers: { authorization: `Bearer ${gatewayPassword}` },
+      });
+      expect(response.status).toBe(200);
+      const readiness = (await response.json()) as {
+        ready: boolean;
+        eventLoop?: { intervalMs: number; delayMaxMs: number };
+      };
+      expect(readiness.ready).toBe(true);
+      expect(readiness.eventLoop?.intervalMs).toBeGreaterThanOrEqual(1_000);
+      expect(readiness.eventLoop?.delayMaxMs).toBeGreaterThanOrEqual(0);
+      return readiness.eventLoop!;
+    };
+
+    await readCompletedWindow();
+    await expect.poll(async () => (await scrapeEventLoopMetrics()).count).toBeGreaterThan(0);
+    const firstWindow = await scrapeEventLoopMetrics();
+    expect(firstWindow.observed).toBeGreaterThan(0);
+    const nextWindow = await readCompletedWindow();
+    await expect
+      .poll(async () => (await scrapeEventLoopMetrics()).count)
+      .toBeGreaterThan(firstWindow.count);
+    const retainedWindows = await scrapeEventLoopMetrics();
+    // Prometheus renders 12 significant digits; tolerate only serialization rounding.
+    expect(retainedWindows.observed).toBeGreaterThanOrEqual(
+      firstWindow.observed + nextWindow.intervalMs / 1_000 - 1e-9,
+    );
+    expect(retainedWindows.sum).toBeGreaterThanOrEqual(
+      firstWindow.sum + nextWindow.delayMaxMs / 1_000 - 1e-9,
+    );
+    expect(retainedWindows.lines.join("\n")).not.toMatch(/\{(?!le=)/u);
+    // Background health readers may complete windows between full-Gateway scrapes.
+    let previous = retainedWindows;
+    for (let scrape = 0; scrape < 2; scrape++) {
+      const current = await scrapeEventLoopMetrics();
+      expect(current.count).toBeGreaterThanOrEqual(previous.count);
+      expect(current.sum).toBeGreaterThanOrEqual(previous.sum);
+      expect(current.observed).toBeGreaterThanOrEqual(previous.observed);
+      previous = current;
+    }
     const gatewayLogs = await fs.readFile(gatewayLog, "utf8");
     expect(gatewayLogs).not.toContain(
       "diagnostics-prometheus: internal diagnostics capability unavailable",
     );
+    try {
+      // Graceful stop drains legitimate startup work; the forced reaper is cleanup only.
+      expect(gateway.kill("SIGTERM")).toBe(true);
+      await gatewayClosed;
+      expect(gateway.exitCode).toBe(0);
+      expect(gateway.signalCode).toBeNull();
+    } catch (cause) {
+      const termination = { exitCode: gateway.exitCode, signalCode: gateway.signalCode };
+      // Snapshot termination before reading the log that afterEach will remove.
+      const shutdownLogs = await fs.readFile(gatewayLog, "utf8");
+      throw new Error(
+        `Gateway shutdown failed: ${JSON.stringify(termination)}\n${shutdownLogs.slice(-8_000)}`,
+        { cause },
+      );
+    }
   }, 300_000);
 });

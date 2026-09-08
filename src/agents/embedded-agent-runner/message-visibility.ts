@@ -9,6 +9,7 @@ import {
   SILENT_REPLY_TOKEN,
 } from "../../auto-reply/tokens.js";
 import { resolveAssistantMessagePhase } from "../../shared/chat-message-content.js";
+import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../delivery-evidence-values.js";
 
 type AgentPayloadLike = {
   text?: unknown;
@@ -29,10 +30,6 @@ type PayloadVisibilityOptions = {
   includeSilentReplyPayloads?: boolean;
   requireTerminalContent?: boolean;
 };
-
-function hasNonEmptyStringArray(value: unknown): boolean {
-  return Array.isArray(value) && value.some(hasNonEmptyString);
-}
 
 function collectStringValues(value: unknown, output: Set<string>) {
   if (typeof value === "string" && value.trim()) {

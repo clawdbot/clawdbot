@@ -200,4 +200,54 @@ describe("applyGroupGating allowlist drop warning", () => {
 
     expect(warn).not.toHaveBeenCalled();
   });
+
+  it("warns once per account and group for identity-derived mention drops", async () => {
+    const warn = vi.fn<WarnLogger>();
+    const cfg = {
+      agents: { list: [{ id: "main", identity: { name: "Claw" } }] },
+      channels: {
+        whatsapp: {
+          groups: { "*": {} },
+          accounts: { work: { groups: { "*": {} } } },
+        },
+      },
+    } satisfies ApplyGroupGatingParams["cfg"];
+    const makeUnmentioned = (conversationId: string, accountId = "default") => {
+      const msg = makeUnregisteredGroupMsg(conversationId, accountId);
+      msg.payload.body = "What up";
+      return makeParams(msg, warn, cfg);
+    };
+    const first = makeUnmentioned("mention-a@g.us");
+
+    await expect(applyGroupGating(first)).resolves.toEqual({ shouldProcess: false });
+    await applyGroupGating(first);
+    await applyGroupGating(makeUnmentioned("mention-b@g.us"));
+    await applyGroupGating(makeUnmentioned("mention-a@g.us", "work"));
+
+    expect(warn).toHaveBeenCalledTimes(3);
+    expect(first.groupHistories.get(first.groupHistoryKey)).toHaveLength(2);
+    expect(warn.mock.calls[0]?.[1]).toContain(
+      'channels.whatsapp.groups["mention-a@g.us"].requireMention',
+    );
+    expect(warn.mock.calls[2]?.[1]).toContain(
+      'channels.whatsapp.accounts.work.groups["mention-a@g.us"].requireMention',
+    );
+    expect(warn.mock.calls[0]?.[1]).toContain("false");
+    expect(warn.mock.calls.flat().join(" ")).not.toContain("What up");
+    expect(warn.mock.calls.flat().join(" ")).not.toContain("+15550000002");
+  });
+
+  it("does not let a registry warning suppress a later mention warning for the same group", async () => {
+    const warn = vi.fn<WarnLogger>();
+    const msg = makeUnregisteredGroupMsg("registry-then-mention@g.us");
+    await applyGroupGating(makeParams(msg, warn));
+    msg.payload.body = "What up";
+    const params = makeParams(msg, warn);
+    params.cfg.channels!.whatsapp!.groups = { "*": {} };
+
+    await applyGroupGating(params);
+
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[1]?.[1]).toContain("requireMention");
+  });
 });

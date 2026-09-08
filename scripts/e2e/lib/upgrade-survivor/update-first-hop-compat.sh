@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source scripts/lib/openclaw-e2e-instance.sh
 source scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh
+source scripts/lib/docker-e2e-logs.sh
 
 if [ "${OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP:-0}" != "1" ]; then
   echo "blocked destructive package self-update; set OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 to run" >&2
@@ -16,6 +18,8 @@ ARTIFACT_DIR="${OPENCLAW_UPDATE_FIRST_HOP_ARTIFACT_DIR:-/tmp/openclaw-update-fir
 EXPECTED_MISSING_CHUNK="${OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK:-shared-Y6bNiw2w.js}"
 BASE_PATH="$PATH"
 ACCOUNT_HOME="$HOME"
+mock_pid=""
+trap 'openclaw_e2e_stop_process "${mock_pid:-}"' EXIT
 
 export CI=true
 export OPENCLAW_ALLOW_ROOT=1
@@ -33,22 +37,34 @@ for package_path in "$SOURCE_PACKAGE" "$CANDIDATE_PACKAGE" "$NEGATIVE_PACKAGE" "
   fi
 done
 mkdir -p "$ARTIFACT_DIR"
+source_version="$(tar -xOf "$SOURCE_PACKAGE" package/package.json | node -pe 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).version')"
+candidate_version="$(tar -xOf "$CANDIDATE_PACKAGE" package/package.json | node -pe 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).version')"
 
 package_root() {
   printf '%s/lib/node_modules/openclaw\n' "$npm_config_prefix"
 }
 
-write_update_command() {
-  local output="$1" target="$2"
+run_update() {
+  local output="$ARTIFACT_DIR/$1" target="$2" update_status=0
   printf '%q ' env "PATH=$PATH" "npm_config_prefix=$npm_config_prefix" openclaw \
-    update --yes "--tag=$target" --json >"$output"
-  printf '\n' >>"$output"
+    update --yes "--tag=$target" --json >"$output-command.txt"
+  printf '\n' >>"$output-command.txt"
+  openclaw update --yes "--tag=$target" --json \
+    >"$output.stdout" 2>"$output.stderr" || update_status="$?"
+  printf '%s\n' "$update_status" >"$output.exit"
+  if [ "$update_status" -ne 0 ]; then
+    echo "package update $1 exited with status $update_status" >&2
+    docker_e2e_print_log "$output.stdout" >&2
+    docker_e2e_print_log "$output.stderr" >&2
+  fi
+  return "$update_status"
 }
 
 record_residue() {
   local output="$1"
   find "$npm_config_prefix/lib/node_modules" -maxdepth 2 \
-    \( -name '.openclaw-update-*' -o -name 'openclaw.backup-*' -o -name '*.rollback-*' \) \
+    \( -name '.openclaw-update-*' -o -name '.openclaw.update-stage-*' \
+      -o -name '.openclaw.package-backup-*' -o -name 'openclaw.backup-*' -o -name '*.rollback-*' \) \
     -print | sort >"$output"
 }
 
@@ -108,11 +124,18 @@ setup_lane() {
 
   mkdir -p "$OPENCLAW_STATE_DIR" "$npm_config_prefix" "$npm_config_cache"
   npm install -g --prefix "$npm_config_prefix" "$SOURCE_PACKAGE" --no-fund --no-audit \
-    >"$ARTIFACT_DIR/$lane-install-source.log" 2>&1
+    >"$ARTIFACT_DIR/$lane-install-source.log" 2>&1 || {
+      docker_e2e_print_log "$ARTIFACT_DIR/$lane-install-source.log" >&2
+      return 1
+    }
   openclaw --version >"$ARTIFACT_DIR/$lane-source-version.txt"
   install_update_restart_systemctl_shim
   openclaw config set gateway.mode local >"$ARTIFACT_DIR/$lane-config.log" 2>&1
   openclaw config set gateway.port "$port" >>"$ARTIFACT_DIR/$lane-config.log" 2>&1
+  openclaw config set gateway.reload.mode off >>"$ARTIFACT_DIR/$lane-config.log" 2>&1
+  if [ "$source_version" = "2026.9.2" ]; then
+    node scripts/e2e/lib/release-scenarios/assertions.mjs configure-mock-openai 44212
+  fi
   openclaw gateway install --force --json \
     >"$ARTIFACT_DIR/$lane-service-install.json" \
     2>"$ARTIFACT_DIR/$lane-service-install.err"
@@ -138,14 +161,8 @@ reset_lane() {
 run_negative_control() {
   local lane=negative
   setup_lane "$lane" 18791
-  write_update_command "$ARTIFACT_DIR/$lane-update-command.txt" "$NEGATIVE_PACKAGE"
-  set +e
-  openclaw update --yes "--tag=$NEGATIVE_PACKAGE" --json \
-    >"$ARTIFACT_DIR/$lane-update.stdout" \
-    2>"$ARTIFACT_DIR/$lane-update.stderr"
-  local update_status="$?"
-  set -e
-  printf '%s\n' "$update_status" >"$ARTIFACT_DIR/$lane-update.exit"
+  local update_status=0
+  run_update "$lane-update" "$NEGATIVE_PACKAGE" || update_status="$?"
   assert_installed_build "$CANDIDATE_PACKAGE" "$ARTIFACT_DIR/$lane-installed-build-info.json"
   record_residue "$ARTIFACT_DIR/$lane-transaction-residue.txt"
   assert_no_residue "$ARTIFACT_DIR/$lane-transaction-residue.txt"
@@ -174,12 +191,12 @@ run_positive_hops() {
   local first_pid
   first_pid="$(cat "$ARTIFACT_DIR/$lane-before.pid")"
 
-  write_update_command "$ARTIFACT_DIR/$lane-first-command.txt" "$CANDIDATE_PACKAGE"
-  openclaw update --yes "--tag=$CANDIDATE_PACKAGE" --json \
-    >"$ARTIFACT_DIR/$lane-first.stdout" \
-    2>"$ARTIFACT_DIR/$lane-first.stderr"
-  printf '0\n' >"$ARTIFACT_DIR/$lane-first.exit"
+  run_update "$lane-first" "$CANDIDATE_PACKAGE"
   assert_installed_build "$CANDIDATE_PACKAGE" "$ARTIFACT_DIR/$lane-first-build-info.json"
+  if [ "$candidate_version" = "2026.9.3" ]; then
+    node scripts/e2e/lib/external-package-transition.mjs schema 16 \
+      >"$ARTIFACT_DIR/$lane-first-shared-schema.json"
+  fi
   wait_service_active
   local candidate_pid
   candidate_pid="$(cat "$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE")"
@@ -195,12 +212,9 @@ run_positive_hops() {
   record_residue "$ARTIFACT_DIR/$lane-first-transaction-residue.txt"
   assert_no_residue "$ARTIFACT_DIR/$lane-first-transaction-residue.txt"
   record_service_state "$ARTIFACT_DIR/$lane-service-after-first.txt"
+  node scripts/e2e/lib/release-scenarios/assertions.mjs configure-mock-openai 44212
 
-  write_update_command "$ARTIFACT_DIR/$lane-second-command.txt" "$FUTURE_PACKAGE"
-  openclaw update --yes "--tag=$FUTURE_PACKAGE" --json \
-    >"$ARTIFACT_DIR/$lane-second.stdout" \
-    2>"$ARTIFACT_DIR/$lane-second.stderr"
-  printf '0\n' >"$ARTIFACT_DIR/$lane-second.exit"
+  run_update "$lane-second" "$FUTURE_PACKAGE"
   assert_installed_build "$FUTURE_PACKAGE" "$ARTIFACT_DIR/$lane-second-build-info.json"
   wait_service_active
   local future_pid
@@ -222,6 +236,10 @@ run_positive_hops() {
   stop_lane
 }
 
+export OPENAI_API_KEY="sk-openclaw-first-hop"
+export MOCK_REQUEST_LOG="$ARTIFACT_DIR/openai-requests.jsonl"
+mock_pid="$(openclaw_e2e_start_mock_openai 44212 "$ARTIFACT_DIR/mock-openai.log")"
+openclaw_e2e_wait_mock_openai 44212
 run_negative_control
 run_positive_hops
 
@@ -229,8 +247,8 @@ EXPECTED_MISSING_CHUNK="$EXPECTED_MISSING_CHUNK" node -e '
   const fs = require("node:fs");
   fs.writeFileSync(process.argv[1], `${JSON.stringify({
     negativeControl: { exit: 1, missingChunk: process.env.EXPECTED_MISSING_CHUNK },
-    firstHop: { exit: 0, serviceIntent: "active", residueCount: 0 },
-    secondHop: { exit: 0, serviceIntent: "active", residueCount: 0 },
+    firstHop: { exit: 0, method: "in-process-self-update", selfUpdatePassed: true, serviceIntent: "active", residueCount: 0 },
+    secondHop: { exit: 0, method: "in-process-self-update", legacyCompatibilityChunksPresent: false, serviceIntent: "active", residueCount: 0 },
   }, null, 2)}\n`);
 ' "$ARTIFACT_DIR/summary.json"
 

@@ -26,29 +26,16 @@ function sha256(input: string): string {
   return createHash("sha256").update(input).digest("hex");
 }
 
-function extractBetween(input: string, startMarker: string, endMarker: string): string {
-  const start = input.indexOf(startMarker);
-  if (start === -1) {
-    return "";
-  }
-  const end = input.indexOf(endMarker, start + startMarker.length);
-  return end === -1 ? input.slice(start) : input.slice(start, end);
-}
-
 function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChars: number }> {
   const prompt = skillsPrompt.trim();
   if (!prompt) {
     return [];
   }
-  const blocks = Array.from(prompt.matchAll(/<skill>[\s\S]*?<\/skill>/gi)).map(
-    (match) => match[0] ?? "",
-  );
-  return blocks
-    .map((block) => {
-      const name = block.match(/<name>\s*([^<]+?)\s*<\/name>/i)?.[1]?.trim() || "(unknown)";
-      return { name, blockChars: block.length };
-    })
-    .filter((b) => b.blockChars > 0);
+  return Array.from(prompt.matchAll(/<skill>[\s\S]*?<\/skill>/gi), (match) => {
+    const block = match[0];
+    const name = block.match(/<name>\s*([^<]+?)\s*<\/name>/i)?.[1]?.trim() || "(unknown)";
+    return { name, blockChars: block.length };
+  });
 }
 
 function buildToolSchemaStats(
@@ -110,7 +97,14 @@ function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools
 }
 
 function measureRenderedProjectContextChars(systemPrompt: string): number {
-  return extractBetween(systemPrompt, "\n# Project Context\n", "\n## Silent Replies\n").length;
+  // Include the project heading; without Silent Replies, the range extends to the prompt end.
+  const startMarker = "\n# Project Context\n";
+  const start = systemPrompt.indexOf(startMarker);
+  if (start === -1) {
+    return 0;
+  }
+  const end = systemPrompt.indexOf("\n## Silent Replies\n", start + startMarker.length);
+  return (end === -1 ? systemPrompt.length : end) - start;
 }
 
 /** Builds the stored report for a rendered system prompt and its inputs. */

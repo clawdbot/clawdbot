@@ -328,13 +328,13 @@ export function serializeFormForSubmit(state: RuntimeConfigState): string {
 export function adoptConfigSetAck(
   state: RuntimeConfigState,
   submittedRaw: string,
-  ackHash: string | null,
+  ackHash: string,
 ) {
   const parsed = parseConfigRawDraft(submittedRaw);
   state.configSnapshot = {
     ...state.configSnapshot,
     raw: submittedRaw,
-    hash: ackHash ?? state.configSnapshot?.hash ?? null,
+    hash: ackHash,
     valid: true,
     issues: [],
     ...(parsed ? { config: parsed, sourceConfig: parsed } : {}),
@@ -353,19 +353,6 @@ export function adoptConfigSetAck(
     if (parsed) {
       state.configForm = cloneConfigObject(parsed);
     }
-  }
-}
-
-// Legacy hashless ack: when the follow-up reload returns exactly the submitted
-// bytes, rebase a preserved dirty draft onto that authoritative hash. Foreign
-// content matches neither and stays fail-closed.
-export function reconcileHashlessWriteReload(state: RuntimeConfigState, submittedRaw: string) {
-  if (state.configSnapshot?.raw !== submittedRaw) {
-    return;
-  }
-  const hash = state.configSnapshot.hash ?? null;
-  if (state.configFormDirty) {
-    state.configDraftBaseHash = hash ?? state.configDraftBaseHash;
   }
 }
 

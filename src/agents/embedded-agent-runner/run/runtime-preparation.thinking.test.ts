@@ -126,6 +126,8 @@ describe("selected route thinking metadata at runtime preparation", () => {
       workspaceDir: root,
       activeProjectKeys: [],
       config,
+      observationConfig: config,
+      isCurrent: () => true,
       authModes: {},
       metadataSnapshot,
       pluginRegistry,

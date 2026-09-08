@@ -236,4 +236,75 @@ describe("offerLiveModelVerification", () => {
     expect(persistAuthProfiles).toHaveBeenCalledOnce();
     expect(writeConfig).toHaveBeenCalledOnce();
   });
+
+  it("requires managed local model verification and keeps a failed candidate uncommitted", async () => {
+    const config: OpenClawConfig = {
+      agents: { defaults: { model: "local-fixture/model" } },
+      models: {
+        providers: {
+          "local-fixture": {
+            baseUrl: "http://127.0.0.1:12345/v1",
+            models: [],
+            localService: { command: "/fixture/server" },
+          },
+        },
+      },
+    };
+    const persistAuthProfiles = vi.fn(async () => {});
+    const writeConfig = vi.fn(async (next: OpenClawConfig) => next);
+    const prompter = createPrompter();
+    mocks.verify.mockResolvedValue({
+      ok: false,
+      status: "format",
+      error: "tool verification failed",
+    });
+    mocks.repair.mockRejectedValue(new Error("repair cancelled"));
+    await expect(
+      offerLiveModelVerification({
+        config,
+        initialCandidate: { config, authProfiles: [], persistAuthProfiles },
+        opts: {},
+        prompter,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        workspaceDir: "/tmp/openclaw-test-workspace",
+        writeConfig,
+      }),
+    ).rejects.toThrow("repair cancelled");
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(prompter.select).not.toHaveBeenCalled();
+    expect(mocks.verify).toHaveBeenCalledWith(expect.objectContaining({ verifyAgentTools: true }));
+    expect(persistAuthProfiles).not.toHaveBeenCalled();
+    expect(writeConfig).not.toHaveBeenCalled();
+  });
+
+  it("leaves verification of an existing managed route optional", async () => {
+    const config: OpenClawConfig = {
+      agents: { defaults: { model: "local-fixture/model" } },
+      models: {
+        providers: {
+          "local-fixture": {
+            baseUrl: "http://127.0.0.1:12345/v1",
+            models: [],
+            localService: { command: "/fixture/server" },
+          },
+        },
+      },
+    };
+    const prompter = createPrompter();
+    vi.mocked(prompter.confirm).mockResolvedValue(false);
+    const writeConfig = vi.fn(async (next: OpenClawConfig) => next);
+    expect(
+      await offerLiveModelVerification({
+        config,
+        opts: {},
+        prompter,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        workspaceDir: "/tmp/openclaw-test-workspace",
+        writeConfig,
+      }),
+    ).toMatchObject({ attempted: false, verified: false, persisted: false });
+    expect(prompter.confirm).toHaveBeenCalledOnce();
+    expect(mocks.verify).not.toHaveBeenCalled();
+    expect(writeConfig).not.toHaveBeenCalled();
+  });
 });

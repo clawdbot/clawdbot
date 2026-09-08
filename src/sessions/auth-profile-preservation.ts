@@ -6,10 +6,13 @@ import {
   findPersistedAuthProfileCredential,
   getRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/store.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { applyModelOverrideToSessionEntry } from "./model-overrides.js";
 
 type ModelOverrideSelection = {
@@ -32,15 +35,19 @@ function resolvePinnedAuthProfileProvider(params: {
   return storedProvider ?? params.cfg.auth?.profiles?.[params.profileId]?.provider;
 }
 
-/** Checks whether a pinned session auth profile can authenticate the selected provider. */
-export function shouldPreserveSessionAuthProfileOverride(params: {
+type SessionAuthProfilePreservationParams = {
   cfg: OpenClawConfig;
   agentDir: string;
   entry: SessionEntry;
   currentProvider: string;
   provider: string;
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
-}): boolean {
+};
+
+/** Checks whether a pinned session auth profile can authenticate the selected provider. */
+export function shouldPreserveSessionAuthProfileOverride(
+  params: SessionAuthProfilePreservationParams,
+): boolean {
   const profileOverride = normalizeOptionalString(params.entry.authProfileOverride);
   const provider = normalizeOptionalLowercaseString(params.provider);
   if (!profileOverride || !provider) {
@@ -67,10 +74,24 @@ export function shouldPreserveSessionAuthProfileOverride(params: {
     return resolvesToTargetProvider(recordedProvider);
   }
   const delimiterIndex = profileOverride.indexOf(":");
-  if (delimiterIndex < 0) {
+  // Missing personal IDs carry no provider; admission must report the unavailable account, not replace it.
+  if (delimiterIndex < 0 || isUserModelAuthProfileId(profileOverride)) {
     return resolvesToTargetProvider(params.currentProvider);
   }
   return resolvesToTargetProvider(profileOverride.slice(0, delimiterIndex));
+}
+
+/** Missing credentials preserve explicit same-provider intent until authentication reports recovery. */
+export function shouldPreserveUnavailableSessionAuthProfileOverride(
+  params: SessionAuthProfilePreservationParams & { store: Pick<AuthProfileStore, "profiles"> },
+): boolean {
+  const profileId = normalizeOptionalString(params.entry.authProfileOverride);
+  return Boolean(
+    profileId &&
+    !params.store.profiles[profileId] &&
+    resolveCollapsedSessionAuthPinSource(params.entry) === "user" &&
+    shouldPreserveSessionAuthProfileOverride(params),
+  );
 }
 
 /** Applies a user model selection without dropping a compatible pinned auth profile. */

@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   activateSelfRemovingControl,
   captureUiProof,
@@ -17,6 +18,7 @@ import {
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
+const rosterMatch = { includeGlobal: true };
 
 async function confirmDelete(page: import("playwright").Page, proofName?: string) {
   const dialog = await waitForConfirmModal(page);
@@ -104,11 +106,7 @@ suite.define(() => {
   });
 
   it("refreshes the archived sidebar after restoring a session during a stale roster load", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const updatedAt = Date.parse("2026-07-01T16:00:00.000Z");
     const main = sessionRow("agent:main:main", "Main", updatedAt);
@@ -138,7 +136,7 @@ suite.define(() => {
       await captureUiProof(suite, page, "filtered-roster-forced-refresh-before.png");
 
       const archivedRequests = async () =>
-        (await gateway.getRequests("sessions.list")).filter(
+        (await gateway.getRequests("sessions.list", rosterMatch)).filter(
           (request) => requireRecord(request.params).archived === true,
         );
       const initialRequests = (await archivedRequests()).length;
@@ -169,11 +167,7 @@ suite.define(() => {
   });
 
   it("deletes every archived thread exactly once when the paged roster reorders", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const keys = ["agent:main:first", "agent:main:repeated", "agent:main:moved"];
     const archived = keys.map((key, index) =>
@@ -227,11 +221,7 @@ suite.define(() => {
   });
 
   it("never deletes a hidden thread selected before changing the roster search", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const alpha = "agent:main:alpha";
     const bravo = "agent:main:bravo";
@@ -285,11 +275,7 @@ suite.define(() => {
   });
 
   it("archives a session from the Sessions page context menu and kebab", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {
@@ -402,11 +388,7 @@ suite.define(() => {
   // The whole selection now crosses the Gateway once and settles from one list.
 
   it("archives a mixed active and idle sidebar multi-select in one RPC", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const batchKeys = ["agent:main:batch-a", "agent:main:batch-b", "agent:main:batch-c"] as const;
@@ -438,7 +420,7 @@ suite.define(() => {
       for (const key of batchKeys.slice(1)) {
         await rowFor(key).waitFor({ state: "visible" });
       }
-      const listCountBeforeBatch = (await gateway.getRequests("sessions.list")).length;
+      const listCountBeforeBatch = (await gateway.getRequests("sessions.list", rosterMatch)).length;
 
       for (const key of batchKeys) {
         await rowFor(key).click({ modifiers: ["Alt"] });
@@ -468,7 +450,9 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.abort")).toEqual([]);
       expect(await gateway.getRequests("agent.wait")).toEqual([]);
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 10_000 })
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length, {
+          timeout: 10_000,
+        })
         .toBe(listCountBeforeBatch + 1);
       for (const key of batchKeys) {
         await rowFor(key).waitFor({ state: "detached" });
@@ -479,18 +463,16 @@ suite.define(() => {
         .toContain("Archived 3 sessions");
       await captureUiProof(suite, page, "sidebar-multi-select-archive-settled.png");
       await page.waitForTimeout(500);
-      expect((await gateway.getRequests("sessions.list")).length).toBe(listCountBeforeBatch + 1);
+      expect((await gateway.getRequests("sessions.list", rosterMatch)).length).toBe(
+        listCountBeforeBatch + 1,
+      );
     } finally {
       await context.close();
     }
   });
 
   it("keeps the selected session through archive refreshes and restores the composer", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const sessionRows = Array.from({ length: 15 }, (_, index) => {
@@ -806,11 +788,7 @@ suite.define(() => {
   });
 
   it("keeps archive state after navigating away and back", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const main = sessionRow("agent:main:main", "Main", baseTime);
@@ -868,7 +846,7 @@ suite.define(() => {
       await archivedRow.waitFor({ state: "detached", timeout: 10_000 });
 
       await gateway.setMethodResponse("sessions.list", sessionsListResponse([main, target]));
-      let listRequestCount = (await gateway.getRequests("sessions.list")).length;
+      let listRequestCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await gateway.emitGatewayEvent("sessions.changed", {
         ...target,
         updatedAt: baseTime + 1_000,
@@ -876,7 +854,7 @@ suite.define(() => {
         sessionKey: target.key,
       });
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(listRequestCount);
 
       await gateway.setMethodResponse(
@@ -887,7 +865,7 @@ suite.define(() => {
           { ...archived, archived: false, updatedAt: baseTime + 3_000 },
         ]),
       );
-      listRequestCount = (await gateway.getRequests("sessions.list")).length;
+      listRequestCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await gateway.emitGatewayEvent("sessions.changed", {
         ...target,
         updatedAt: baseTime + 2_000,
@@ -895,7 +873,7 @@ suite.define(() => {
         sessionKey: target.key,
       });
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(listRequestCount);
 
       await page.goBack();
@@ -911,11 +889,7 @@ suite.define(() => {
   });
 
   it("recovers a deleted active chat without repeatedly resolving its missing session", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const routeErrors: string[] = [];
     page.on("console", (message) => {
@@ -944,7 +918,8 @@ suite.define(() => {
         .locator(".agent-chat__input textarea")
         .waitFor({ state: "visible", timeout: 10_000 });
 
-      const requestsBeforeDeletion = (await gateway.getRequests("sessions.list")).length;
+      const requestsBeforeDeletion = (await gateway.getRequests("sessions.list", rosterMatch))
+        .length;
       await gateway.setSessionsListResponse(sessionsListResponse([mainSession]));
       await gateway.emitGatewayEvent("sessions.changed", {
         agentId: "main",
@@ -967,23 +942,29 @@ suite.define(() => {
         .locator(".agent-chat__input textarea")
         .waitFor({ state: "visible", timeout: 10_000 });
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(requestsBeforeDeletion);
       await expect
         .poll(
           async () => {
-            const count = (await gateway.getRequests("sessions.list")).length;
+            const count = (await gateway.getRequests("sessions.list", rosterMatch)).length;
             await new Promise((resolve) => {
               setTimeout(resolve, 350);
             });
-            return (await gateway.getRequests("sessions.list")).length - count;
+            return (await gateway.getRequests("sessions.list", rosterMatch)).length - count;
           },
           { timeout: 5_000 },
         )
         .toBe(0);
 
-      const settledRequestCount = (await gateway.getRequests("sessions.list")).length;
-      await expectRequestCountStable(gateway, "sessions.list", settledRequestCount);
+      const settledRequestCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
+      await expectRequestCountStable(
+        gateway,
+        "sessions.list",
+        settledRequestCount,
+        500,
+        rosterMatch,
+      );
       expect(routeErrors).toEqual([]);
       await captureUiProof(suite, page, "deleted-active-session-fallback.png");
     } finally {
@@ -992,11 +973,7 @@ suite.define(() => {
   });
 
   it("archive-gates a row-menu delete and keeps the row when the Gateway reports no deletion", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const key = "agent:main:research";
     const gateway = await installMockGateway(page, {

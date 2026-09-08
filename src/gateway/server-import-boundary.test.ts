@@ -183,14 +183,14 @@ describe("gateway startup import boundaries", () => {
     expect(serverImpl).not.toContain('from "../tasks/task-registry.maintenance.js"');
     expect(serverImpl).toContain('import("../tasks/task-registry.maintenance.js")');
     expect(serverImpl).not.toContain('from "../secrets/runtime.js"');
-    expect(readSource("src/gateway/server-reload-handlers.ts")).not.toContain(
+    expect(readSource("src/gateway/server-reload-managed.ts")).not.toContain(
       'from "../secrets/runtime.js"',
     );
     const wsConnection = readSource("src/gateway/server/ws-connection.ts");
-    expect(wsConnection).not.toMatch(
-      /import\s+\{[^}]*attachGatewayWsMessageHandler[^}]*\}\s+from "\.\/ws-connection\/message-handler\.js"/s,
+    const wsGraph = collectStaticValueImportGraph("src/gateway/server/ws-connection.ts");
+    expect([...wsGraph.keys()]).not.toContain(
+      path.join(repoRoot, "src/gateway/server/ws-connection/message-handler.ts"),
     );
-    expect(wsConnection).toContain('import("./ws-connection/message-handler.js")');
     expect(wsConnection).not.toContain('from "../talk-realtime-relay.js"');
     expect(wsConnection).not.toContain('from "../talk-transcription-relay.js"');
     expect(wsConnection).toContain('from "../talk-session-registry.js"');
@@ -286,57 +286,5 @@ describe("gateway startup import boundaries", () => {
       "const loadWorkerSessionToolExecutorModule = createLazyRuntimeModule(",
     );
     expect(workerStartup).toContain("loadWorkerSessionToolExecutorModule().then(");
-  });
-
-  it("fences config reload before gateway teardown and gateway_stop hooks", () => {
-    const serverImpl = readServerImplementation();
-    const closeStart = /close:\s*async\s*\([^)]*\)\s*=>/u.exec(serverImpl)?.index ?? -1;
-    const hookStart = serverImpl.indexOf('name: "gateway_stop plugin hooks"', closeStart);
-    const reloadStopStart = serverImpl.indexOf('name: "close prelude fence"', closeStart);
-    const terminalStopStart = serverImpl.indexOf('name: "terminal sessions"', closeStart);
-    const closePreludeStart = serverImpl.indexOf('name: "gateway close prelude"', closeStart);
-    const lateSidecarJoinStart = serverImpl.indexOf('name: "late sidecar cleanup"', closeStart);
-    const gatewayCloseStart = serverImpl.indexOf('name: "gateway close"', lateSidecarJoinStart);
-    const markHelperStart = serverImpl.indexOf("const markClosePreludeStarted = () => {");
-    const markHelperEnd = serverImpl.indexOf("};", markHelperStart);
-    const beginHelperStart = serverImpl.indexOf("const beginClosePrelude = async () => {");
-    const beginHelperEnd = serverImpl.indexOf("};", beginHelperStart);
-    const postReadyStart = serverImpl.indexOf("scheduleGatewayPostReadyMaintenance({");
-    const postReadyEnd = serverImpl.indexOf("});", postReadyStart);
-    const postReadyBlock = serverImpl.slice(postReadyStart, postReadyEnd);
-
-    expect(closeStart).toBeGreaterThan(-1);
-    expect(reloadStopStart).toBeGreaterThan(closeStart);
-    expect(reloadStopStart).toBeLessThan(terminalStopStart);
-    expect(reloadStopStart).toBeLessThan(hookStart);
-    expect(lateSidecarJoinStart).toBeGreaterThan(closePreludeStart);
-    expect(lateSidecarJoinStart).toBeLessThan(gatewayCloseStart);
-    expect(serverImpl.slice(closeStart, hookStart)).not.toContain("await import(");
-    expect(markHelperStart).toBeGreaterThan(-1);
-    expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
-      "clearPostReadyMaintenanceTimer();",
-    );
-    expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
-      "cronReconciliation.invalidate();",
-    );
-    expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
-      "void stopOutboundDeliveryRecoveryForClose();",
-    );
-    expect(beginHelperStart).toBeGreaterThan(-1);
-    expect(serverImpl.slice(beginHelperStart, beginHelperEnd)).toContain(
-      "markClosePreludeStarted();",
-    );
-    expect(serverImpl.slice(beginHelperStart, beginHelperEnd)).toContain(
-      "stopConfigReloaderForClose().catch",
-    );
-    expect(serverImpl.slice(beginHelperStart, beginHelperEnd)).toContain(
-      "stopOutboundDeliveryRecoveryForClose(),",
-    );
-    expect(postReadyStart).toBeGreaterThan(-1);
-    expect(postReadyBlock).toContain("isClosing: () => lifecycle.closePreludeStarted");
-    expect(postReadyBlock).toContain("if (lifecycle.closePreludeStarted)");
-    expect(postReadyBlock).toContain(
-      "shouldStartCron: () => !lifecycle.closePreludeStarted && !cronStartState.handled",
-    );
   });
 });

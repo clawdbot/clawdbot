@@ -1,6 +1,7 @@
-import type {
-  SessionCatalogHost,
-  SessionCatalogSession,
+import {
+  GATEWAY_OWNER_PROFILE_ID,
+  type SessionCatalogHost,
+  type SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -36,7 +37,8 @@ export function resolveSessionCatalogVisibility(
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   const admin = authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, scopes).allowed;
   const multipleIdentities = hasMultipleSessionSharingIdentities();
-  const profileId = client?.authenticatedUserProfile?.profileId;
+  const attachedProfileId = client?.authenticatedUserProfile?.profileId;
+  const profileId = attachedProfileId === GATEWAY_OWNER_PROFILE_ID ? undefined : attachedProfileId;
   const others = admin ? undefined : operatorSessionCap(client, config);
   const profileAliases = profileId ? readUserProfileAliases(profileId) : undefined;
   const cacheKey = JSON.stringify({
@@ -83,10 +85,11 @@ export function filterSessionCatalogHost(
   host: SessionCatalogHost,
   visibility: SessionCatalogVisibility,
   params: {
+    audience?: SessionCatalogProvider["audience"];
     requestEntries: ReturnType<typeof createSessionCatalogRequestEntrySnapshot>;
   },
 ): SessionCatalogHost {
-  if (visibility.kind === "unrestricted") {
+  if (visibility.kind === "unrestricted" || params.audience === "gateway-operators") {
     return host;
   }
   if (visibility.kind === "restricted-unprofiled") {
@@ -105,6 +108,7 @@ export function filterSessionCatalogHost(
 export async function isSessionCatalogThreadVisible(params: {
   access: "read" | "mutate";
   allowProcessHomeFallback: boolean;
+  audience?: SessionCatalogProvider["audience"];
   client: GatewayClient | null;
   getConfig: () => OpenClawConfig;
   fallbackAgentId: string;
@@ -119,7 +123,7 @@ export async function isSessionCatalogThreadVisible(params: {
   if (visibility.kind === "unrestricted") {
     return true;
   }
-  if (visibility.kind === "restricted-unprofiled") {
+  if (visibility.kind === "restricted-unprofiled" && params.audience !== "gateway-operators") {
     return false;
   }
   const planningEntries = createSessionCatalogRequestEntrySnapshot({
@@ -149,7 +153,7 @@ export async function isSessionCatalogThreadVisible(params: {
     if (visibility.kind === "unrestricted") {
       return true;
     }
-    if (visibility.kind === "restricted-unprofiled") {
+    if (visibility.kind === "restricted-unprofiled" && params.audience !== "gateway-operators") {
       return false;
     }
     const requestEntries = createSessionCatalogRequestEntrySnapshot({
@@ -165,6 +169,14 @@ export async function isSessionCatalogThreadVisible(params: {
         (!params.sourceHomeId || candidate.sourceHomeId === params.sourceHomeId),
     );
     if (session) {
+      // Gateway-hosted catalogs already live inside this Gateway's trust domain.
+      // Method scopes and creation policy remain the read/mutation authority.
+      if (params.audience === "gateway-operators") {
+        return true;
+      }
+      if (visibility.kind === "restricted-unprofiled") {
+        return false;
+      }
       const visibleEntry = visibleCatalogSessionEntry({
         session,
         requestEntries,

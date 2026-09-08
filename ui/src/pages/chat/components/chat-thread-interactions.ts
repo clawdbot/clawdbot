@@ -12,7 +12,9 @@ import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
+import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
 import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
@@ -72,6 +74,9 @@ export type ChatThreadProps = ChatSendStatusActions & {
   /** Routing for peer sender names in a shared session. */
   personActivity?: PersonActivityRouting;
   sessionKey: string;
+  presented?: boolean;
+  /** Mounted transcript visibility, independent of which split pane owns input. */
+  transcriptVisible?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
   selectedSession: GatewaySessionRow | undefined;
   boardProvider?: BoardProvider;
@@ -114,11 +119,12 @@ export type ChatThreadProps = ChatSendStatusActions & {
   userId?: string | null;
   userName?: string | null;
   userAvatar?: string | null;
+  avatarPlacement?: "none";
   basePath?: string;
   resourceBasePath?: string;
   fullMessageAgentId?: string;
   loadFullAssistantMessage?: SidebarFullMessageLoader | null;
-  localMediaPreviewRoots?: string[];
+  mediaPolicyEpoch?: number;
   connectionEpoch?: number;
   assistantAttachmentAuthToken?: string | null;
   resolveArtifactDownload?: ArtifactDownloadResolver;
@@ -126,6 +132,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   fetchLinkFavicon?: LinkFaviconFetcher;
+  githubRepo?: MarkdownRenderOptions["githubRepo"];
   autoExpandToolCalls?: boolean;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   typingActors?: readonly { id: string; label: string; preview?: string }[];
@@ -202,6 +209,8 @@ export function dismissThreadPortals(paneId?: string, owner?: ParentNode): void 
 
 export function resetTranscriptSession(paneId: string, owner?: ParentNode): void {
   dismissThreadPortals(paneId, owner);
+  // Retained panes keep their DOM, so their native table modals need explicit retirement.
+  owner?.querySelectorAll<HTMLElement>(".chat-thread").forEach(releaseMarkdownTables);
   const state = transcriptStates.get(paneId);
   if (state) {
     // Search input belongs to the outgoing transcript. Other fields are pane
@@ -241,18 +250,20 @@ export function renderTranscriptSearch(
         placeholder=${t("chat.thread.searchPlaceholder")}
         aria-label=${t("chat.thread.search")}
         .value=${state.searchQuery}
-        ${state.searchFocusPending
-          ? ref((element) => {
-              if (element instanceof HTMLInputElement) {
-                state.searchFocusPending = false;
-                queueMicrotask(() => {
-                  if (element.isConnected) {
-                    element.focus({ preventScroll: true });
-                  }
-                });
-              }
-            })
-          : nothing}
+        ${
+          state.searchFocusPending
+            ? ref((element) => {
+                if (element instanceof HTMLInputElement) {
+                  state.searchFocusPending = false;
+                  queueMicrotask(() => {
+                    if (element.isConnected) {
+                      element.focus({ preventScroll: true });
+                    }
+                  });
+                }
+              })
+            : nothing
+        }
         @input=${(event: Event) => {
           state.searchQuery = (event.target as HTMLInputElement).value;
           requestUpdate();

@@ -92,6 +92,21 @@ describe("rewriteDiscordKnownMentions", () => {
       expected: "inline `@alice` fence ```\n@alice\n``` text <@123456789>",
     },
     {
+      name: "closed multiline single-backtick code",
+      input: "Example: `first\nsecond`\nPlease review @alice",
+      expected: "Example: `first\nsecond`\nPlease review <@123456789>",
+    },
+    {
+      name: "closed multiline double-backtick code with CRLF",
+      input: "Example: ``first ` line\r\nsecond``\r\nPlease review @alice",
+      expected: "Example: ``first ` line\r\nsecond``\r\nPlease review <@123456789>",
+    },
+    {
+      name: "closed multiline code containing a longer backtick run",
+      input: "Example: ``first ``` literal\nsecond``\nPlease review @alice",
+      expected: "Example: ``first ``` literal\nsecond``\nPlease review <@123456789>",
+    },
+    {
       name: "unterminated single-backtick code",
       input: "outside @alice then `inside @alice",
       expected: "outside <@123456789> then `inside @alice",

@@ -23,6 +23,10 @@ const validSystemInfo = {
   diskTotalBytes: 994_662_584_320,
   diskAvailableBytes: 497_331_292_160,
   diskPath: "/Users/operator/.openclaw",
+  disks: [
+    { path: "/", totalBytes: 994_662_584_320, availableBytes: 497_331_292_160 },
+    { path: "/data", totalBytes: 2_000_000_000_000, availableBytes: 1_000_000_000_000 },
+  ],
 };
 
 describe("SystemInfoResultSchema", () => {
@@ -32,5 +36,13 @@ describe("SystemInfoResultSchema", () => {
 
   it("rejects extra properties", () => {
     expect(Value.Check(SystemInfoResultSchema, { ...validSystemInfo, extra: true })).toBe(false);
+  });
+
+  it.each([
+    { path: "/", totalBytes: 0, availableBytes: 0 },
+    { path: "/", totalBytes: 100, availableBytes: -1 },
+    { path: "", totalBytes: 100, availableBytes: 1 },
+  ])("rejects invalid disk metrics: %j", (disk) => {
+    expect(Value.Check(SystemInfoResultSchema, { ...validSystemInfo, disks: [disk] })).toBe(false);
   });
 });

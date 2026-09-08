@@ -35,11 +35,12 @@ final class NodePairingApprovalPrompter {
     static let shared = NodePairingApprovalPrompter()
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "node-pairing")
+    private let gateway: GatewayConnection
+    private let center: PairingApprovalCenter
+    private var source: PairingPromptSupport.Source?
     private var task: Task<Void, Never>?
     private var reconcileTask: Task<Void, Never>?
     private var reconcileOnceTask: Task<Void, Never>?
-    private var reconcileInFlight = false
-    private var isStopping = false
     private var queue: [PendingRequest] = []
     var pendingCount: Int = 0
     /// Node ids already paired on the gateway (from the last list fetch);
@@ -89,6 +90,7 @@ final class NodePairingApprovalPrompter {
         let remoteIp: String?
         let silent: Bool?
         let ts: Double
+        var requiredApproveScopes: [String]?
 
         var id: String {
             self.requestId
@@ -98,29 +100,35 @@ final class NodePairingApprovalPrompter {
     private typealias PairingResolvedEvent = PairingPromptSupport.PairingResolvedEvent
     private typealias PairingResolution = PairingPromptSupport.PairingResolution
 
+    init(gateway: GatewayConnection = .shared, center: PairingApprovalCenter = .shared) {
+        self.gateway = gateway
+        self.center = center
+    }
+
     func start() {
         self.reconcileTask?.cancel()
         self.reconcileTask = nil
-        PairingApprovalCenter.shared.register(kind: .node) { [weak self] card, decision in
+        self.center.register(kind: .node) { [weak self] card, decision in
             await self?.handleDecision(card: card, decision: decision)
         }
-        self.startPushTask()
-    }
-
-    private func startPushTask() {
         PairingPromptSupport.startPairingPushTask(
             task: &self.task,
-            isStopping: &self.isStopping,
-            loadPending: self.loadPendingRequestsFromGateway,
-            handlePush: self.handle(push:))
+            gateway: self.gateway,
+            handlePush: self.handle(delivery:))
     }
 
     func stop() {
-        PairingPromptSupport.stopPairingPrompter(
-            isStopping: &self.isStopping,
-            task: &self.task,
-            queue: &self.queue)
-        PairingApprovalCenter.shared.unregister(kind: .node)
+        self.task?.cancel()
+        self.task = nil
+        self.replaceSource(nil)
+        self.center.unregister(kind: .node)
+    }
+
+    private func replaceSource(_ source: PairingPromptSupport.Source?) {
+        self.source?.retire()
+        self.source = source
+        self.queue.removeAll()
+        self.pairedNodeIds.removeAll()
         self.reconcileTask?.cancel()
         self.reconcileTask = nil
         self.reconcileOnceTask?.cancel()
@@ -131,28 +139,29 @@ final class NodePairingApprovalPrompter {
         self.pendingLocalDecisionRequestIds.removeAll(keepingCapacity: false)
         self.echoedResolutionsByRequestId.removeAll(keepingCapacity: false)
         self.trustUnknownRequestIds.removeAll(keepingCapacity: false)
+        self.syncCards()
     }
 
-    private func loadPendingRequestsFromGateway() async {
+    private func owns(_ source: PairingPromptSupport.Source) -> Bool {
+        self.source === source && source.isCurrent
+    }
+
+    private func loadPendingRequestsFromGateway(source: PairingPromptSupport.Source) async {
         // The gateway process may start slightly after the app. Retry a bit so
         // pending pairing prompts are still shown on launch.
         var delayMs: UInt64 = 200
         for attempt in 1...8 {
-            if Task.isCancelled { return }
+            guard !Task.isCancelled, self.owns(source) else { return }
             do {
-                let data = try await GatewayConnection.shared.request(
-                    method: "node.pair.list",
-                    params: nil,
-                    timeoutMs: 6000)
-                guard !data.isEmpty else { return }
-                let list = try JSONDecoder().decode(PairingList.self, from: data)
-                let pendingCount = list.pending.count
+                try await self.refreshPairingList(timeoutMs: 6000, source: source)
+                guard self.owns(source) else { return }
+                let pendingCount = self.queue.count
                 guard pendingCount > 0 else { return }
                 self.logger.info(
                     "loaded \(pendingCount, privacy: .public) pending node pairing request(s) on startup")
-                self.apply(list: list)
                 return
             } catch {
+                guard !Task.isCancelled, self.owns(source) else { return }
                 if attempt == 8 {
                     self.logger
                         .error(
@@ -165,36 +174,26 @@ final class NodePairingApprovalPrompter {
         }
     }
 
-    private func reconcileLoop() async {
+    private func reconcileLoop(source: PairingPromptSupport.Source) async {
         // Reconcile requests periodically so multiple running apps stay in sync
         // (e.g. close cards + notify if another machine approves/rejects via app or CLI).
-        while !Task.isCancelled {
-            if self.isStopping {
-                break
-            }
-            if !self.shouldPoll {
-                self.reconcileTask = nil
-                return
-            }
-            await self.reconcileOnce(timeoutMs: 2500)
+        // Queue mutations own the task slot; an exiting loop cannot clear its replacement.
+        while !Task.isCancelled, self.owns(source), self.shouldPoll {
+            await self.reconcileOnce(timeoutMs: 2500, source: source)
             try? await Task.sleep(
                 nanoseconds: NodePairingReconcilePolicy.activeIntervalMs * 1_000_000)
         }
-        self.reconcileTask = nil
     }
 
-    private func fetchPairingList(timeoutMs: Double) async throws -> PairingList {
-        let data = try await GatewayConnection.shared.request(
-            method: "node.pair.list",
-            params: nil,
-            timeoutMs: timeoutMs)
-        return try JSONDecoder().decode(PairingList.self, from: data)
-    }
-
-    private func apply(list: PairingList) {
-        if self.isStopping {
-            return
+    private func refreshPairingList(timeoutMs: Double, source: PairingPromptSupport.Source) async throws {
+        try await source.refreshList(method: "node.pair.list", timeoutMs: timeoutMs) { data in
+            let list = try JSONDecoder().decode(PairingList.self, from: data)
+            self.apply(list: list, source: source)
         }
+    }
+
+    private func apply(list: PairingList, source: PairingPromptSupport.Source) {
+        guard self.owns(source) else { return }
 
         self.pairedNodeIds = Set((list.paired ?? []).map(\.nodeId))
         // This snapshot is authoritative for every pending request in it.
@@ -205,7 +204,7 @@ final class NodePairingApprovalPrompter {
 
         // Enqueue any missing requests (covers missed pushes while reconnecting).
         for req in list.pending.sorted(by: { $0.ts < $1.ts }) {
-            self.enqueue(req)
+            self.enqueue(req, source: source)
         }
 
         // Detect resolved requests (approved/rejected elsewhere).
@@ -223,7 +222,7 @@ final class NodePairingApprovalPrompter {
                 self.echoedResolutionsByRequestId[req.requestId] = resolution
             } else {
                 Task { @MainActor in
-                    await self.notify(resolution: resolution, request: req, via: "remote")
+                    await self.notify(resolution: resolution, request: req, via: "remote", source: source)
                 }
             }
         }
@@ -246,19 +245,29 @@ final class NodePairingApprovalPrompter {
         return .approved
     }
 
-    private func handle(push: GatewayPush) {
+    private func handle(delivery: GatewayConnection.PushDelivery) {
+        guard let push = delivery.push else {
+            if self.source?.lease == delivery.serverLease { self.replaceSource(nil) }
+            return
+        }
+        guard delivery.isCurrent else { return }
+        if self.source?.lease != delivery.serverLease {
+            self.replaceSource(.init(lease: delivery.serverLease, gateway: self.gateway))
+        }
+        guard let source = self.source else { return }
         switch push {
         case let .event(evt) where evt.event == "node.pair.requested":
             guard let payload = evt.payload else { return }
             do {
                 let req = try GatewayPayloadDecoding.decode(payload, as: PendingRequest.self)
+                source.invalidateList()
                 self.trustUnknownRequestIds.insert(req.requestId)
-                self.enqueue(req)
+                self.enqueue(req, source: source)
                 self.syncCards()
                 self.updateReconcileLoop()
                 // Refresh the paired list now so the card's "previously
                 // paired" trust signal reflects current gateway truth.
-                self.scheduleReconcileOnce(delayMs: 0)
+                self.scheduleReconcileOnce(delayMs: 0, source: source)
             } catch {
                 self.logger
                     .error("failed to decode pairing request: \(error.localizedDescription, privacy: .public)")
@@ -267,23 +276,27 @@ final class NodePairingApprovalPrompter {
             guard let payload = evt.payload else { return }
             do {
                 let resolved = try GatewayPayloadDecoding.decode(payload, as: PairingResolvedEvent.self)
-                self.handleResolved(resolved)
+                self.handleResolved(resolved, source: source)
             } catch {
                 self.logger
                     .error(
                         "failed to decode pairing resolution: \(error.localizedDescription, privacy: .public)")
             }
         case .snapshot:
-            self.scheduleReconcileOnce(delayMs: 0)
+            Task { await self.loadPendingRequestsFromGateway(source: source) }
         case .seqGap:
-            self.scheduleReconcileOnce()
+            source.invalidateList()
+            self.scheduleReconcileOnce(source: source)
         default:
             return
         }
     }
 
-    private func enqueue(_ req: PendingRequest) {
-        if self.queue.contains(where: { $0.requestId == req.requestId }) {
+    private func enqueue(_ req: PendingRequest, source: PairingPromptSupport.Source) {
+        if let index = self.queue.firstIndex(where: { $0.requestId == req.requestId }) {
+            // A fresh list can add approval requirements absent from an older
+            // Gateway's push; refresh its metadata without repeating auto-approval.
+            self.queue[index] = req
             return
         }
         // The gateway keeps at most one live pending request per node; a newer
@@ -292,19 +305,20 @@ final class NodePairingApprovalPrompter {
         self.queue.removeAll { $0.nodeId == req.nodeId }
         self.queue.append(req)
         self.updatePendingCounts()
-        self.beginAutoApproveIfEligible(req)
+        self.beginAutoApproveIfEligible(req, source: source)
     }
 
     /// Auto-approve runs before the request surfaces in the panel: the app's
     /// own local node pairs silently, and `silent` requests are approved after
     /// an SSH trust probe. Only failed attempts fall through to the UI.
-    private func beginAutoApproveIfEligible(_ req: PendingRequest) {
+    private func beginAutoApproveIfEligible(_ req: PendingRequest, source: PairingPromptSupport.Source) {
         guard !self.autoApproveAttempts.contains(req.requestId) else { return }
         guard self.isAutoApproveCandidate(req) else { return }
         self.autoApproveInFlight.insert(req.requestId)
         Task { @MainActor [weak self] in
-            guard let self else { return }
-            let approved = await self.tryAutomaticApproveIfPossible(req)
+            guard let self, self.owns(source) else { return }
+            let approved = await self.tryAutomaticApproveIfPossible(req, source: source)
+            guard self.owns(source) else { return }
             self.autoApproveInFlight.remove(req.requestId)
             if approved {
                 self.queue.removeAll { $0.requestId == req.requestId }
@@ -329,7 +343,6 @@ final class NodePairingApprovalPrompter {
     }
 
     private func syncCards() {
-        guard !self.isStopping else { return }
         // A pending local decision hides the card immediately (the decision is
         // optimistic); the failure path re-syncs so the card can come back.
         let cards = self.queue
@@ -338,7 +351,7 @@ final class NodePairingApprovalPrompter {
                     !self.pendingLocalDecisionRequestIds.contains($0.requestId)
             }
             .map { self.card(for: $0) }
-        PairingApprovalCenter.shared.sync(kind: .node, cards: cards)
+        self.center.sync(kind: .node, cards: cards)
     }
 
     private func card(for req: PendingRequest) -> PairingApprovalCenter.Card {
@@ -361,24 +374,28 @@ final class NodePairingApprovalPrompter {
             previouslyPaired: self.trustUnknownRequestIds.contains(req.requestId)
                 ? nil
                 : self.pairedNodeIds.contains(req.nodeId),
-            requestedAt: Date(timeIntervalSince1970: req.ts / 1000))
+            requestedAt: Date(timeIntervalSince1970: req.ts / 1000),
+            requiredApproveScopes: req.requiredApproveScopes,
+            source: self.source)
     }
 
     private func handleDecision(card: PairingApprovalCenter.Card, decision: PairingApprovalCenter.Decision) async {
-        guard !self.isStopping else { return }
-        guard let request = self.queue.first(where: { $0.requestId == card.requestId }) else { return }
+        guard let source = card.source, self.owns(source),
+              let request = self.queue.first(where: { $0.requestId == card.requestId })
+        else {
+            self.logger.info("pairing decision discarded because its request or Gateway connection changed")
+            return
+        }
 
         self.pendingLocalDecisionRequestIds.insert(request.requestId)
         // Optimistic dismiss: the card leaves the panel before the RPC
         // round-trip; the outcome arrives as a notification instead.
         self.syncCards()
         let expected: PairingResolution = decision == .approve ? .approved : .rejected
-        let rpcOk: Bool = switch decision {
-        case .approve:
-            await self.approve(requestId: request.requestId)
-        case .reject:
-            await self.reject(requestId: request.requestId)
-        }
+        let rpcOk = await PairingPromptSupport.decide(
+            requestId: request.requestId, kind: .node, decision: decision, source: source, logger: self.logger)
+        guard self.owns(source) else { return }
+        source.invalidateList()
         self.pendingLocalDecisionRequestIds.remove(request.requestId)
 
         if let echoed = self.echoedResolutionsByRequestId.removeValue(forKey: request.requestId) {
@@ -386,9 +403,9 @@ final class NodePairingApprovalPrompter {
             // (possibly another operator with the opposite decision); report
             // the authoritative outcome, not what the user asked for.
             let via = rpcOk && echoed == expected ? "local" : "remote"
-            await self.notify(resolution: echoed, request: request, via: via)
+            await self.notify(resolution: echoed, request: request, via: via, source: source)
         } else if rpcOk {
-            await self.notify(resolution: expected, request: request, via: "local")
+            await self.notify(resolution: expected, request: request, via: "local", source: source)
         } else {
             // RPC failed and nothing resolved it elsewhere: bring the card
             // back, tell the user the optimistic dismiss did not stick, and
@@ -397,41 +414,29 @@ final class NodePairingApprovalPrompter {
             await PairingPromptSupport.notifyDecisionFailed(
                 kind: .node,
                 decision: decision,
+                source: source,
                 subject: PairingPromptSupport.subjectLabel(
                     displayName: request.displayName,
                     fallback: request.nodeId))
-            self.scheduleReconcileOnce(delayMs: 0)
+            guard self.owns(source) else { return }
+            self.scheduleReconcileOnce(delayMs: 0, source: source)
             return
         }
 
+        guard self.owns(source) else { return }
         self.queue.removeAll { $0.requestId == request.requestId }
         self.updatePendingCounts()
         self.syncCards()
         self.updateReconcileLoop()
     }
 
-    private func approve(requestId: String) async -> Bool {
-        await PairingPromptSupport.approveRequest(
-            requestId: requestId,
-            kind: "node",
-            logger: self.logger)
-        {
-            try await GatewayConnection.shared.nodePairApprove(requestId: requestId)
-        }
-    }
-
-    private func reject(requestId: String) async -> Bool {
-        await PairingPromptSupport.rejectRequest(
-            requestId: requestId,
-            kind: "node",
-            logger: self.logger)
-        {
-            try await GatewayConnection.shared.nodePairReject(requestId: requestId)
-        }
-    }
-
-    private func notify(resolution: PairingResolution, request: PendingRequest, via: String) async {
-        guard await PairingPromptSupport.notificationsAuthorized() else { return }
+    private func notify(
+        resolution: PairingResolution,
+        request: PendingRequest,
+        via: String,
+        source: PairingPromptSupport.Source) async
+    {
+        guard self.owns(source) else { return }
 
         let title = resolution == .approved ? "Node pairing approved" : "Node pairing rejected"
         let device = PairingPromptSupport.subjectLabel(
@@ -443,15 +448,21 @@ final class NodePairingApprovalPrompter {
             title: title,
             body: body,
             sound: nil,
-            priority: .active)
+            priority: .active,
+            requestPermission: false,
+            isCurrent: { self.owns(source) })
     }
 
-    private struct SSHTarget {
+    struct SSHTarget: Equatable {
         let host: String
         let port: Int
     }
 
-    private func tryAutomaticApproveIfPossible(_ req: PendingRequest) async -> Bool {
+    private func tryAutomaticApproveIfPossible(
+        _ req: PendingRequest,
+        source: PairingPromptSupport.Source) async -> Bool
+    {
+        guard self.owns(source) else { return false }
         guard let localNodeId = DeviceIdentityStore.loadOrCreatePersisted(
             profile: MacNodeModeCoordinator.nodeIdentityProfile)?.deviceId
         else {
@@ -465,13 +476,13 @@ final class NodePairingApprovalPrompter {
             localNodeId: localNodeId)
         {
             guard self.beginAutoApproveAttempt(requestId: req.requestId) else { return false }
-            return await self.approveAutomatically(req, via: "local-node", notify: false)
+            return await self.approveAutomatically(req, via: "local-node", notify: false, source: source)
         }
 
         guard req.silent == true else { return false }
         guard self.beginAutoApproveAttempt(requestId: req.requestId) else { return false }
 
-        guard let target = await self.resolveSSHTarget() else {
+        guard let target = await self.resolveSSHTarget(source: source), self.owns(source) else {
             self.logger.info("silent pairing skipped (no ssh target) requestId=\(req.requestId, privacy: .public)")
             return false
         }
@@ -483,21 +494,34 @@ final class NodePairingApprovalPrompter {
         }
 
         let ok = await Self.probeSSH(user: user, host: target.host, port: target.port)
+        guard self.owns(source) else {
+            self.logger.info("silent pairing probe result ignored after the Gateway connection changed")
+            return false
+        }
         if !ok {
             self.logger.info("silent pairing probe failed requestId=\(req.requestId, privacy: .public)")
             return false
         }
 
-        return await self.approveAutomatically(req, via: "silent-ssh", notify: true)
+        return await self.approveAutomatically(req, via: "silent-ssh", notify: true, source: source)
     }
 
-    private func approveAutomatically(_ req: PendingRequest, via: String, notify: Bool) async -> Bool {
+    private func approveAutomatically(
+        _ req: PendingRequest, via: String, notify: Bool, source: PairingPromptSupport.Source) async -> Bool
+    {
+        guard self.owns(source) else { return false }
         self.pendingLocalDecisionRequestIds.insert(req.requestId)
         defer {
-            self.pendingLocalDecisionRequestIds.remove(req.requestId)
-            self.echoedResolutionsByRequestId.removeValue(forKey: req.requestId)
+            if self.source === source {
+                self.pendingLocalDecisionRequestIds.remove(req.requestId)
+                self.echoedResolutionsByRequestId.removeValue(forKey: req.requestId)
+            }
         }
-        guard await self.approve(requestId: req.requestId) else {
+        let approved = await PairingPromptSupport.decide(
+            requestId: req.requestId, kind: .node, decision: .approve, source: source, logger: self.logger)
+        guard self.owns(source) else { return false }
+        source.invalidateList()
+        guard approved else {
             self.logger.info("automatic pairing approve failed requestId=\(req.requestId, privacy: .public)")
             return false
         }
@@ -508,7 +532,7 @@ final class NodePairingApprovalPrompter {
             via=\(via, privacy: .public)
             """)
         if notify {
-            await self.notify(resolution: .approved, request: req, via: via)
+            await self.notify(resolution: .approved, request: req, via: via, source: source)
         }
         return true
     }
@@ -527,21 +551,13 @@ final class NodePairingApprovalPrompter {
         connectionMode == .local && requestNodeId == localNodeId
     }
 
-    private func resolveSSHTarget() async -> SSHTarget? {
+    private func resolveSSHTarget(source: PairingPromptSupport.Source) async -> SSHTarget? {
         let settings = CommandResolver.connectionSettings()
-        if !settings.target.isEmpty, let parsed = CommandResolver.parseSSHTarget(settings.target) {
-            let user = NSUserName().trimmingCharacters(in: .whitespacesAndNewlines)
-            if let targetUser = parsed.user,
-               !targetUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-               targetUser != user
-            {
-                self.logger.info("silent pairing skipped (ssh user mismatch)")
-                return nil
-            }
-            let host = parsed.host.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !host.isEmpty else { return nil }
-            let port = parsed.port > 0 ? parsed.port : 22
-            return SSHTarget(host: host, port: port)
+        let gatewayURL = source.lease.route.url
+        let user = NSUserName().trimmingCharacters(in: .whitespacesAndNewlines)
+        if settings.mode == .remote, settings.transport == .ssh {
+            return Self.silentPairingSSHTarget(
+                settings: settings, gatewayURL: gatewayURL, gateways: [], preferredStableID: nil, user: user)
         }
 
         let model = GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName)
@@ -549,12 +565,48 @@ final class NodePairingApprovalPrompter {
         defer { model.stop() }
 
         let deadline = Date().addingTimeInterval(5.0)
-        while model.gateways.isEmpty, Date() < deadline {
+        while self.owns(source), Date() < deadline {
+            if let target = Self.silentPairingSSHTarget(
+                settings: settings,
+                gatewayURL: gatewayURL,
+                gateways: model.gateways,
+                preferredStableID: GatewayDiscoveryPreferences.preferredStableID(),
+                user: user)
+            {
+                return target
+            }
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
+        return nil
+    }
 
-        let preferred = GatewayDiscoveryPreferences.preferredStableID()
-        let gateway = model.gateways.first { $0.stableID == preferred } ?? model.gateways.first
+    static func silentPairingSSHTarget(
+        settings: CommandResolver.RemoteSettings,
+        gatewayURL: URL,
+        gateways: [GatewayDiscoveryModel.DiscoveredGateway],
+        preferredStableID: String?,
+        user: String) -> SSHTarget?
+    {
+        if settings.mode == .remote, settings.transport == .ssh {
+            guard let parsed = CommandResolver.parseSSHTarget(settings.target) else { return nil }
+            if let targetUser = parsed.user,
+               !targetUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               targetUser != user
+            {
+                return nil
+            }
+            let host = parsed.host.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !host.isEmpty else { return nil }
+            return SSHTarget(host: host, port: parsed.port > 0 ? parsed.port : 22)
+        }
+        // SSH proves ownership only of the server behind this captured route.
+        // Dormant SSH settings and unrelated Bonjour entries cannot authorize it.
+        guard let owner = try? MacGatewayProfileStore.canonicalURL(gatewayURL) else { return nil }
+        let matches = gateways.filter {
+            guard let raw = GatewayDiscoveryHelpers.directUrl(for: $0), let url = URL(string: raw) else { return false }
+            return (try? MacGatewayProfileStore.canonicalURL(url)) == owner
+        }
+        let gateway = matches.first { $0.stableID == preferredStableID } ?? matches.first
         guard let gateway else { return nil }
         guard let target = GatewayDiscoveryHelpers.sshTarget(for: gateway),
               let parsed = CommandResolver.parseSSHTarget(target)
@@ -589,11 +641,11 @@ final class NodePairingApprovalPrompter {
     }
 
     private func updateReconcileLoop() {
-        guard !self.isStopping else { return }
+        guard let source = self.source else { return }
         if self.shouldPoll {
             if self.reconcileTask == nil {
                 self.reconcileTask = Task { [weak self] in
-                    await self?.reconcileLoop()
+                    await self?.reconcileLoop(source: source)
                 }
             }
         } else {
@@ -607,35 +659,30 @@ final class NodePairingApprovalPrompter {
         self.pendingCount = self.queue.count
     }
 
-    private func reconcileOnce(timeoutMs: Double) async {
-        if self.isStopping {
-            return
-        }
-        if self.reconcileInFlight {
-            return
-        }
-        self.reconcileInFlight = true
-        defer { self.reconcileInFlight = false }
+    private func reconcileOnce(timeoutMs: Double, source: PairingPromptSupport.Source) async {
         do {
-            let list = try await self.fetchPairingList(timeoutMs: timeoutMs)
-            self.apply(list: list)
+            try await self.refreshPairingList(timeoutMs: timeoutMs, source: source)
         } catch {
             // best effort: ignore transient connectivity failures
         }
     }
 
-    private func scheduleReconcileOnce(delayMs: UInt64 = NodePairingReconcilePolicy.resyncDelayMs) {
+    private func scheduleReconcileOnce(
+        delayMs: UInt64 = NodePairingReconcilePolicy.resyncDelayMs, source: PairingPromptSupport.Source)
+    {
         self.reconcileOnceTask?.cancel()
         self.reconcileOnceTask = Task { [weak self] in
             guard let self else { return }
             if delayMs > 0 {
                 try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
             }
-            await self.reconcileOnce(timeoutMs: 2500)
+            guard !Task.isCancelled else { return }
+            await self.reconcileOnce(timeoutMs: 2500, source: source)
         }
     }
 
-    private func handleResolved(_ resolved: PairingResolvedEvent) {
+    private func handleResolved(_ resolved: PairingResolvedEvent, source: PairingPromptSupport.Source) {
+        source.invalidateList()
         let resolution: PairingResolution =
             resolved.decision == PairingResolution.approved.rawValue ? .approved : .rejected
 
@@ -651,7 +698,7 @@ final class NodePairingApprovalPrompter {
             self.echoedResolutionsByRequestId[resolved.requestId] = resolution
         } else {
             Task { @MainActor in
-                await self.notify(resolution: resolution, request: request, via: "remote")
+                await self.notify(resolution: resolution, request: request, via: "remote", source: source)
             }
         }
         self.updateReconcileLoop()

@@ -311,19 +311,22 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   ) => {
     const { isCurrent } = captureSessionIncarnation();
     selector.onSelect = (item) => {
+      if (pickerRequest !== request) {
+        return;
+      }
+      // Close on first selection so a slow backend cannot leave the picker consuming draft input.
+      closeOverlayAndRender(overlayHandle);
       void (async () => {
         try {
           if (isCurrent()) {
             await onSelect(item.value);
           }
         } catch (err) {
-          // A rejected selection must not strand the overlay open with an
-          // unhandled rejection; close it and surface the cause in chat.
           if (isCurrent()) {
             chatLog.addSystem(`selection failed: ${formatTuiErrorMessage(err)}`);
           }
         }
-        closeOverlayAndRender(overlayHandle);
+        tui.requestRender();
       })();
     };
     selector.onCancel = () => closeOverlayAndRender(overlayHandle);

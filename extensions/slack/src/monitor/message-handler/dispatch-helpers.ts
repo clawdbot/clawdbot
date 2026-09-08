@@ -6,7 +6,7 @@ import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-ru
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveSlackReplyRenderPlan } from "../../reply-blocks.js";
+import { prepareSlackReply, type PreparedSlackReply } from "../../reply-blocks.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { readSlackReplyBlocks, resolveSlackThreadTs } from "../replies.js";
 import { resolveSlackTimestampMs } from "./timestamp.js";
@@ -90,7 +90,6 @@ export function resolveExplicitSlackProgressTitle(
 export function resolveSlackProgressStyle(entry: SlackProgressConfigEntry): "card" | "compact" {
   // DO NOT REMOVE OR CHANGE THE COMPACT STYLE WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
   const progress = entry?.streaming?.progress;
-  // Quiet previews retain authored preambles; cards remain an explicit choice.
   return progress?.style ?? (progress?.toolProgress === false ? "compact" : "card");
 }
 
@@ -148,14 +147,14 @@ function getSlackStreamRecipientTeamCache(client: object): Map<string, string> {
   return cache;
 }
 
-function buildSlackEventDeliveryKey(params: SlackEventDeliveryAttempt): string | null {
+export function buildSlackEventDeliveryKey(
+  params: SlackEventDeliveryAttempt,
+  preparedReply: PreparedSlackReply = prepareSlackReply(params.payload),
+): string | null {
   const reply = resolveSendableOutboundReplyParts(params.payload, {
     text: params.textOverride,
   });
-  const renderPlan = resolveSlackReplyRenderPlan(
-    params.payload,
-    params.textOverride ?? params.payload.text,
-  );
+  const renderPlan = preparedReply.resolvePreview(params.textOverride);
   const plannedBlocks =
     renderPlan.mode === "single" ? renderPlan.blocks : renderPlan.blockPart?.blocks;
   const slackBlocks = readSlackReplyBlocks(params.payload) ?? plannedBlocks;
@@ -218,12 +217,10 @@ function rememberSlackStreamRecipientTeam(params: {
 export function createSlackEventDeliveryTracker() {
   const deliveredKeys = new Set<string>();
   return {
-    hasDelivered(params: SlackEventDeliveryAttempt) {
-      const key = buildSlackEventDeliveryKey(params);
+    hasDelivered(key: string | null) {
       return key ? deliveredKeys.has(key) : false;
     },
-    markDelivered(params: SlackEventDeliveryAttempt) {
-      const key = buildSlackEventDeliveryKey(params);
+    markDelivered(key: string | null) {
       if (key) {
         deliveredKeys.add(key);
       }

@@ -89,8 +89,8 @@ const { FakeWebSocket, isProviderAuthProfileConfiguredMock, resolveApiKeyForProv
     };
   });
 
-vi.mock("ws", () => ({
-  default: FakeWebSocket,
+vi.mock("./ws-runtime.js", () => ({
+  WebSocket: FakeWebSocket,
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
@@ -188,6 +188,111 @@ async function openRealtimeBridge(bridge: TestBridge, index = 0, conversationId?
 }
 
 describe("buildXaiRealtimeVoiceProvider", () => {
+  it.each([false, true])(
+    "releases a marked completed response after interruption (server VAD=%s)",
+    async (serverVad) => {
+      vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+      let playback = [{ itemId: "item-a", audioEndMs: 500 }];
+      const trace: string[] = [];
+      const bridge = createTestBridge({
+        getPlaybackState: () => playback,
+        onClearAudio: () => {
+          playback = [];
+          trace.push("sink.clear");
+        },
+        onEvent: (event) => {
+          if (event.direction === "client") {
+            trace.push(event.type);
+          }
+        },
+      });
+      const socket = await openRealtimeBridge(bridge);
+      socket.emitServer({ type: "response.created", response: { id: "response-a" } });
+      socket.emitServer({
+        type: "response.output_audio.delta",
+        item_id: "item-a",
+        delta: Buffer.alloc(8000).toString("base64"),
+      });
+      socket.emitServer({
+        type: "response.done",
+        response: { id: "response-a", status: "completed" },
+      });
+      bridge.sendUserMessage?.("synthetic pending B");
+      expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([]);
+      trace.length = 0;
+      if (serverVad) {
+        socket.emitServer({ type: "input_audio_buffer.speech_started" });
+      } else {
+        bridge.handleBargeIn?.({ force: true, audioPlaybackActive: true });
+      }
+      expect(trace).toEqual([
+        ...(serverVad ? [] : ["response.cancel"]),
+        "conversation.item.truncate",
+        "sink.clear",
+        ...(serverVad ? [] : ["response.create"]),
+      ]);
+      expect(parseSent(socket).some((event) => event.type === "response.cancel")).toBe(!serverVad);
+      bridge.close();
+    },
+  );
+
+  it.each(["failed", "incomplete", "cancelled", undefined])(
+    "retires unheard playback marks after a %s native terminal",
+    async (status) => {
+      vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+      const onMark = vi.fn();
+      const bridge = createTestBridge({ onMark });
+      const socket = await openRealtimeBridge(bridge);
+      socket.emitServer({ type: "response.created" });
+      socket.emitServer({
+        type: "response.output_audio.delta",
+        item_id: "discarded",
+        delta: Buffer.alloc(8000).toString("base64"),
+      });
+      bridge.sendUserMessage?.("next response");
+      expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([]);
+      socket.emitServer({ type: "response.done", response: { status } });
+      expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([
+        { type: "response.create" },
+      ]);
+      const oldAcknowledgment = onMark.mock.calls[0]?.[1];
+      expect(oldAcknowledgment).toBeTypeOf("function");
+      oldAcknowledgment();
+      expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
+      bridge.close();
+    },
+  );
+
+  it("keeps new VAD playback pending when a previous response is acknowledged late", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+    const onMark = vi.fn();
+    const bridge = createTestBridge({ onMark });
+    const socket = await openRealtimeBridge(bridge);
+    for (const itemId of ["previous", "current"]) {
+      if (itemId === "current") {
+        socket.emitServer({ type: "input_audio_buffer.speech_started" });
+      }
+      socket.emitServer({ type: "response.created" });
+      socket.emitServer({
+        type: "response.output_audio.delta",
+        item_id: itemId,
+        delta: Buffer.alloc(8000).toString("base64"),
+      });
+      socket.emitServer({ type: "response.done", response: { status: "completed" } });
+    }
+    bridge.sendUserMessage?.("followup");
+    const oldAcknowledgment = onMark.mock.calls[0]?.[1];
+    const currentAcknowledgment = onMark.mock.calls[1]?.[1];
+    expect(oldAcknowledgment).toBeTypeOf("function");
+    expect(currentAcknowledgment).toBeTypeOf("function");
+    oldAcknowledgment();
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([]);
+    currentAcknowledgment();
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([
+      { type: "response.create" },
+    ]);
+    bridge.close();
+  });
   beforeEach(() => {
     FakeWebSocket.instances = [];
     isProviderAuthProfileConfiguredMock.mockReset();
@@ -201,6 +306,217 @@ describe("buildXaiRealtimeVoiceProvider", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
+  });
+
+  describe("xAI sink-owned playback interruption", () => {
+    it.each([false, true])(
+      "truncates audible and queued items at sink progress (VAD=%s)",
+      async (providerVad) => {
+        let playback = [
+          { itemId: "audible", audioEndMs: 620 },
+          { itemId: "queued", audioEndMs: 0 },
+        ];
+        const onAudio = vi.fn();
+        const bridge = createTestBridge({
+          onAudio,
+          getPlaybackState: () => playback,
+          onClearAudio: () => {
+            playback = [];
+          },
+        });
+        const socket = await openRealtimeBridge(bridge);
+        for (const itemId of ["audible", "queued"]) {
+          socket.emitServer({ type: "response.created", response: { id: itemId } });
+          socket.emitServer({
+            type: "response.output_audio.delta",
+            item_id: itemId,
+            response_id: itemId,
+            delta: Buffer.alloc(8_000).toString("base64"),
+          });
+          socket.emitServer({
+            type: "response.done",
+            response: { id: itemId, status: "completed" },
+          });
+        }
+        if (providerVad) {
+          socket.emitServer({ type: "input_audio_buffer.speech_started" });
+        } else {
+          bridge.handleBargeIn?.({ audioPlaybackActive: true });
+        }
+        expect(
+          parseSent(socket).filter((event) => event.type === "conversation.item.truncate"),
+        ).toEqual([
+          {
+            type: "conversation.item.truncate",
+            item_id: "audible",
+            content_index: 0,
+            audio_end_ms: 620,
+          },
+          {
+            type: "conversation.item.truncate",
+            item_id: "queued",
+            content_index: 0,
+            audio_end_ms: 0,
+          },
+        ]);
+        expect(onAudio).toHaveBeenLastCalledWith(Buffer.alloc(8_000), {
+          itemId: "queued",
+        });
+        bridge.handleBargeIn?.({ audioPlaybackActive: true, force: true });
+        expect(
+          parseSent(socket).filter((event) => event.type === "conversation.item.truncate"),
+        ).toHaveLength(2);
+        bridge.close();
+      },
+    );
+
+    it("cancels a requested response while an authoritative empty sink preserves heard history", async () => {
+      const onAudio = vi.fn();
+      const bridge = createTestBridge({ getPlaybackState: () => [], onAudio });
+      const socket = await openRealtimeBridge(bridge);
+      bridge.sendUserMessage?.("Next answer");
+      bridge.handleBargeIn?.({ audioPlaybackActive: true, force: true });
+      bridge.handleBargeIn?.({ audioPlaybackActive: true, force: true });
+      socket.emitServer({ type: "response.created", response: { id: "next" } });
+      socket.emitServer({
+        type: "response.output_audio.delta",
+        item_id: "next",
+        delta: Buffer.alloc(8_000).toString("base64"),
+      });
+      expect(onAudio).not.toHaveBeenCalled();
+      expect(parseSent(socket).filter((event) => event.type === "response.cancel")).toHaveLength(1);
+      expect(
+        parseSent(socket).filter((event) => event.type === "conversation.item.truncate"),
+      ).toEqual([]);
+      bridge.close();
+    });
+
+    it.each(["response.created", "response.output_audio.delta"])(
+      "allows the %s observer to cancel before PCM delivery",
+      async (interruptOn) => {
+        const onAudio = vi.fn();
+        const bridge = createTestBridge({
+          onAudio,
+          getPlaybackState: () => [],
+          onEvent: (event) => {
+            if (event.direction === "server" && event.type === interruptOn) {
+              bridge.handleBargeIn?.({ force: true });
+            }
+          },
+        });
+        const socket = await openRealtimeBridge(bridge);
+        socket.emitServer({ type: "response.created", response: { id: "native" } });
+        socket.emitServer({
+          type: "response.output_audio.delta",
+          item_id: "native",
+          delta: Buffer.alloc(8_000).toString("base64"),
+        });
+        expect(onAudio).not.toHaveBeenCalled();
+        expect(parseSent(socket).filter((event) => event.type === "response.cancel")).toHaveLength(
+          1,
+        );
+        bridge.close();
+      },
+    );
+
+    it("sends no later frames when the cancellation observer closes the bridge", async () => {
+      const bridge = createTestBridge({
+        getPlaybackState: () => [{ itemId: "interrupted", audioEndMs: 500 }],
+        onEvent: (event) => {
+          if (event.direction === "client" && event.type === "response.cancel") {
+            bridge.close();
+          }
+        },
+      });
+      const socket = await openRealtimeBridge(bridge);
+      socket.emitServer({ type: "response.created", response: { id: "native" } });
+      const sent = socket.sent.length;
+      expect(() => bridge.handleBargeIn?.({ force: true })).not.toThrow();
+      expect(socket.closed).toBe(true);
+      expect(socket.sent).toHaveLength(sent + 1);
+      expect(parseSent(socket).at(-1)?.type).toBe("response.cancel");
+    });
+
+    it.each(["response.cancel", "conversation.item.truncate"])(
+      "interrupts each playback item once when the %s observer repeats control",
+      async (interruptOn) => {
+        let playback = [
+          { itemId: "audible", audioEndMs: 620 },
+          { itemId: "queued", audioEndMs: 0 },
+        ];
+        let repeated = false;
+        const onClearAudio = vi.fn(() => {
+          playback = [];
+        });
+        const bridge = createTestBridge({
+          getPlaybackState: () => playback,
+          onClearAudio,
+          onEvent: (event) => {
+            if (event.direction === "client" && event.type === interruptOn && !repeated) {
+              repeated = true;
+              bridge.handleBargeIn?.({ force: true });
+            }
+          },
+        });
+        const socket = await openRealtimeBridge(bridge);
+        socket.emitServer({ type: "response.created", response: { id: "native" } });
+        bridge.handleBargeIn?.({ force: true });
+        expect(parseSent(socket).filter((event) => event.type === "response.cancel")).toHaveLength(
+          1,
+        );
+        expect(
+          parseSent(socket).filter((event) => event.type === "conversation.item.truncate"),
+        ).toEqual([
+          {
+            type: "conversation.item.truncate",
+            item_id: "audible",
+            content_index: 0,
+            audio_end_ms: 620,
+          },
+          {
+            type: "conversation.item.truncate",
+            item_id: "queued",
+            content_index: 0,
+            audio_end_ms: 0,
+          },
+        ]);
+        expect(onClearAudio).toHaveBeenCalledOnce();
+        bridge.close();
+      },
+    );
+
+    it.each(["cancel", "close"])(
+      "does not publish marks or late PCM after the audio callback requests %s",
+      async (action) => {
+        let playback = [{ itemId: "current", audioEndMs: 0 }];
+        const onMark = vi.fn();
+        const onAudio = vi.fn(() =>
+          action === "close"
+            ? bridge.close()
+            : bridge.handleBargeIn?.({ audioPlaybackActive: true, force: true }),
+        );
+        const bridge = createTestBridge({
+          onAudio,
+          onMark,
+          getPlaybackState: () => playback,
+          onClearAudio: () => {
+            playback = [];
+          },
+        });
+        const socket = await openRealtimeBridge(bridge);
+        socket.emitServer({ type: "response.created", response: { id: "current" } });
+        const audio = {
+          type: "response.output_audio.delta",
+          item_id: "current",
+          delta: Buffer.alloc(8_000).toString("base64"),
+        };
+        socket.emitServer(audio);
+        socket.emitServer(audio);
+        expect(onAudio).toHaveBeenCalledOnce();
+        expect(onMark).not.toHaveBeenCalled();
+        bridge.close();
+      },
+    );
   });
 
   it("declares realtime Talk capabilities for catalog selection", () => {
@@ -942,6 +1258,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       audioBytes: 300 * 8,
       timestamp: 1300,
       expectedActions: [
+        { type: "response.cancel" },
         {
           type: "conversation.item.truncate",
           item_id: "item_1",
@@ -994,7 +1311,10 @@ describe("buildXaiRealtimeVoiceProvider", () => {
         bridge.acknowledgeMark?.();
       }
       if (completed) {
-        socket.emitServer({ type: "response.done" });
+        socket.emitServer({
+          type: "response.done",
+          response: { id: "resp_1", status: "completed" },
+        });
       }
       if (startNewResponse) {
         socket.emitServer({ type: "response.created", response: { id: "resp_2" } });
@@ -1520,7 +1840,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       item_id: "item_audio_1",
       delta: Buffer.from("assistant audio").toString("base64"),
     });
-    socket.emitServer({ type: "response.done" });
+    socket.emitServer({ type: "response.done", response: { status: "completed" } });
     socket.emitServer({
       type: "response.function_call_arguments.done",
       item_id: "item_call_1",
@@ -1537,8 +1857,13 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     bridge.acknowledgeMark?.("stale-mark");
     expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([]);
 
-    bridge.acknowledgeMark?.(markName);
-    expect(parseSent(socket).slice(-1)).toEqual([{ type: "response.create" }]);
+    const acknowledge = onMark.mock.calls[0]?.[1];
+    expect(acknowledge).toBeTypeOf("function");
+    acknowledge();
+    acknowledge();
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([
+      { type: "response.create" },
+    ]);
   });
 
   it("fails the session when playback marks exceed their ownership bound", async () => {

@@ -2,6 +2,7 @@ import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { cleanDeferredFinalText } from "../../tts/captioned-final.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
@@ -24,7 +25,6 @@ import {
   clearPendingFinalDeliveryAfterSuccess,
   suppressPendingFinalDelivery,
 } from "./dispatch-from-config.pending-final.js";
-import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatcher.js";
 
 type ExecuteDispatchReadyState = Extract<
   Awaited<ReturnType<typeof executeDispatch>>,
@@ -62,25 +62,23 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     turnLedger,
     waitForPendingDirectBlockReplyDelivery,
   } = state;
-  const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
+  const heartbeat = state.replyOperationRunState.heartbeat;
+  const pendingFinalOptions = { preserveActivity: heartbeat !== undefined };
+  throwIfDispatchOperationAborted();
+  const heartbeatReply = await heartbeat?.prepareReply(replyResult, state.replyOperationRunState);
+  throwIfDispatchOperationAborted();
+  const replies = heartbeatReply
+    ? heartbeatReply.reply
+      ? [heartbeatReply.reply]
+      : []
+    : replyResult
+      ? Array.isArray(replyResult)
+        ? replyResult
+        : [replyResult]
+      : [];
   const pendingFinalDeliveryIdentity = replies
     .map((reply) => getReplyPayloadMetadata(reply)?.pendingFinalDeliveryCompletion)
     .find((completion) => completion !== undefined);
-  // Final delivery is outside the progress wrappers. Wait until every source-ordered callback
-  // has at least started so a delayed tool/reasoning transition cannot appear after the final.
-  try {
-    if (state.preserveProgressCallbackStartOrder) {
-      await state.progressState.progressCallbackStartTail;
-    }
-    // Backstop: silent/streaming-delivered turns end without a visible final
-    // reply; trailing commentary must still land.
-    await state.flushPendingCommentaryProgress();
-  } catch (error) {
-    // Commentary flush precedes the status-specific handoff owner. Release the
-    // child before that pre-queue failure can escape finalization.
-    await pendingContinuationSettlement?.settle(false);
-    throw error;
-  }
   const beforeAgentRunBlocked = replies.some(
     (reply) => getReplyPayloadMetadata(reply)?.beforeAgentRunBlocked === true,
   );
@@ -91,49 +89,50 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   let acceptedFinal = false;
   let sessionWriterDeliveryRevoked = false;
   let channelTransformSuppressedFinal = false;
-  const finalDeliveries: Array<Promise<ReplyDispatchDeliveryOutcome> | undefined> = [];
+  const finalDeliveries: Array<Awaited<ReturnType<typeof state.sendFinalPayload>>> = [];
   const sentFinalPayloadDedupeKeys = new Set<string>();
   let deferredTtsTextPending = state.progressState.accumulatedBlockTtsText;
-  for (const [replyIndex, reply] of replies.entries()) {
-    const continuationSettlement =
-      pendingContinuationSettlement?.statusPayload === reply
-        ? pendingContinuationSettlement
-        : undefined;
-    let continuationSettlementAttempted = false;
-    let continuationSettlementRegistered = false;
-    const settleContinuation = async (statusDelivered: boolean) => {
-      if (!continuationSettlement || continuationSettlementAttempted) {
-        return;
-      }
-      continuationSettlementAttempted = true;
-      try {
-        await continuationSettlement.settle(statusDelivered);
-      } catch (error) {
-        if (!statusDelivered) {
-          throw error;
-        }
-        // A delivered waiting status must not strand its child completion when
-        // the batch handoff races a replaced registry row. Release the child
-        // to its normal terminal-delivery owner instead.
-        logVerbose(
-          `dispatch-from-config: continuation batch handoff failed: ${formatErrorMessage(error)}`,
-        );
-        await continuationSettlement.settle(false);
-      }
-    };
-    const releaseContinuationSettlement = () => settleContinuation(false);
+  let continuationSettlementAttempted = false;
+  let continuationSettlementRegistered = false;
+  const settleContinuation = async (statusDelivered: boolean) => {
+    if (!pendingContinuationSettlement || continuationSettlementAttempted) {
+      return;
+    }
+    continuationSettlementAttempted = true;
     try {
+      await pendingContinuationSettlement.settle(statusDelivered);
+    } catch (error) {
+      if (!statusDelivered) {
+        throw error;
+      }
+      // A delivered waiting status must not strand its child completion when
+      // the batch handoff races a replaced registry row. Release the child
+      // to its normal terminal-delivery owner instead.
+      logVerbose(
+        `dispatch-from-config: continuation batch handoff failed: ${formatErrorMessage(error)}`,
+      );
+      await pendingContinuationSettlement.settle(false);
+    }
+  };
+  try {
+    // Final delivery follows every source-ordered progress callback, including
+    // trailing commentary on silent or streaming-delivered turns.
+    if (state.preserveProgressCallbackStartOrder) {
+      await state.progressState.progressCallbackStartTail;
+    }
+    await state.flushPendingCommentaryProgress();
+    for (const [replyIndex, reply] of replies.entries()) {
       throwIfDispatchOperationAborted();
       // Durable reasoning is a channel-owned lane; generic channels keep the
       // historical suppression unless they explicitly opt in.
       if (reply.isReasoning === true && !state.reasoningPayloadsEnabled) {
-        await suppressPendingFinalDelivery(reply);
-        await releaseContinuationSettlement();
+        await suppressPendingFinalDelivery(reply, pendingFinalOptions);
+        await heartbeatReply?.settle?.("cancelled");
         continue;
       }
       if (reply.isCommentary === true && !state.commentaryPayloadsEnabled) {
-        await suppressPendingFinalDelivery(reply);
-        await releaseContinuationSettlement();
+        await suppressPendingFinalDelivery(reply, pendingFinalOptions);
+        await heartbeatReply?.settle?.("cancelled");
         continue;
       }
       if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply, state)) {
@@ -151,54 +150,90 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
             ].join(" "),
           );
         }
-        await suppressPendingFinalDelivery(reply);
-        await releaseContinuationSettlement();
+        await suppressPendingFinalDelivery(reply, pendingFinalOptions);
+        await heartbeatReply?.settle?.("cancelled");
         continue;
       }
       const finalPayloadDedupeKey = createFinalDispatchPayloadDedupeKey(reply);
       if (sentFinalPayloadDedupeKeys.has(finalPayloadDedupeKey)) {
-        await suppressPendingFinalDelivery(reply);
-        await releaseContinuationSettlement();
+        await suppressPendingFinalDelivery(reply, pendingFinalOptions);
+        await heartbeatReply?.settle?.("cancelled");
         continue;
       }
       sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
       const shouldAttachDeferredText = deferFinalTtsText && isReplyPayloadTerminalContent(reply);
       const finalReply = await state.sendFinalPayload(reply, {
         deliveryId: String(replyIndex),
+        ...(heartbeat ? { skipTts: true } : {}),
         ...(shouldAttachDeferredText
           ? {
               deferredTtsText: deferredTtsTextPending,
             }
           : {}),
       });
+      if (heartbeatReply?.settle) {
+        const settle = heartbeatReply.settle;
+        const outcome =
+          finalReply.dispatcherOutcome ??
+          Promise.resolve(
+            finalReply.blockDeliveryOutcome ?? finalReply.routedOutcome ?? "cancelled",
+          );
+        registerReplyDispatcherSettledTask(dispatcher, () => outcome.then(settle));
+      }
       if (finalReply.sessionWriterDeliveryRevoked) {
         sessionWriterDeliveryRevoked = true;
-        await releaseContinuationSettlement();
         continue;
       }
       if (finalReply.suppressionReason) {
         channelTransformSuppressedFinal ||= finalReply.suppressionReason === "channel_transform";
-        await releaseContinuationSettlement();
         continue;
       }
+      finalDeliveries.push(finalReply);
       acceptedFinal = true;
       if (shouldAttachDeferredText) {
         deferredTtsTextPending = "";
       }
-      if (finalReply.dedupedAgainstBlock) {
-        // The delivering block already settled into the turn ledger.
-        await suppressPendingFinalDelivery(reply);
-        await releaseContinuationSettlement();
+      if (finalReply.blockDeliveryOutcome) {
+        const completion = getReplyPayloadMetadata(reply)?.pendingFinalDeliveryCompletion;
+        if (
+          completion &&
+          finalReply.blockDeliveryOutcome === "failed-deliver" &&
+          !finalReply.pendingBlock
+        ) {
+          // Ambiguous direct delivery has no recorded retry custodian; fence its distinct final.
+          await settlePendingFinalDelivery({ kind: "pending-final", ...completion }, "unknown", [
+            "prepared",
+          ]);
+        } else {
+          // Explicit block custody covers this prepared duplicate; queued/unknown source survives.
+          await suppressPendingFinalDelivery(reply, pendingFinalOptions);
+        }
         continue;
       }
       attemptedFinalDelivery = true;
       queuedFinal = finalReply.queuedFinal || queuedFinal;
       routedFinalCount += finalReply.routedFinalCount;
-      if (finalReply.queuedFinal) {
-        finalDeliveries.push(finalReply.dispatcherOutcome);
+      if (finalReply.pendingBlock) {
+        // Final-only media cannot confirm or clear the block's independent pending text.
+        continue;
       }
-      if (continuationSettlement) {
-        if (finalReply.queuedFinal) {
+      // Queue admission can still be cancelled or fail. Keep the owner's receipt
+      // until this exact final payload settles as delivered.
+      const onFinalDeliverySuccess = getReplyPayloadMetadata(reply)?.onFinalDeliverySuccess;
+      if (onFinalDeliverySuccess) {
+        if (finalReply.dispatcherOutcome) {
+          registerReplyDispatcherSettledTask(dispatcher, async () => {
+            if ((await finalReply.dispatcherOutcome) === "delivered") {
+              onFinalDeliverySuccess();
+            }
+          });
+        } else if (finalReply.routedFinalCount > 0) {
+          onFinalDeliverySuccess();
+        }
+      }
+      // Metadata survives usage, threading, and transcript decoration; object identity does not.
+      if (pendingContinuationSettlement && getReplyPayloadMetadata(reply)?.continuationStatus) {
+        if (finalReply.dispatcherOutcome) {
           registerReplyDispatcherSettledTask(dispatcher, async () => {
             const outcome = await finalReply.dispatcherOutcome;
             // A post-send error can leave visibility unknown. Only an acknowledged
@@ -210,11 +245,12 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
           await settleContinuation(finalReply.routedFinalCount > 0);
         }
       }
-    } catch (error) {
-      if (!continuationSettlementRegistered) {
-        await releaseContinuationSettlement();
-      }
-      throw error;
+    }
+  } finally {
+    // The batch owns release even when an earlier payload fails or the status
+    // is filtered out. An admitted status transfers ownership to queue settlement.
+    if (!continuationSettlementRegistered) {
+      await settleContinuation(false);
     }
   }
   let channelTransformSuppressed =
@@ -223,12 +259,22 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     !acceptedFinal;
 
   if (attemptedFinalDelivery) {
-    if (queuedFinal && finalDeliveries.every((outcome) => outcome !== undefined)) {
+    if (
+      queuedFinal &&
+      finalDeliveries.every((reply) => !reply.queuedFinal || reply.dispatcherOutcome !== undefined)
+    ) {
       // Delivery observers run from the queue itself, so direct low-level callers
       // reconcile too; the settle task only makes lifecycle owners await it.
-      const reconcilePendingFinal = Promise.all(finalDeliveries)
+      const reconcilePendingFinal = Promise.all(
+        finalDeliveries.flatMap((reply) =>
+          reply.dispatcherOutcome ? [reply.dispatcherOutcome] : [],
+        ),
+      )
         .then(async () => {
-          await clearPendingFinalDeliveryAfterSuccess(pendingFinalDeliveryIdentity);
+          await clearPendingFinalDeliveryAfterSuccess(
+            pendingFinalDeliveryIdentity,
+            pendingFinalOptions,
+          );
         })
         .catch((error: unknown) => {
           logVerbose(
@@ -239,7 +285,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     } else {
       // Routed delivery has a transport result already. Custom dispatchers that
       // do not expose the core observer retain the legacy queue-admission behavior.
-      await clearPendingFinalDeliveryAfterSuccess(pendingFinalDeliveryIdentity);
+      await clearPendingFinalDeliveryAfterSuccess(
+        pendingFinalDeliveryIdentity,
+        pendingFinalOptions,
+      );
     }
     // Register successful queued cleanup before honoring a late abort. The
     // outer settle owner still runs it from finally (#89115).
@@ -334,6 +383,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   const queueCapRejected =
     replyAdmission?.status === "skipped" && replyAdmission.reason === "queue-cap";
   const noVisibleReplyFallbackAllowed = () =>
+    !heartbeat &&
     noVisibleReplyFallbackDirected &&
     !suppressDelivery &&
     !sendPolicyDenied &&
@@ -345,7 +395,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     !channelTransformSuppressed &&
     !getObservedReplyDelivery() &&
     !replyAcceptedByActiveRun &&
-    !turnLedger.hasVisibleDelivery();
+    turnLedger.canAttemptFallback();
   let queuedSettleResult: Awaited<ReturnType<typeof turnLedger.settleQueued>> = "settled";
   if (noVisibleReplyFallbackAllowed()) {
     // Only a turn that still looks empty pays for settlement: pending admissions
@@ -361,8 +411,15 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     channelTransformSuppressed ||=
       noVisibleReplyFallbackAllowed() &&
       finalDeliveries.length > 0 &&
-      finalDeliveries.every((outcome) => outcome !== undefined) &&
-      (await Promise.all(finalDeliveries)).every((outcome) => outcome === "channel-transform");
+      (
+        await Promise.all(
+          finalDeliveries.map(
+            (reply) =>
+              reply.dispatcherOutcome ??
+              Promise.resolve(reply.blockDeliveryOutcome ?? reply.routedOutcome),
+          ),
+        )
+      ).every((outcome) => outcome === "channel-transform");
     sessionWriterDeliveryRevoked ||= replies.some(
       (reply) => !state.isSessionWriterDeliveryAuthorized(reply),
     );
@@ -408,7 +465,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
           // admission stays the strongest fact so channels cannot double-send.
           const fallbackSettle = await turnLedger.settleQueued(getDispatchAbortSignal());
           throwIfDispatchOperationAborted();
-          if (fallbackSettle !== "settled" || turnLedger.hasVisibleDelivery()) {
+          if (fallbackSettle !== "settled" || turnLedger.mayHaveDelivered()) {
             queuedFinal = true;
             noVisibleReplyFallbackDelivered = true;
             // Re-snapshot so the delivered fallback is reflected in reported counts,
@@ -430,21 +487,33 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   const agentRunTerminalOutcome = state.getAgentRunTerminalOutcome();
   state.commitInboundDedupeIfClaimed();
   const messageInjectionAborted = state.replyOperationRunState.messageInjectionAborted === true;
+  const questionFailure =
+    replyAdmission?.status === "skipped" &&
+    (replyAdmission.reason === "question-response-indeterminate" ||
+      replyAdmission.reason === "question-response-refused")
+      ? replyAdmission.reason
+      : undefined;
+  const preRunRejection =
+    agentRunTerminalOutcome === "failed" ? undefined : state.replyOperationRunState.preRunRejection;
   const dispatchOutcome =
-    agentRunTerminalOutcome === "failed"
+    agentRunTerminalOutcome === "failed" || questionFailure
       ? "error"
-      : queueCapRejected || messageInjectionAborted
+      : queueCapRejected || messageInjectionAborted || preRunRejection
         ? "skipped"
         : "completed";
-  const dispatchReason = queueCapRejected
-    ? "queue-cap"
-    : messageInjectionAborted
-      ? "reply_operation_aborted"
-      : replyAdmission?.status === "accepted" && replyAdmission.mode === "steer"
-        ? "active_run_injected"
-        : channelTransformSuppressed
-          ? "channel_transform"
-          : state.bindingState.pluginFallbackReason;
+  const dispatchReason =
+    questionFailure ??
+    (queueCapRejected
+      ? "queue-cap"
+      : messageInjectionAborted
+        ? "reply_operation_aborted"
+        : preRunRejection
+          ? preRunRejection
+          : replyAdmission?.status === "accepted" && replyAdmission.mode === "steer"
+            ? "active_run_injected"
+            : channelTransformSuppressed
+              ? "channel_transform"
+              : state.bindingState.pluginFallbackReason);
   state.recordAgentDispatchCompleted(
     dispatchOutcome,
     dispatchReason ? { reason: dispatchReason } : undefined,
@@ -471,9 +540,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     // eligible, while any settled visible delivery clears it. An aborted or
     // timed-out settle leaves delivery unresolved, and a fallback reported as
     // delivered must not stay recoverable — either could double-send.
-    ...(noVisibleReplyFallbackDirected &&
+    ...(!heartbeat &&
+    noVisibleReplyFallbackDirected &&
     queuedSettleResult === "settled" &&
-    !turnLedger.hasVisibleDelivery() &&
+    turnLedger.canAttemptFallback() &&
     !noVisibleReplyFallbackDelivered &&
     !getObservedReplyDelivery() &&
     !replyAcceptedByActiveRun &&

@@ -2,6 +2,7 @@ export type SessionCleanupAction =
   | "keep"
   | "archive-dashboard"
   | "archive-cap"
+  | "archive-age"
   | "prune-missing"
   | "prune-model-run"
   | "prune-stale"
@@ -15,6 +16,7 @@ export function resolveSessionCleanupAction(params: {
   modelRunPrunedKeys: Set<string>;
   archivedKeys?: Set<string>;
   capArchivedKeys?: Set<string>;
+  ageArchivedKeys?: Set<string>;
   staleKeys: Set<string>;
   cappedKeys: Set<string>;
   dmScopeRetiredKeys: Set<string>;
@@ -30,6 +32,9 @@ export function resolveSessionCleanupAction(params: {
   }
   if (params.archivedKeys?.has(params.key) || params.capArchivedKeys?.has(params.key)) {
     return params.archivedKeys?.has(params.key) ? "archive-dashboard" : "archive-cap";
+  }
+  if (params.ageArchivedKeys?.has(params.key)) {
+    return "archive-age";
   }
   if (params.staleKeys.has(params.key)) {
     return "prune-stale";

@@ -5,8 +5,8 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { getOrCreateSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager.test-support.js";
 import { testing as sessionMcpTesting } from "../../agents/agent-bundle-mcp-runtime.js";
-import { getOrCreateSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import {
   clearEmbeddedSessionPromptStates,
@@ -32,6 +32,7 @@ import {
 } from "../../infra/outbound/session-binding-service.js";
 import {
   enqueueSystemEvent,
+  enqueueSystemEventEntry,
   peekSystemEvents,
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
@@ -3794,9 +3795,10 @@ describe("initSessionState reset authorization", () => {
         }
         expect.soft(acknowledgement?.shouldContinue).toBe(false);
         if (allowed) {
-          expect
-            .soft(acknowledgement?.reply?.text)
-            .toBe(body === "/new" ? "✅ New session started." : "✅ Session reset.");
+          expect.soft(acknowledgement?.reply).toEqual({
+            text: body === "/new" ? "✅ New session started." : "✅ Session reset.",
+            isStatusNotice: true,
+          });
         } else if (scopes) {
           expect.soft(acknowledgement?.reply?.text).toMatch(/not authorized/i);
           expect.soft(acknowledgement?.reply?.text).toContain("operator.admin");
@@ -5038,25 +5040,35 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
-  it("defers implicit daily rollover while the same session has an active run", async () => {
+  it.each([
+    {
+      label: "daily-stale session",
+      entry: {
+        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        sessionStartedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+      },
+      expectedUpdatedAt: new Date(2026, 0, 18, 5, 0, 0).getTime(),
+    },
+    {
+      label: "legacy pending-reset session",
+      entry: { updatedAt: 0 },
+      expectedUpdatedAt: 0,
+    },
+  ])("defers implicit rollover for a $label with an active run", async (scenario) => {
     vi.useFakeTimers();
-    const existingSessionId = "active-stale-session";
+    const existingSessionId = `active-${scenario.label.replaceAll(" ", "-")}`;
+    const sessionKey = `agent:main:telegram:dm:${existingSessionId}`;
     let operation: ReturnType<typeof replyRunRegistry.begin> | undefined;
     try {
       vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
-      const storePath = await createStorePath("openclaw-active-stale-archive-");
-      const sessionKey = "agent:main:telegram:dm:active-stale-user";
-      const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
-      const sessionStartedAt = new Date(2026, 0, 18, 3, 0, 0).getTime();
-
+      const storePath = await createStorePath("openclaw-active-stale-");
       await writeSessionStoreFast(storePath, {
         [sessionKey]: {
           sessionId: existingSessionId,
-          updatedAt: sessionStartedAt,
-          sessionStartedAt,
+          lifecycleRevision: "active-revision",
+          ...scenario.entry,
         },
       });
-      await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
       operation = replyRunRegistry.begin({
         sessionKey,
         sessionId: existingSessionId,
@@ -5064,9 +5076,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       });
       operation.setPhase("running");
 
-      const cfg = {
-        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
-      } as OpenClawConfig;
       const result = await initSessionState({
         ctx: {
           Body: "hello while active",
@@ -5079,19 +5088,24 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
           Provider: "telegram",
           Surface: "telegram",
         },
-        cfg,
+        cfg: {
+          session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+        } as OpenClawConfig,
       });
 
-      expect(result.isNewSession).toBe(false);
-      expect(result.resetTriggered).toBe(false);
-      expect(result.sessionId).toBe(existingSessionId);
-      expect(result.previousSessionEntry).toBeUndefined();
-      expect(result.sessionEntry.sessionStartedAt).toBe(sessionStartedAt);
-      expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
-      const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
-        entry.startsWith(`${existingSessionId}.jsonl.reset.`),
-      );
-      expect(archived).toHaveLength(0);
+      expect(result).toMatchObject({
+        isNewSession: false,
+        previousSessionEntry: undefined,
+        sessionId: existingSessionId,
+        sessionEntry: {
+          lifecycleRevision: "active-revision",
+          updatedAt: scenario.expectedUpdatedAt,
+        },
+      });
+      expect(readSessionStoreFast(storePath)[sessionKey]).toMatchObject({
+        lifecycleRevision: "active-revision",
+        updatedAt: scenario.expectedUpdatedAt,
+      });
     } finally {
       operation?.complete();
       vi.useRealTimers();
@@ -5449,7 +5463,10 @@ describe("drainFormattedSystemEvents", () => {
         sessionKey: "agent:main:main",
         contextKey: "cron:rotate-keys",
       });
-      enqueueSystemEvent("Model switched.", { sessionKey: "agent:main:main" });
+      const generic = expectDefined(
+        enqueueSystemEventEntry("Model switched.", { sessionKey: "agent:main:main" }),
+        "queued generic event",
+      );
 
       const result = await drainFormattedSystemEvents({
         cfg: {} as OpenClawConfig,
@@ -5457,7 +5474,7 @@ describe("drainFormattedSystemEvents", () => {
         sessionKey: "agent:main:main",
         isMainSession: true,
         isNewSession: false,
-        suppressHeartbeatOwnedEvents: true,
+        events: [generic],
       });
 
       expect(result).toContain("Model switched.");

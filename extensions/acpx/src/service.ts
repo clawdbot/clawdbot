@@ -48,7 +48,6 @@ import {
 } from "./state.js";
 
 type AcpxRuntimeLike = CompleteAcpRuntime & {
-  probeAvailability(): Promise<void>;
   isHealthy(): boolean;
 };
 const ENABLE_STARTUP_PROBE_ENV = "OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE";
@@ -145,9 +144,6 @@ function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntime
 
   return {
     ...createLazyAcpRuntimeProxy(resolveRuntime),
-    async probeAvailability() {
-      await (await resolveRuntime()).probeAvailability();
-    },
     isHealthy() {
       return runtime?.isHealthy() ?? false;
     },
@@ -445,29 +441,23 @@ export function createAcpxRuntimeService(
       lifecycleRevision += 1;
       const currentRevision = lifecycleRevision;
       try {
-        await measureAcpxStartup(ctx, "probe.availability", () =>
+        const doctorReport = await measureAcpxStartup(ctx, "probe.availability", () =>
           withStartupProbeTimeout({
-            promise: startedRuntime.probeAvailability(),
+            promise: startedRuntime.doctor(),
             timeoutSeconds: pluginConfig.timeoutSeconds ?? DEFAULT_ACPX_TIMEOUT_SECONDS,
           }),
         );
         if (currentRevision !== lifecycleRevision) {
           return;
         }
-        if (startedRuntime.isHealthy()) {
+        if (doctorReport.ok) {
           detailAcpxStartup(ctx, "probe.result", [["healthyCount", 1]]);
           ctx.logger.info("embedded acpx runtime backend ready");
           return;
         }
-        const doctorReport = await measureAcpxStartup(ctx, "probe.doctor", () =>
-          startedRuntime.doctor(),
-        );
-        if (currentRevision !== lifecycleRevision) {
-          return;
-        }
         detailAcpxStartup(ctx, "probe.result", [["healthyCount", 0]]);
         ctx.logger.warn(
-          `embedded acpx runtime backend probe failed: ${doctorReport ? formatDoctorFailureMessage(doctorReport) : "backend remained unhealthy after probe"}`,
+          `embedded acpx runtime backend probe failed: ${formatDoctorFailureMessage(doctorReport)}`,
         );
       } catch (err) {
         if (currentRevision !== lifecycleRevision) {

@@ -129,7 +129,6 @@ enum ExecHostExecutor {
             persistAllowlist: persistAllowlist,
             delayedPolicySnapshot: validatedRequest.delayedPolicySnapshot)
         let timeoutSec = request.timeoutMs.flatMap { Double($0) / 1000.0 }
-        let cwd = effectiveCwd
         let env = context.env
         if case .failure = ExecApprovalsStore.commitExecution(executionCommit) {
             return self.approvalStoreErrorResponse()
@@ -138,18 +137,44 @@ enum ExecHostExecutor {
         // The store commit linearizes authorization. Enqueue before the next
         // suspension so no unrelated MainActor work sits between those steps.
         let execution = Task.detached { () -> ShellExecutor.ShellResult in
-            await ShellExecutor.runDetailed(
+            await self.runApprovedCommand(
+                authorization: executionCommit.authorization,
                 command: executionCommand,
-                cwd: cwd,
+                cwd: approvedCwdSnapshot,
                 env: env,
-                timeout: timeoutSec,
-                beforeSpawn: {
-                    ExecCommandResolution.revalidateApprovalCwdSnapshot(approvedCwdSnapshot)
-                        ? nil
-                        : ExecCommandResolution.approvalCwdDriftDeniedMessage
-                })
+                timeout: timeoutSec)
         }
         return await self.commandResponse(execution: execution)
+    }
+
+    nonisolated static func runApprovedCommand(
+        authorization: ExecApprovalAuthorization,
+        command: [String],
+        cwd: ExecApprovalCwdSnapshot,
+        env: [String: String],
+        timeout: Double?) async -> ShellExecutor.ShellResult
+    {
+        await ShellExecutor.runDetailed(
+            command: command,
+            cwd: cwd.path,
+            env: env,
+            timeout: timeout,
+            beforeSpawn: {
+                // Local policy is committed, but Gateway-derived trust can retire
+                // while the command waits for application launch admission.
+                switch authorization {
+                case let .currentPolicy(.allowlist, _, .autoAllowedSkill(snapshot)?),
+                     let .askFallback(.allowlist, .autoAllowedSkill(snapshot)?):
+                    guard snapshot.isCurrent else {
+                        return "SYSTEM_RUN_DENIED: gateway skill trust changed; retry on the current gateway"
+                    }
+                default:
+                    break
+                }
+                return ExecCommandResolution.revalidateApprovalCwdSnapshot(cwd)
+                    ? nil
+                    : ExecCommandResolution.approvalCwdDriftDeniedMessage
+            })
     }
 
     private static func buildContext(

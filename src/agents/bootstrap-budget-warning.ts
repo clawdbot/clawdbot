@@ -50,7 +50,7 @@ function buildBootstrapTruncationSignature(analysis: BootstrapBudgetAnalysis): s
       path: file.path || file.name,
       rawChars: file.rawChars,
       injectedChars: file.injectedChars,
-      causes: [...file.causes].toSorted(),
+      causes: file.causes.toSorted(),
     }))
     .toSorted((a, b) => {
       const pathCmp = a.path.localeCompare(b.path);

@@ -158,7 +158,7 @@ suite.define(() => {
       const buildFleet = {
         provider: "crabbox",
         install: "bundle",
-        label: "Build fleet",
+        suspendAfter: "30m",
         settings: {
           provider: "hetzner",
           class: "standard",
@@ -244,9 +244,9 @@ suite.define(() => {
         cloudWorkers: {
           profiles: {
             "build-fleet": {
-              ...buildFleet,
+              provider: "crabbox",
+              install: "bundle",
               settings: {
-                ...buildFleet.settings,
                 provider: "daytona",
                 class: "batch/ARM64.v2",
                 ttl: "12h",
@@ -309,14 +309,21 @@ suite.define(() => {
       const pendingRequestCount = (await gateway.getRequests("config.patch")).length;
       await page.getByRole("button", { name: "Save" }).click();
       const pendingPatch = await waitForConfigPatch(gateway, pendingRequestCount);
-      expect(pendingPatch).toMatchObject({
+      expect(pendingPatch).toEqual({
         cloudWorkers: {
           profiles: {
-            "build-fleet": editedFleet,
             pending: {
               provider: "crabbox",
               install: "bundle",
-              settings: { provider: "aws", class: "custom" },
+              settings: {
+                provider: "aws",
+                class: "custom",
+                ttl: "8h",
+                idleTimeout: "45m",
+                setup: null,
+                desktop: null,
+                binary: null,
+              },
             },
           },
         },
@@ -482,6 +489,7 @@ suite.define(() => {
         },
       },
       description: "Provider: static-ssh",
+      replacePaths: undefined,
     },
     {
       name: "class removal",
@@ -498,10 +506,11 @@ suite.define(() => {
         },
       },
       description: "Class: Unknown",
+      replacePaths: ["cloudWorkers.profiles.pending.settings.setupEnv"],
     },
   ])(
     "preserves Advanced edits after $name and deletes project defaults",
-    async ({ replacement, description }) => {
+    async ({ replacement, description, replacePaths }) => {
       const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
       const page = await context.newPage();
       const pending = configuredCloudWorkerProfile();
@@ -602,7 +611,7 @@ suite.define(() => {
         const savedConfig = {
           cloudWorkers: {
             ...replacedConfig.cloudWorkers,
-            profiles: { pending: { ...replacement, label: "Advanced saved" }, retained },
+            profiles: { pending: { ...replacement, suspendAfter: "1h" }, retained },
           },
         };
         await rawEditor.fill(JSON.stringify(savedConfig, null, 2));
@@ -639,10 +648,13 @@ suite.define(() => {
         }
         expect(requestRaw(deleteRequest)).toEqual({
           cloudWorkers: {
-            profiles: { pending: null, retained },
+            profiles: { pending: null },
             projectProfiles: { "github.com/acme/app": null, "github.com/acme/docs": null },
           },
         });
+        expect(isRecord(deleteRequest.params) && deleteRequest.params.replacePaths).toEqual(
+          replacePaths,
+        );
         await expect.poll(() => pendingRow.count()).toBe(0);
         await page.locator(".settings-row code", { hasText: /^retained$/ }).waitFor();
       } finally {

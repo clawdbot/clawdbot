@@ -2,7 +2,10 @@ import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
-import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
 import { callInProcessGatewayTool } from "./in-process-gateway.js";
 import { createOpenClawDelegateToolsForRun } from "./openclaw-delegate-tool.js";
 
@@ -17,13 +20,11 @@ beforeEach(() => {
 });
 
 describe("openclaw delegation tool", () => {
-  it("relays context and surfaces pending approval", async () => {
+  it("relays context and the completed approval outcome", async () => {
     callGateway.mockResolvedValue({
       sessionId: "ignored-by-client",
-      reply: "Approval pending.",
+      reply: "Applied.",
       action: "none",
-      needsApproval: true,
-      proposalId: "system-agent:proposal-1",
     });
     const tool = createOpenClawDelegateToolsForRun({
       sessionAgentId: "main",
@@ -49,16 +50,11 @@ describe("openclaw delegation tool", () => {
       },
     });
     expect(result.details).toEqual({
-      reply: "Approval pending.",
-      needsApproval: true,
-      proposalId: "system-agent:proposal-1",
+      reply: "Applied.",
     });
     expect(tool.outputSchema).toBeDefined();
     expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
-    expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      "{ reply: string; action?: string; needsApproval?: true; proposalId?: string }",
-    );
-    expect(tool.catalogMode).toBeUndefined();
+    expect(compactToolOutputHint(tool.outputSchema)).toBe("{ reply: string; action?: string }");
   });
 
   it.each([
@@ -94,8 +90,14 @@ describe("openclaw delegation tool", () => {
     options: Omit<Parameters<typeof createOpenClawDelegateToolsForRun>[0], "sessionAgentId">;
     full: boolean;
   }>)("carries $name authority privately, not in RPC data", async ({ options, full }) => {
+    const runController = new AbortController();
+    const toolController = new AbortController();
     callGateway.mockImplementation(async () => {
       expect(getGatewayToolCallerIdentity()?.fullPermission).toBe(full);
+      expect(getGatewayToolCallerIdentity()?.approvalSignals).toEqual([
+        runController.signal,
+        toolController.signal,
+      ]);
       return { sessionId: "delegate", reply: "Done." };
     });
     const [tool] = createOpenClawDelegateToolsForRun({
@@ -107,7 +109,16 @@ describe("openclaw delegation tool", () => {
       throw new Error("expected OpenClaw delegation tool");
     }
 
-    await tool.execute("call-policy", { message: "Change logging.", fullPermission: !full });
+    expect(tool.catalogMode).toBe("direct-only");
+    await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: "agent:main:main", approvalSignals: [runController.signal] },
+      () =>
+        tool.execute(
+          "call-policy",
+          { message: "Change logging.", fullPermission: !full },
+          toolController.signal,
+        ),
+    );
 
     expect(tool.description).toContain(full ? "without asking for approval" : "human approval");
     expect(callGateway.mock.calls[0]?.[1]).not.toHaveProperty("fullPermission");

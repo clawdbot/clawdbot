@@ -10,14 +10,19 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
 import { hasPluginConfigMigrationSource } from "./config-contract-matches.js";
+import {
+  loadPluginManifestRegistryForInstalledIndex,
+  selectInstalledPluginManifestRecords,
+} from "./manifest-registry-installed.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
 import { getPluginCache, getPluginCacheRoot } from "./plugin-cache.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
+import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-snapshot.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
+import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry.js";
 import { resolvePreferredBundledRootArtifact } from "./plugin-runtime-artifact-selection.js";
 import { resolvePluginRootArtifactPath } from "./root-artifact-path.js";
 import { listSetupCliBackendIds, listSetupProviderIds } from "./setup-descriptors.js";
@@ -177,12 +182,12 @@ function resolveRelevantSetupMigrationPluginIds(params: {
   env?: NodeJS.ProcessEnv;
 }): string[] {
   const ids = new Set<string>(collectConfiguredPluginEntryIds(params.config));
-  const registry = loadSetupManifestRegistry({
+  const plugins = loadSetupManifestRecords({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
-  for (const plugin of registry.plugins) {
+  for (const plugin of plugins) {
     if (
       hasPluginConfigMigrationSource({
         root: params.config,
@@ -437,27 +442,44 @@ function cloneSetupRegistry(registry: PluginSetupRegistry): PluginSetupRegistry 
   return cloneSetupRegistryValue(registry);
 }
 
-function loadSetupManifestRegistry(params?: {
+function loadSetupManifestRecords(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
 }) {
-  return loadPluginManifestRegistryForPluginRegistry({
-    config: params?.config,
-    workspaceDir: params?.workspaceDir,
-    env: params?.env ?? process.env,
-    pluginIds: params?.pluginIds,
-    includeDisabled: true,
-  });
+  const { snapshot: index, manifestRegistry } = loadPluginRegistrySnapshotWithMetadata(params);
+  if (!manifestRegistry) {
+    return loadPluginManifestRegistryForInstalledIndex({ ...params, index, includeDisabled: true })
+      .plugins;
+  }
+  // Setup consumes descriptors and entry paths, not channel presentation. Keep
+  // prepared records intact; the generic registry still normalizes supplied fields.
+  return tracePluginLifecyclePhase(
+    "manifest registry",
+    () =>
+      params.pluginIds?.length === 0
+        ? []
+        : selectInstalledPluginManifestRecords(
+            index,
+            manifestRegistry,
+            params.pluginIds ? new Set(params.pluginIds) : null,
+            true,
+          ),
+    {
+      includeDisabled: true,
+      pluginIdCount: params.pluginIds?.length,
+      indexPluginCount: index.plugins.length,
+    },
+  );
 }
 
 function findUniqueSetupManifestOwner(params: {
-  registry: ReturnType<typeof loadSetupManifestRegistry>;
+  plugins: readonly PluginManifestRecord[];
   normalizedId: string;
   listIds: (record: PluginManifestRecord) => readonly string[];
 }): PluginManifestRecord | undefined {
-  const matches = params.registry.plugins.filter((entry) =>
+  const matches = params.plugins.filter((entry) =>
     params.listIds(entry).some((id) => normalizeProviderId(id) === params.normalizedId),
   );
   if (matches.length === 0) {
@@ -587,16 +609,17 @@ export function resolvePluginSetupRegistry(params?: {
   let providerKeys = new Set<string>();
   let cliBackendKeys = new Set<string>();
 
-  const manifestRegistry =
-    params?.manifestRegistry ??
-    loadSetupManifestRegistry({
-      config: params?.config,
-      workspaceDir: params?.workspaceDir,
-      env,
-      pluginIds: params?.pluginIds,
-    });
+  const plugins =
+    params?.manifestRegistry == null
+      ? loadSetupManifestRecords({
+          config: params?.config,
+          workspaceDir: params?.workspaceDir,
+          env,
+          pluginIds: params?.pluginIds,
+        })
+      : params.manifestRegistry.plugins;
 
-  for (const record of manifestRegistry.plugins) {
+  for (const record of plugins) {
     if (scopedPluginIds && !scopedPluginIds.has(record.id)) {
       continue;
     }
@@ -720,14 +743,14 @@ export function resolvePluginSetupProviderCore(params: {
 }): ProviderPlugin | undefined {
   const env = params.env ?? process.env;
   const normalizedProvider = normalizeProviderId(params.provider);
-  const manifestRegistry = loadSetupManifestRegistry({
+  const plugins = loadSetupManifestRecords({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env,
     pluginIds: params.pluginIds,
   });
   const record = findUniqueSetupManifestOwner({
-    registry: manifestRegistry,
+    plugins,
     normalizedId: normalizedProvider,
     listIds: listSetupProviderIds,
   });
@@ -751,13 +774,13 @@ export function resolvePluginSetupCliBackend(params: {
   // Narrow setup lookup from manifest-owned descriptors before executing any
   // plugin setup module. This avoids booting every setup-api just to find one
   // backend owner.
-  const manifestRegistry = loadSetupManifestRegistry({
+  const plugins = loadSetupManifestRecords({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env,
   });
   const record = findUniqueSetupManifestOwner({
-    registry: manifestRegistry,
+    plugins,
     normalizedId: normalized,
     listIds: listSetupCliBackendIds,
   });

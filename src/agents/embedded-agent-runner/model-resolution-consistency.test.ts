@@ -17,6 +17,7 @@ const resolveHookModelSelectionMock = vi.hoisted(() =>
 );
 const loadManifestMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn(() => undefined));
+const resolveEmbeddedCompactionThinkingLevelMock = vi.hoisted(() => vi.fn(() => "off"));
 
 const emptyModelRegistry = {
   find: vi.fn((_provider: string, _modelId: string) => null),
@@ -35,6 +36,7 @@ const staticCatalogModel = {
   contextWindow: 200_000,
   maxTokens: 64_000,
   compat: { supportsLongCacheRetention: false },
+  compactionThinkingDefault: "off",
 };
 
 const resolveModelAsyncMock = vi.fn(
@@ -105,7 +107,6 @@ vi.mock("./run/setup.js", () => ({
   buildBeforeModelResolveAttachments: vi.fn(() => []),
   createNativeModelOwnedRuntimeModel: vi.fn(),
   resolveHookModelSelection: resolveHookModelSelectionMock,
-  resolveNativeModelOwnedHarnessId: vi.fn(() => undefined),
 }));
 
 vi.mock("./compaction-runtime-preparation.js", () => ({
@@ -150,8 +151,11 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
   prepareProviderRuntimeAuth: vi.fn(async () => undefined),
 }));
 
-vi.mock("../provider-secret-egress.js", () => ({
+vi.mock("../provider-runtime-auth-protection.js", () => ({
   protectPreparedProviderRuntimeAuth: (value: unknown) => value,
+}));
+
+vi.mock("../provider-secret-egress.js", () => ({
   unwrapSecretSentinelsForProviderEgress: (value: unknown) => value,
 }));
 
@@ -164,7 +168,7 @@ vi.mock("../sandbox.js", () => ({
 }));
 
 vi.mock("./compaction-runtime-context.js", () => ({
-  resolveEmbeddedCompactionThinkingLevel: vi.fn(() => "off"),
+  resolveEmbeddedCompactionThinkingLevel: resolveEmbeddedCompactionThinkingLevelMock,
 }));
 
 vi.mock("./logger.js", () => ({
@@ -335,6 +339,13 @@ describe("embedded model resolution consistency", () => {
       provider: PROVIDER,
       id: STATIC_MODEL_ID,
     });
+    expect(resolveEmbeddedCompactionThinkingLevelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: PROVIDER,
+        modelId: STATIC_MODEL_ID,
+        compactionThinkingDefault: "off",
+      }),
+    );
   });
 
   it("resolves route-bound thinking compatibility for the final model", () => {

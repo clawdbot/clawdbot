@@ -383,9 +383,6 @@ async function resolveActiveRecall(
       };
       resetCircuitBreaker(cbKey);
       await recordRecallResult({ ...params, logPrefix, result });
-      if (cacheKey && shouldCacheResult(result)) {
-        setCachedResult(cacheKey, result, params.config.cacheTtlMs);
-      }
       return result;
     }
 

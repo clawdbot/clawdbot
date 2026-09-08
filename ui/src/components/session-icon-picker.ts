@@ -86,9 +86,11 @@ function renderCustomSessionIconEntry(props: SessionIconPickerProps) {
         </button>
       </div>
       <div class="session-menu__icon-custom-hint">
-        ${shortcut
-          ? t("sessionsView.customEmojiHint", { shortcut })
-          : t("sessionsView.customEmojiHintNoShortcut")}
+        ${
+          shortcut
+            ? t("sessionsView.customEmojiHint", { shortcut })
+            : t("sessionsView.customEmojiHintNoShortcut")
+        }
       </div>
     </div>
   `;

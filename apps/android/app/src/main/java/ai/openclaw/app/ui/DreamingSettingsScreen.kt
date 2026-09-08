@@ -39,7 +39,6 @@ internal fun DreamingSettingsScreen(
   onBack: () -> Unit,
 ) {
   val state by viewModel.dreamingState.collectAsState()
-  val summary = state.summary
   val isConnected by viewModel.isConnected.collectAsState()
 
   LaunchedEffect(isConnected) {
@@ -54,26 +53,18 @@ internal fun DreamingSettingsScreen(
     icon = Icons.Default.Storage,
     onBack = onBack,
   ) {
-    SettingsMetricPanel(
-      rows =
-        listOf(
-          SettingsMetric(nativeString("Status"), if (summary.enabled) nativeString("On") else nativeString("Off")),
-          SettingsMetric(nativeString("Waiting"), summary.shortTermCount.toString()),
-          SettingsMetric(nativeString("Signals"), summary.totalSignalCount.toString()),
-          SettingsMetric(nativeString("Next Cycle"), formatDreamingNextRun(summary.nextRunAtMs)),
-        ),
-    )
     SettingsRefreshControls(isConnected, state.refreshing, state.errorText, viewModel::refreshDreaming)
-    when {
-      !isConnected -> {
-        ClawPanel {
-          Text(text = nativeString("Connect the gateway to load dreaming."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
-      }
-
-      else -> {
-        DreamingPanel(summary = summary)
-      }
+    SettingsSummaryContent(state, isConnected, nativeString("Connect the gateway to load dreaming.")) { summary ->
+      SettingsMetricPanel(
+        rows =
+          listOf(
+            SettingsMetric(nativeString("Status"), if (summary.enabled) nativeString("On") else nativeString("Off")),
+            SettingsMetric(nativeString("Waiting"), summary.shortTermCount.toString()),
+            SettingsMetric(nativeString("Signals"), summary.totalSignalCount.toString()),
+            SettingsMetric(nativeString("Next Cycle"), formatDreamingNextRun(summary.nextRunAtMs)),
+          ),
+      )
+      DreamingPanel(summary = summary)
     }
   }
 }

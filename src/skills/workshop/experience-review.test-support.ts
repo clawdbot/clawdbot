@@ -6,7 +6,7 @@ import {
 } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
 import type { Message } from "../../llm/types.js";
-import type { ExperienceReviewCandidate } from "./experience-review.js";
+import type { ExperienceReviewCandidate } from "./experience-review-scheduler.js";
 
 export function createExperienceReviewMessages(modelId: string) {
   function assistantText(text: string) {
@@ -98,6 +98,67 @@ export function createExperienceReviewMessages(modelId: string) {
     ];
   }
 
+  function learnableMessages(): Message[] {
+    return [
+      makeAgentUserMessage({
+        content:
+          "Publish the map tiles through our release service. For every future tile publication, use the verified procedure you discover here. A green health check alone is not enough; the public tile generation must match the submitted release.",
+      }),
+      ...toolRound(
+        "read-tile-release",
+        "read",
+        { path: "tile-release.json" },
+        '{"collection":"street-map","release":"r42","generation":"g817","region":"north"}',
+      ),
+      ...toolRound(
+        "publish-tiles",
+        "exec",
+        { command: "tilectl publish --manifest tile-release.json" },
+        '{"accepted":true,"receipt":"receipt-r42","generation":"g817"}',
+      ),
+      ...toolRound(
+        "check-tile-health",
+        "exec",
+        { command: "tilectl health --collection street-map" },
+        '{"healthy":true,"publicGeneration":"g816"}',
+      ),
+      ...toolRound(
+        "inspect-tile-receipt",
+        "exec",
+        { command: "tilectl receipt receipt-r42 --json" },
+        '{"state":"indexed","generation":"g817","activationRequired":true}',
+      ),
+      ...toolRound(
+        "read-tile-activation",
+        "read",
+        { path: "docs/tile-publication.md" },
+        "Publish uploads and indexes an immutable generation but never changes public routing. When the receipt reaches indexed, obtain its activation token, activate using that receipt and token, then query the public generation. Health only checks that some generation can serve; it does not prove publication. Activation tokens are single-use credentials and must never be saved in a procedure.",
+      ),
+      ...toolRound(
+        "tile-activation-token",
+        "exec",
+        { command: "tilectl activation-token --receipt receipt-r42 --out /tmp/tile-token" },
+        "Single-use token written to /tmp/tile-token.",
+      ),
+      ...toolRound(
+        "activate-tile-generation",
+        "exec",
+        { command: "tilectl activate --receipt receipt-r42 --token-file /tmp/tile-token" },
+        '{"activated":true,"generation":"g817"}',
+      ),
+      ...toolRound(
+        "verify-public-tiles",
+        "exec",
+        { command: "tilectl public-generation --collection street-map --region north --json" },
+        '{"generation":"g817","release":"r42"}',
+      ),
+      ...toolRound("remove-tile-token", "exec", { command: "rm /tmp/tile-token" }, "exit code 0"),
+      assistantText(
+        "The public generation now matches the manifest. Future tile releases need the publish receipt, indexed-state check, one-use activation, and public-generation check; health alone previously reported success for the old generation.",
+      ),
+    ];
+  }
+
   function interruptedMessages(): Message[] {
     // Copying only a WAL-mode main file can pass integrity_check while missing
     // committed rows. This recovery was reproduced against SQLite's backup API.
@@ -171,7 +232,7 @@ export function createExperienceReviewMessages(modelId: string) {
     ];
   }
 
-  return { positiveMessages, negativeMessages, interruptedMessages };
+  return { positiveMessages, learnableMessages, negativeMessages, interruptedMessages };
 }
 
 export async function createExperienceReviewCandidate(
@@ -188,12 +249,9 @@ export async function createExperienceReviewCandidate(
   const { workspaceDir, modelId } = options;
   const sessionId = `live-skill-review-${runId}`;
   const sessionKey = `agent:main:${sessionId}`;
-  const result: ExperienceReviewCandidate = {
+  const result = {
     ctx: {
-      agentId: "main",
       runId,
-      sessionId,
-      sessionKey,
       workspaceDir,
       modelProviderId: "openai",
       modelId,
@@ -250,7 +308,7 @@ export async function createExperienceReviewCandidate(
       plugins: { allow: ["openai"] },
     },
     ...(options.turnAborted === undefined ? {} : { turnAborted: options.turnAborted }),
-  };
+  } satisfies Omit<ExperienceReviewCandidate, "source">;
   const target = await resolveAgentRunSessionTarget({
     agentId: "main",
     config: result.config,
@@ -266,8 +324,16 @@ export async function createExperienceReviewCandidate(
   if (!created.ok) {
     throw new Error(`Failed to create live review session: ${created.error}`);
   }
+  const session = SessionManager.open(target, workspaceDir);
+  let source;
   for (const message of messages) {
-    SessionManager.appendMessageToTranscript(target, message, { config: result.config });
+    source = session.appendMessageWithTranscriptAnchor(message, { config: result.config }).anchor;
   }
-  return result;
+  if (!source) {
+    throw new Error("Review fixture requires a completed message");
+  }
+  return {
+    ...result,
+    source,
+  };
 }

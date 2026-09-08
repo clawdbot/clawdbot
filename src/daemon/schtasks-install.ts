@@ -37,11 +37,11 @@ import {
   isStartupEntryInstalled,
   launchFallbackTaskScript,
   removeStartupEntries,
-  probeScheduledTaskExists,
   resolveFallbackRuntime,
   waitForFallbackTakeoverRuntime,
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
+import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
 import type {
   GatewayServiceEnv,
   GatewayServiceInstallArgs,

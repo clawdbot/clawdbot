@@ -5,9 +5,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmbeddedCallGateway } from "./embedded-gateway-stub.js";
 
 const runtime = vi.hoisted(() => ({
-  getRuntimeConfig: vi.fn(
-    (): OpenClawConfig => ({ agents: { list: [{ id: "main", default: true }] } }),
-  ),
+  getRuntimeConfig: vi.fn((): OpenClawConfig => ({
+    agents: { list: [{ id: "main", default: true }] },
+  })),
   resolveSessionStoreKey: vi.fn(({ sessionKey }: { sessionKey: string }) =>
     sessionKey === "main" ? "agent:main:main" : sessionKey,
   ),

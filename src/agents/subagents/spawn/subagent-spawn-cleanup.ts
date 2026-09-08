@@ -1,20 +1,35 @@
 import { promises as fs } from "node:fs";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { callGateway } from "../../../gateway/call.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 
 const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
 type GatewayCall = (options: Parameters<typeof callGateway>[0]) => Promise<unknown>;
 function isMatchingAbortResponse(response: unknown, gatewayRunId: string): boolean {
-  if (!response || typeof response !== "object") {
+  const result = asNullableRecord(response);
+  if (!result) {
     return false;
   }
-  const result = response as { aborted?: unknown; runIds?: unknown };
   return (
     result.aborted === true &&
     Array.isArray(result.runIds) &&
     result.runIds.some((runId) => runId === gatewayRunId)
+  );
+}
+
+function isDefinitiveAbortMiss(response: unknown, gatewayRunId: string): boolean {
+  const result = asNullableRecord(response);
+  if (!result) {
+    return false;
+  }
+  return (
+    typeof result.aborted === "boolean" &&
+    Array.isArray(result.runIds) &&
+    result.runIds.every((runId) => typeof runId === "string") &&
+    !result.runIds.includes(gatewayRunId)
   );
 }
 
@@ -116,30 +131,51 @@ export async function terminateAcceptedCollectorRun(params: {
   expectedLifecycleRevision?: string;
   callGateway?: GatewayCall;
   timeoutMs?: number;
+  sessionCleanup?: "delete-on-abort-miss" | "preserve";
 }): Promise<void> {
   const call = params.callGateway ?? callSubagentGateway;
   const timeoutMs = params.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS;
-  await retrySubagentCleanup(async () => {
-    try {
-      const response = await call({
-        method: "chat.abort",
-        params: { sessionKey: params.childSessionKey, runId: params.gatewayRunId },
+  const resolveGatewayContext = getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+  await retrySubagentCleanup(
+    async () => {
+      try {
+        const response = await call({
+          method: "chat.abort",
+          params: { sessionKey: params.childSessionKey, runId: params.gatewayRunId },
+          timeoutMs,
+        });
+        if (isMatchingAbortResponse(response, params.gatewayRunId)) {
+          return true;
+        }
+        if (
+          params.sessionCleanup === "preserve" &&
+          isDefinitiveAbortMiss(response, params.gatewayRunId)
+        ) {
+          return true;
+        }
+      } catch {
+        if (params.sessionCleanup === "preserve") {
+          return false;
+        }
+        // Fall through to exact-session deletion for provisional sessions only.
+      }
+      if (params.sessionCleanup === "preserve") {
+        return false;
+      }
+      const cleanup = await requestProvisionalSessionCleanup(params.childSessionKey, {
+        deleteTranscript: true,
+        expectedSessionId: params.expectedSessionId,
+        expectedLifecycleRevision: params.expectedLifecycleRevision,
+        callGateway: call,
         timeoutMs,
       });
-      if (isMatchingAbortResponse(response, params.gatewayRunId)) {
-        return true;
-      }
-    } catch {
-      // Fall through to exact-session deletion.
-    }
-    const cleanup = await requestProvisionalSessionCleanup(params.childSessionKey, {
-      deleteTranscript: true,
-      expectedSessionId: params.expectedSessionId,
-      expectedLifecycleRevision: params.expectedLifecycleRevision,
-      callGateway: call,
-      timeoutMs,
-    });
-    // A changed lifecycle proves the accepted run no longer owns this session.
-    return cleanup !== "failed";
-  });
+      // A changed lifecycle proves the accepted run no longer owns this session.
+      return cleanup !== "failed";
+    },
+    {
+      // A retired request scope can never dispatch again; retrying would retain
+      // its Gateway forever without terminating the accepted run.
+      shouldRetry: () => !resolveGatewayContext || Boolean(resolveGatewayContext()),
+    },
+  );
 }

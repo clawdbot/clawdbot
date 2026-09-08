@@ -9,10 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 import type { ReplyBackendQueueMessageOptions, ReplyOperation } from "./reply-run-registry.js";
 import { createReplyOperation } from "./reply-run-registry.js";
-import {
-  createFollowupRunToolAuthorityProjector,
-  resolveFollowupRunToolAuthorityFingerprint,
-} from "./reply-tool-authority.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { createMockFollowupRun } from "./test-helpers.js";
 
 const { handleSteerCommand } = await import("./commands-steer.js");
@@ -41,13 +38,8 @@ function beginActiveOperation(
     provider: authorityRun.run.provider,
     model: authorityRun.run.model,
   };
-  const toolAuthorityFingerprint = resolveFollowupRunToolAuthorityFingerprint(
-    authorityRun,
-    authorityRoute,
-  );
-  operation.bindToolAuthorityProjector(createFollowupRunToolAuthorityProjector(authorityRun));
-  operation.bindToolAuthorityRoute(authorityRoute);
-  operation.bindToolAuthorityFingerprint(toolAuthorityFingerprint);
+  operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(authorityRun));
+  const toolAuthorityFingerprint = operation.bindToolAuthorityRoute(authorityRoute);
   operation.setPhase("running");
   operation.attachBackend({
     kind: "embedded",

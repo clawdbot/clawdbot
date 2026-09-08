@@ -89,9 +89,10 @@ export function fireAndForgetHook(
 
 function runFireAndForgetHookJob(
   state: FireAndForgetHookState,
-  job: FireAndForgetHookJob,
+  { task, ...job }: FireAndForgetHookJob,
   limits: { maxConcurrency: number },
 ): void {
+  // Pending observers need logging metadata, not the invoked factory's captured inputs.
   state.active += 1;
   let didLogTimeout = false;
   const timeout =
@@ -105,7 +106,7 @@ function runFireAndForgetHookJob(
       : undefined;
 
   void Promise.resolve()
-    .then(job.task)
+    .then(task)
     .catch((err: unknown) => {
       if (!didLogTimeout) {
         job.logger(`${job.label}: ${formatHookErrorForLog(err)}`);

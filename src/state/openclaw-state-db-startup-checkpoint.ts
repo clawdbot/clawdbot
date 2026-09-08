@@ -9,13 +9,11 @@ import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
-import {
-  assertSupportedSchemaVersion,
-  resolveDatabasePath,
-} from "./openclaw-state-db-maintenance.js";
+import { resolveDatabasePath } from "./openclaw-state-db-maintenance.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import { ensureColumn } from "./openclaw-state-db-schema-helpers.js";
+import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 import {
   assertOpenClawStateWriteAllowed,
   runWithOpenClawStateWriteAccess,
@@ -81,7 +79,7 @@ function ensureStartupMigrationCheckpointSchema(
     db,
     () => {
       assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
-      assertSupportedSchemaVersion(db, pathname);
+      assertSupportedStateSchemaVersion(db, pathname);
       db.exec(`
         CREATE TABLE IF NOT EXISTS schema_meta (
           meta_key TEXT NOT NULL PRIMARY KEY,

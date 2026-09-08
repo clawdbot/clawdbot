@@ -1,7 +1,7 @@
 // Control UI helper presents Promise-based confirmation without relying on a native dialog bridge.
-import { html, nothing, render } from "lit";
+import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
-import "./modal-dialog.ts";
+import { withPromiseModalHost } from "./promise-modal-host.ts";
 
 /**
  * Opt-out for confirms whose action is repeatable and recoverable. Callers own
@@ -29,29 +29,11 @@ export type ConfirmDialogOptions = {
 let confirmationActive = false;
 
 function presentConfirmDialog(options: ConfirmDialogOptions): Promise<boolean> {
-  if (options.signal?.aborted) {
-    return Promise.resolve(false);
-  }
-  const host = document.createElement("div");
-  document.body.append(host);
-  return new Promise((resolve) => {
-    let settled = false;
+  return withPromiseModalHost({ signal: options.signal, value: false }, ({ render, finish }) => {
     let skipRequested = false;
-    const finish = (confirmed: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      options.signal?.removeEventListener("abort", handleAbort);
-      render(nothing, host);
-      host.remove();
-      resolve(confirmed);
-    };
-    const handleAbort = () => finish(false);
-    options.signal?.addEventListener("abort", handleAbort, { once: true });
     const title = options.title ?? t("common.confirm");
-    render(
-      html`
+    render(() => {
+      return html`
         <openclaw-modal-dialog
           label=${title}
           description=${options.message}
@@ -66,20 +48,24 @@ function presentConfirmDialog(options: ConfirmDialogOptions): Promise<boolean> {
                 </div>
               </div>
             </div>
-            ${options.details
-              ? html`<div class="exec-approval-command mono">${options.details}</div>`
-              : nothing}
-            ${options.skipPreference
-              ? html`<label class="field checkbox exec-approval-skip">
-                  <input
-                    type="checkbox"
-                    @change=${(event: Event) => {
-                      skipRequested = (event.target as HTMLInputElement).checked;
-                    }}
-                  />
-                  <span>${t("common.dontAskAgain")}</span>
-                </label>`
-              : nothing}
+            ${
+              options.details
+                ? html`<div class="exec-approval-command mono">${options.details}</div>`
+                : nothing
+            }
+            ${
+              options.skipPreference
+                ? html`<label class="field checkbox exec-approval-skip">
+                    <input
+                      type="checkbox"
+                      @change=${(event: Event) => {
+                        skipRequested = (event.target as HTMLInputElement).checked;
+                      }}
+                    />
+                    <span>${t("common.dontAskAgain")}</span>
+                  </label>`
+                : nothing
+            }
             <div class="exec-approval-actions">
               <button
                 type="button"
@@ -99,9 +85,8 @@ function presentConfirmDialog(options: ConfirmDialogOptions): Promise<boolean> {
             </div>
           </div>
         </openclaw-modal-dialog>
-      `,
-      host,
-    );
+      `;
+    });
   });
 }
 

@@ -73,6 +73,23 @@ const OPENAI_REASONING_REPLAY_METADATA = {
 } as const;
 
 describe("redactTranscriptMessage", () => {
+  it.each(["private-prefix", "person"])(
+    "drops human mention bindings when redacting %s without mutating source metadata",
+    (pattern) => {
+      const mentions = [{ profileId: "person", start: 15, end: 19 }];
+      const message = castAgentMessage({
+        role: "user",
+        content: "private-prefix @Ada",
+        timestamp: 1,
+        __openclaw: { humanMentions: mentions },
+      });
+      expect(redactTranscriptMessage(message, cfg("tools", []))).toBe(message);
+      const redacted = redactTranscriptMessage(message, cfg("tools", [pattern]));
+      expect(redacted).not.toHaveProperty("__openclaw.humanMentions");
+      expect(message).toHaveProperty("__openclaw.humanMentions", mentions);
+    },
+  );
+
   it.each([
     { type: "profile", id: "person" },
     { type: "remote", pluginId: "chat", domain: "workspace", idKind: "user", id: "person" },

@@ -1,15 +1,15 @@
-export function resolveNodeHostGatewayPlatformIdentity(platform: NodeJS.Platform): {
+import { resolveMachineModelIdentifier } from "../infra/machine-model.js";
+import { resolveGatewayClientPlatformIdentity } from "../shared/gateway-client-platform.js";
+
+export function resolveNodeHostGatewayPlatformIdentity(
+  platform: NodeJS.Platform,
+  resolveModel = resolveMachineModelIdentifier,
+): {
   platform: string;
   deviceFamily?: string;
+  modelIdentifier?: string;
 } {
-  switch (platform) {
-    case "darwin":
-      return { platform: "macos", deviceFamily: "Mac" };
-    case "win32":
-      return { platform: "windows", deviceFamily: "Windows" };
-    case "linux":
-      return { platform: "linux", deviceFamily: "Linux" };
-    default:
-      return { platform: "unknown" };
-  }
+  const modelIdentifier = resolveModel(platform);
+  const identity = resolveGatewayClientPlatformIdentity(platform);
+  return identity.deviceFamily ? { ...identity, modelIdentifier } : identity;
 }

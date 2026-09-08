@@ -8,8 +8,15 @@ import {
   type ClawHubSkillVerificationResponse,
   type ClawHubSkillsShTrustState,
 } from "../../infra/clawhub-skills.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { readJsonIfExists, tryReadJson, writeJson } from "../../infra/json-files.js";
+import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
+import { statRegularFile } from "../../infra/fs-safe.js";
+import {
+  JsonFileReadError,
+  readJson,
+  readJsonIfExists,
+  tryReadJson,
+  writeJson,
+} from "../../infra/json-files.js";
 import { normalizeTrackedSkillSlug, validateRequestedSkillSlug } from "./archive-install.js";
 
 export { normalizeOptionalStringValue };
@@ -266,17 +273,34 @@ function normalizeClawHubSkillOrigin(
   };
 }
 
+function parseClawHubSkillsLockfile(
+  raw: Partial<ClawHubSkillsLockfile> | null,
+): ClawHubSkillsLockfile {
+  if (raw?.version !== 1 || !raw.skills || typeof raw.skills !== "object") {
+    throw new Error("expected version 1 lockfile with skills");
+  }
+  return { version: 1, skills: raw.skills };
+}
+
 export async function readClawHubSkillsLockfile(
   workspaceDir: string,
 ): Promise<ClawHubSkillsLockfile> {
   for (const candidate of metadataPaths(workspaceDir, "lock.json")) {
     try {
-      const raw = await tryReadJson<Partial<ClawHubSkillsLockfile>>(candidate);
-      if (raw?.version === 1 && raw.skills && typeof raw.skills === "object") {
-        return { version: 1, skills: raw.skills };
+      // Missing metadata is normal before installation. Leave present-file races
+      // and uncertain paths to the strict reader, including its error diagnostics.
+      if ((await statRegularFile(candidate).catch(() => undefined))?.missing) {
+        continue;
       }
-    } catch {
-      // ignore
+      return parseClawHubSkillsLockfile(await readJson<Partial<ClawHubSkillsLockfile>>(candidate));
+    } catch (err) {
+      if (err instanceof JsonFileReadError && hasErrnoCode(err.cause, "ENOENT")) {
+        continue;
+      }
+      throw new Error(
+        `Malformed workspace ClawHub lockfile at ${candidate}: ${formatErrorMessage(err)}. Repair or restore it before retrying.`,
+        { cause: err },
+      );
     }
   }
   return { version: 1, skills: {} };
@@ -313,14 +337,11 @@ export function readClawHubSkillsLockfileStatusSync(
       if (!read.exists) {
         continue;
       }
-      const raw = read.value as Partial<ClawHubSkillsLockfile>;
-      return raw?.version === 1 && raw.skills && typeof raw.skills === "object"
-        ? { kind: "found", path: candidate, lock: { version: 1, skills: raw.skills } }
-        : {
-            kind: "malformed",
-            path: candidate,
-            error: "expected version 1 lockfile with skills",
-          };
+      return {
+        kind: "found",
+        path: candidate,
+        lock: parseClawHubSkillsLockfile(read.value as Partial<ClawHubSkillsLockfile>),
+      };
     } catch (err) {
       return { kind: "malformed", path: candidate, error: formatErrorMessage(err) };
     }

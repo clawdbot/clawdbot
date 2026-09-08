@@ -78,6 +78,8 @@ let package = Package(
             ],
             resources: [
                 .copy("Resources/OpenClaw.icns"),
+                .copy("Resources/NativeSessionCatalogs.json"),
+                .copy("Resources/AppIcons"),
                 .copy("Resources/DeviceModels"),
                 .copy("Resources/ProviderIcons"),
             ],
@@ -87,6 +89,7 @@ let package = Package(
         .executableTarget(
             name: "OpenClawMacCLI",
             dependencies: [
+                "OpenClawIPC",
                 "OpenClawDiscovery",
                 .product(name: "OpenClawKit", package: "OpenClawKit"),
                 .product(name: "OpenClawProtocol", package: "OpenClawKit"),

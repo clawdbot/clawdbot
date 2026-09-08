@@ -29,7 +29,7 @@ Use Peekaboo for the broad macOS automation surface via OpenClaw.app's permissio
 
 ## Enable the bridge
 
-In the macOS app: **Settings -> Enable Peekaboo Bridge**. The toggle requires **Allow Computer Control** to be on, since both grant local UI automation; with Computer Control off the toggle is disabled and the host does not run. To drive Peekaboo without Computer Control, run Peekaboo's own Mac app as the host instead.
+In the macOS app, open **Dashboard → Settings → This Mac → Capabilities** and enable **Peekaboo Bridge**. The bridge requires **Computer Control** to be on, since both grant local UI automation; with Computer Control off the host does not run. To drive Peekaboo without Computer Control, run Peekaboo's own Mac app as the host instead.
 
 When enabled (and Computer Control is on), OpenClaw starts a local UNIX socket server at `~/Library/Application Support/OpenClaw/<socket-name>`. If disabled, the host stops and `peekaboo` falls back to other available hosts. The coordinator also maintains legacy socket symlinks (`clawdbot`, `clawdis`, `moltbot` under Application Support) pointing at the current socket for older `peekaboo` installs.
 
@@ -82,11 +82,11 @@ Missing or unexpected architecture trees, escaping or cyclic worker symlinks, an
 libraries fail verification. Dependencies that violate this closure must be repaired in packaging, not excluded from
 validation. The portable installer needs neither a checkout nor a separate inventory helper.
 
-Elevation packaging constructs fresh workers from the complete installed package without changing that input.
+Both standard and elevation packaging construct fresh workers from the complete installed package without changing that input.
 It preserves JavaScript, WASM, other resources, modes, and contained relative symlinks, and omits only native images
 that cannot run on the selected Darwin architecture. Matching universal binaries remain intact. Windows-named source,
 scripts, and README files remain; directory names do not select files for omission. Unclassifiable native images and
-links that would escape, cycle, or become dangling stop packaging. Standard app packaging retains the full package.
+links that would escape, cycle, or become dangling stop packaging.
 Both paths use the same worker verification and publication flow; build metadata remains unchanged by materialization.
 
 The managed elevation workflow upgrades an already paired Mac. Its selected state and config must define an

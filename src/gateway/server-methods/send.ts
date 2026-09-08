@@ -854,13 +854,10 @@ function createGatewayInflightUnavailableFailure(params: {
   const partialDelivery = isChannelPartialDeliveryError(params.err)
     ? params.err.deliveryResult
     : undefined;
-  // A recovery-owned OutboundDeliveryError means the delivery was queued for
-  // retry by the recovery layer (not lost); surface that as a structured detail
-  // so the agent does not treat it as an ordinary retryable failure.
   const queuedDelivery =
     !partialDelivery &&
     params.err instanceof OutboundDeliveryError &&
-    params.err.recoveryOwnedRetry === true;
+    params.err.queueCustody === "held";
   const error = errorShape(
     ErrorCodes.UNAVAILABLE,
     String(params.err),
@@ -953,6 +950,10 @@ export const sendHandlers: GatewayRequestHandlers = {
       requestedOrigin: request.conversationReadOrigin,
     });
     const agentRuntimeAuthority = createAgentRuntimeAuthorityGuard(client, context, respond);
+    const assertDirectAdapterHandoff = agentRuntimeAuthority.commitGuard;
+    const onPlatformSendDispatch = assertDirectAdapterHandoff
+      ? async () => assertDirectAdapterHandoff()
+      : undefined;
     await withMessageOperationRoute({
       context,
       prefix: "message.action",
@@ -1153,6 +1154,14 @@ export const sendHandlers: GatewayRequestHandlers = {
             toolContext: trustedContext.toolContext,
             dryRun: false,
             gatewayClientScopes,
+            ...(request.action === "send"
+              ? {
+                  onPlatformSendDispatch,
+                  assertDirectAdapterHandoff,
+                  // Recovery cannot retain a live run's closure-bound send authority.
+                  skipQueue: client?.internal?.agentRuntimeIdentity !== undefined,
+                }
+              : {}),
           };
           let payload: unknown;
           if (canonicalAction) {
@@ -1168,8 +1177,6 @@ export const sendHandlers: GatewayRequestHandlers = {
                     actionOrigin: trustedContext.runtimeAgentId
                       ? ("message-tool" as const)
                       : undefined,
-                    skipQueue: client?.internal?.agentRuntimeIdentity !== undefined,
-                    onPlatformSendDispatch: async () => agentRuntimeAuthority.commitGuard?.(),
                   }
                 : {}),
               params: {
@@ -1507,6 +1514,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             // Runtime-bound sends cannot outlive their operational run. Keep
             // recovery from replaying them after the live authority closes.
             onPlatformSendDispatch,
+            assertDirectAdapterHandoff: commitAgentRuntimeAuthority,
             skipQueue: hasAgentRuntimeAuthority,
             mirror: outboundSessionKey
               ? {

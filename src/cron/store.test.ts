@@ -1,17 +1,22 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 // Cron store tests cover persisted scheduled job state and run metadata.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { loadLegacyCronQuarantineForMigration } from "../commands/doctor/cron/legacy-quarantine-migration.js";
 import {
   archiveLegacyCronStoreForMigration,
   loadLegacyCronStoreForMigration,
 } from "../commands/doctor/cron/legacy-store-migration.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   assertCronJobsStoreUnchanged,
   CronJobsStoreChangedError,
@@ -25,7 +30,7 @@ import {
   saveCronQuarantinedJobs,
   saveCronStore,
 } from "./store.js";
-import { saveCronJobsStoreWithTransactionHooks } from "./store/transaction-hooks.js";
+import { cronStoreKey } from "./store/key.js";
 import type { CronStoreFile } from "./types.js";
 
 let fixtureRoot = "";
@@ -487,7 +492,7 @@ describe("cron store", () => {
     const { storePath } = await makeStorePath();
     const store = makeStore("post-commit-hook", true);
     const afterCommit = vi.fn();
-    await saveCronJobsStoreWithTransactionHooks(storePath, store, undefined, { afterCommit });
+    await saveCronJobsStore(storePath, store, { transactionHooks: { afterCommit } });
     expect(afterCommit).toHaveBeenCalledOnce();
 
     const database = openOpenClawStateDatabase().db;
@@ -496,7 +501,7 @@ describe("cron store", () => {
     );
     try {
       await expect(
-        saveCronJobsStoreWithTransactionHooks(storePath, store, undefined, { afterCommit }),
+        saveCronJobsStore(storePath, store, { transactionHooks: { afterCommit } }),
       ).rejects.toThrow("cron update rejected");
       expect(afterCommit).toHaveBeenCalledOnce();
     } finally {
@@ -1783,6 +1788,75 @@ describe("saveCronStore", () => {
   });
 });
 describe("cron jobs fingerprint guard", () => {
+  it.each(["UTF-8", "UTF-16le", "UTF-16be"])(
+    "fingerprints one raw definition snapshot independently of %s storage",
+    async (encoding) => {
+      await withOpenClawTestState({ label: "cron-fingerprint" }, async (state) => {
+        const databasePath = resolveOpenClawStateSqlitePath(state.env);
+        await fs.mkdir(path.dirname(databasePath), { recursive: true });
+        const initial = new DatabaseSync(databasePath);
+        try {
+          // SQLite fixes file encoding at the first schema write, even after that table is removed.
+          initial.exec(
+            `PRAGMA encoding = '${encoding}'; CREATE TABLE fixture(id); DROP TABLE fixture;`,
+          );
+        } finally {
+          initial.close();
+        }
+        const storePath = state.statePath("cron", "jobs.json");
+        const jobs = ["z", "\u{10000}", "\ue000", "malformed"].map((id) =>
+          expectDefined(makeStore(id, true).jobs[0], "fingerprint fixture"),
+        );
+        await saveCronStore(storePath, { version: 1, jobs });
+        const db = openOpenClawStateDatabase().db;
+        expect(db.prepare("PRAGMA encoding").get()).toEqual({ encoding });
+        const storeKey = cronStoreKey(storePath);
+        db.prepare(
+          "UPDATE cron_jobs SET job_json = '{malformed' WHERE store_key = ? AND job_id = ?",
+        ).run(storeKey, "malformed");
+        const raw = db
+          .prepare(
+            "SELECT job_id, job_json, sort_order FROM cron_jobs WHERE store_key = ? ORDER BY job_id",
+          )
+          .all(storeKey);
+        const expectedOrder = ["malformed", "z", "\ue000", "\u{10000}"].map((id) =>
+          expectDefined(
+            raw.find((row) => row.job_id === id),
+            "raw fingerprint row",
+          ),
+        );
+        const fingerprint = createHash("sha256")
+          .update(JSON.stringify(expectedOrder))
+          .digest("hex");
+        const reads = trackSqliteStatementExecutions(db, ["jobs"], (sql) =>
+          sql.startsWith("select ") && sql.includes('from "cron_jobs"') ? "jobs" : null,
+        );
+        try {
+          const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
+          expect(loaded.jobsFingerprint).toBe(fingerprint);
+          expect(loaded.store.jobs.map((job) => job.id)).toEqual(["z", "\u{10000}", "\ue000"]);
+          expect(loaded.invalidConfigRows).toHaveLength(1);
+          expect(reads.rowCounts.jobs).toBe(4);
+          expect(reads.counts.jobs).toBe(1);
+        } finally {
+          reads.restore();
+        }
+        db.prepare("UPDATE cron_jobs SET state_json = ? WHERE store_key = ? AND job_id = ?").run(
+          '{"lastRunAtMs":42}',
+          storeKey,
+          "z",
+        );
+        expect(() => assertCronJobsStoreUnchanged(db, storePath, fingerprint)).not.toThrow();
+        db.prepare(
+          "UPDATE cron_jobs SET sort_order = sort_order + 1 WHERE store_key = ? AND job_id = ?",
+        ).run(storeKey, "z");
+        expect(() => assertCronJobsStoreUnchanged(db, storePath, fingerprint)).toThrow(
+          CronJobsStoreChangedError,
+        );
+      });
+    },
+  );
+
   it("refuses a replace after a concurrent order change and accepts a fresh snapshot", async () => {
     const { storePath } = await makeStorePath();
     const jobA = expectDefined(makeStore("job-a", true).jobs[0], "job-a fixture");
@@ -1795,11 +1869,14 @@ describe("cron jobs fingerprint guard", () => {
     await saveCronStore(storePath, { version: 1, jobs: [jobB, jobA] });
 
     await expect(
-      saveCronJobsStoreWithTransactionHooks(
+      saveCronJobsStore(
         storePath,
         { version: 1, jobs: [jobA, jobB] },
-        undefined,
-        { beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, staleFingerprint) },
+        {
+          transactionHooks: {
+            beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, staleFingerprint),
+          },
+        },
       ),
     ).rejects.toBeInstanceOf(CronJobsStoreChangedError);
     expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(["job-b", "job-a"]);
@@ -1809,11 +1886,14 @@ describe("cron jobs fingerprint guard", () => {
       "fingerprint after concurrent reorder",
     );
     expect(freshFingerprint).not.toBe(staleFingerprint);
-    await saveCronJobsStoreWithTransactionHooks(
+    await saveCronJobsStore(
       storePath,
       { version: 1, jobs: [jobA, jobB] },
-      undefined,
-      { beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, freshFingerprint) },
+      {
+        transactionHooks: {
+          beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, freshFingerprint),
+        },
+      },
     );
     expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(["job-a", "job-b"]);
   });
@@ -1848,12 +1928,12 @@ describe("cron jobs fingerprint guard", () => {
     expect((await loadCronJobsStoreWithConfigJobs(storePath)).jobsFingerprint).toBe(fingerprint);
     const repair = structuredClone(store);
     expectDefined(repair.jobs[0], "repair job").enabled = false;
-    await saveCronJobsStoreWithTransactionHooks(
-      storePath,
-      repair,
-      { preserveRuntimeState: true },
-      { beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, fingerprint) },
-    );
+    await saveCronJobsStore(storePath, repair, {
+      preserveRuntimeState: true,
+      transactionHooks: {
+        beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, fingerprint),
+      },
+    });
 
     const repaired = expectDefined((await loadCronStore(storePath)).jobs[0], "repaired job");
     expect(repaired.enabled).toBe(false);
@@ -1891,12 +1971,12 @@ describe("cron jobs fingerprint guard", () => {
       toolsAllow: ["read"],
     };
 
-    await saveCronJobsStoreWithTransactionHooks(
-      storePath,
-      repair,
-      { preserveRuntimeState: true },
-      { beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, fingerprint) },
-    );
+    await saveCronJobsStore(storePath, repair, {
+      preserveRuntimeState: true,
+      transactionHooks: {
+        beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, fingerprint),
+      },
+    });
 
     const repaired = expectDefined((await loadCronStore(storePath)).jobs[0], "repaired job");
     expect(repaired.runtimeAuthority).toBeUndefined();
@@ -1919,12 +1999,12 @@ describe("cron jobs fingerprint guard", () => {
     const repair = structuredClone(store);
     expectDefined(repair.jobs[0], "repair job").enabled = false;
 
-    await saveCronJobsStoreWithTransactionHooks(
-      storePath,
-      repair,
-      { preserveRuntimeState: true },
-      { beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, fingerprint) },
-    );
+    await saveCronJobsStore(storePath, repair, {
+      preserveRuntimeState: true,
+      transactionHooks: {
+        beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, fingerprint),
+      },
+    });
 
     const repaired = expectDefined((await loadCronStore(storePath)).jobs[0], "repaired job");
     expect(repaired.enabled).toBe(false);
@@ -1950,12 +2030,12 @@ describe("cron jobs fingerprint guard", () => {
     const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
     const fingerprint = expectDefined(loaded.jobsFingerprint, "legacy authority fingerprint");
 
-    await saveCronJobsStoreWithTransactionHooks(
-      storePath,
-      loaded.store,
-      { preserveRuntimeState: true },
-      { beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, fingerprint) },
-    );
+    await saveCronJobsStore(storePath, loaded.store, {
+      preserveRuntimeState: true,
+      transactionHooks: {
+        beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, fingerprint),
+      },
+    });
 
     expect((await loadCronStore(storePath)).jobs[0]?.runtimeAuthority).toEqual(
       job.runtimeAuthority,

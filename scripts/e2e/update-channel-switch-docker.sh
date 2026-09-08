@@ -32,6 +32,7 @@ docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_SKIP_CHANNELS=1 \
   -e OPENCLAW_SKIP_PROVIDERS=1 \
+  -e OPENCLAW_FS_SAFE_NATIVE_CONTRACT \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
@@ -86,6 +87,18 @@ if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm 
   exit 1
 fi
 package_version="$(node -p "JSON.parse(require(\"node:fs\").readFileSync(\"/tmp/npm-prefix/lib/node_modules/openclaw/package.json\", \"utf8\")).version")"
+# npm global tarball installs can retain the host platform package even with
+# --omit=optional. Relocate any such package so this lane deterministically
+# exercises the optional-free JavaScript fallback promised by that install mode.
+fs_safe_scope=/tmp/npm-prefix/lib/node_modules/openclaw/node_modules/@openclaw
+for platform_package in "$fs_safe_scope"/fs-safe-*; do
+  if [ -d "$platform_package" ]; then
+    mv "$platform_package" "$platform_package.omitted"
+  fi
+done
+node scripts/docker/verify-fs-safe-native.mjs \
+  --package-root /tmp/npm-prefix/lib/node_modules/openclaw \
+  --mode fallback
 OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
   node scripts/e2e/lib/package-compat.mjs "$package_version"
 )"
@@ -179,6 +192,19 @@ if [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" != "1" ]; then
   dev_channel_args=()
 fi
 
+echo "==> ordinary untracked files still block Git admission"
+printf "retain user notes\n" >"$git_root/operator-update-notes.tmp"
+set +e
+dirty_json="$(openclaw update "${dev_channel_args[@]}" --yes --json --no-restart)"
+dirty_status=$?
+set -e
+if [ "$dirty_status" -eq 0 ]; then
+  echo "Git update unexpectedly admitted ordinary untracked user notes" >&2
+  exit 1
+fi
+UPDATE_JSON="$dirty_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs   assert-dirty-update "$git_root" "$fixture_sha"
+node -e "require(\"node:fs\").unlinkSync(process.argv[1])" "$git_root/operator-update-notes.tmp"
+
 echo "==> package -> git dev channel"
 set +e
 dev_json="$(openclaw update "${dev_channel_args[@]}" --yes --json --no-restart)"
@@ -189,6 +215,7 @@ if [ "$dev_status" -ne 0 ]; then
   exit "$dev_status"
 fi
 UPDATE_JSON="$dev_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-update dev
+node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-runtime-staging-clean "$git_root"
 node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel dev
 
 status_json="$(openclaw update status --json)"
@@ -205,6 +232,7 @@ if [ "$stable_status" -ne 0 ]; then
   exit "$stable_status"
 fi
 UPDATE_JSON="$stable_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-update stable
+node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-runtime-staging-clean "$git_root"
 node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel stable
 
 status_json="$(openclaw update status --json)"

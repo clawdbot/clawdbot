@@ -1,6 +1,5 @@
 // Azure Speech tests cover tts plugin behavior.
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -260,39 +259,31 @@ describe("azure speech tts", () => {
     const socketClosed = new Promise<boolean>((resolve) => {
       notifySocketClosed = resolve;
     });
-    const server = createServer((request, response) => {
-      request.socket.once("close", () => notifySocketClosed?.(true));
-      response.writeHead(200, { "content-type": "application/json" });
-      // Headers land, then the body never ends: only an explicit cancel closes this.
-      response.write('{"error":"still streaming');
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
+    await withServer(
+      (request, response) => {
+        request.socket.once("close", () => notifySocketClosed?.(true));
+        response.writeHead(200, { "content-type": "application/json" });
+        // Headers land, then the body never ends: only an explicit cancel closes this.
+        response.write('{"error":"still streaming');
+      },
+      async (baseUrl) => {
+        await expect(
+          azureSpeechTTS({
+            text: "hello",
+            apiKey: "fixture-value",
+            endpoint: baseUrl,
+            voice: "en-US-JennyNeural",
+            lang: "en-US",
+            timeoutMs: 5_000,
+          }),
+        ).rejects.toThrow("Azure Speech TTS API error: malformed audio response");
 
-    try {
-      const { port } = server.address() as AddressInfo;
-      await expect(
-        azureSpeechTTS({
-          text: "hello",
-          apiKey: "fixture-value",
-          endpoint: `http://127.0.0.1:${port}`,
-          voice: "en-US-JennyNeural",
-          lang: "en-US",
-          timeoutMs: 5_000,
-        }),
-      ).rejects.toThrow("Azure Speech TTS API error: malformed audio response");
-
-      await expect(
-        withTimeout(socketClosed, 250, {
-          message: "Azure Speech malformed-response socket did not close",
-        }),
-      ).resolves.toBe(true);
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+        await expect(
+          withTimeout(socketClosed, 250, {
+            message: "Azure Speech malformed-response socket did not close",
+          }),
+        ).resolves.toBe(true);
+      },
+    );
   });
 });

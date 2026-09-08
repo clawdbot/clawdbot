@@ -22,15 +22,16 @@ without a running Gateway.
 ## Visibility and output
 
 Search uses the same configured session visibility rules as `sessions_history`. The default
-`tools.sessions.visibility: "agent"` permits unsandboxed callers to search all sessions belonging to
-their agent, including other users' conversations in shared-agent deployments. Set explicit `tree`
-or `self`, or use separate agents, when callers need a narrower trust boundary. Per-peer DM routing
-separates conversation context but does not restrict session-tool visibility.
+`tools.sessions.visibility: "all"` permits unsandboxed callers to search sessions across agents on
+the Gateway, including other users' conversations. Cross-agent access is on by default and governed
+by `tools.agentToAgent`; set `enabled: false` to block ordinary cross-agent access or use `allow` to
+restrict agent pairs (requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all`). Set explicit `agent`, `tree`, or `self` when callers need narrower session visibility.
+Per-peer DM routing separates conversation context but does not restrict session-tool visibility.
 
 Results outside the caller's effective visibility scope are removed before result limits are
 applied. Sandboxed agents remain limited to sessions they spawned when spawned-session visibility
-is enabled. Incognito sessions remain excluded; ordinary cross-agent access requires `all` plus
-agent-to-agent policy.
+is enabled. Incognito sessions remain excluded; narrowing visibility from `all` blocks ordinary
+cross-agent access.
 
 Excerpts are redacted before they return to the model. Results are also bounded by count, excerpt
 length, and total response size.

@@ -91,7 +91,7 @@ function makeChatPageHost({
   const host = createPageState(
     context,
     { invalidate: vi.fn(), afterCommit: () => () => {} },
-    { querySelector: () => null },
+    { dispatchEvent: () => true, querySelector: () => null },
   );
   Object.assign(host, { client, hello, connected: true }, overrides);
   return Object.assign(host, { request });
@@ -655,7 +655,7 @@ describe("server-owned pending input display", () => {
   );
 
   it.each(["text", "blob"])(
-    "retires browser retry custody while keeping accepted %s input separate from history",
+    "retains accepted %s input and attachment bytes until consumption, without duplicating display",
     async (kind) => {
       if (kind === "blob") {
         installOutboxBrowserStorage();
@@ -740,21 +740,17 @@ describe("server-owned pending input display", () => {
         loadChatComposerSnapshot(host, sessionKey)?.queue[0]?.attachments?.[0]?.dataUrl,
       ).toBeUndefined();
       await loadChatHistory(host);
-      expect(readChatQueueForScope(host, sessionKey)).toEqual([]);
-      expect(listStoredChatOutboxes(host)).toEqual([]);
+      expect(readChatQueueForScope(host, sessionKey)).toHaveLength(1);
+      expect(listStoredChatOutboxes(host)[0]?.queue).toHaveLength(1);
       expect(host.chatMessages).toEqual(history);
       expect(getChatPendingInputs(host)?.page).toEqual(acceptedPage);
+      expect(cleanup).not.toHaveBeenCalled();
       if (reference && payloadOwner) {
-        await vi.waitFor(async () => {
-          expect(await outboxPayloadStore.readOutboxPayload(payloadOwner, reference)).toEqual({
-            status: "failed",
-            reason: "missing",
-          });
-        });
-        expect(cleanup).toHaveBeenCalledTimes(1);
-        expect(cleanup).toHaveBeenCalledWith([reference]);
-      } else {
-        expect(cleanup).not.toHaveBeenCalled();
+        const retained = await outboxPayloadStore.readOutboxPayload(payloadOwner, reference);
+        expect(retained.status).toBe("ready");
+        if (retained.status === "ready") {
+          expect(Buffer.from(await retained.value[0]!.blob.arrayBuffer())).toEqual(imageBytes);
+        }
       }
       const items = buildChatItems({
         paneId: "pending-pane",
@@ -779,10 +775,28 @@ describe("server-owned pending input display", () => {
       expect(items).toContainEqual(
         expect.objectContaining({
           kind: "notice",
-          text: expect.stringContaining("will not run automatically"),
+          text: expect.stringContaining("will resume"),
         }),
       );
       expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+      applyChatPendingInputs(
+        host,
+        { items: [], total: 0 },
+        {
+          receipts: [{ runId: input.runId!, state: "consumed", consumedByEventId: "aggregate" }],
+        },
+      );
+      expect(listStoredChatOutboxes(host)).toEqual([]);
+      if (reference && payloadOwner) {
+        await vi.waitFor(async () => {
+          expect(await outboxPayloadStore.readOutboxPayload(payloadOwner, reference)).toEqual({
+            status: "failed",
+            reason: "missing",
+          });
+        });
+        expect(cleanup).toHaveBeenCalledOnce();
+        expect(cleanup).toHaveBeenCalledWith([reference]);
+      }
     },
   );
 

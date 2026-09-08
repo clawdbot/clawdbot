@@ -89,7 +89,7 @@ async function withColdFixture(run: (fixture: ReturnType<typeof createFixture>) 
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         },
         async () => {
-          resetPreparedModelRuntimeSnapshotsForTest();
+          await resetPreparedModelRuntimeSnapshotsForTest();
           clearPluginMetadataLifecycleCaches();
           testing.resetToolsEffectiveCacheForTest();
           try {
@@ -102,7 +102,7 @@ async function withColdFixture(run: (fixture: ReturnType<typeof createFixture>) 
             expect(ownerCount()).toBe(0);
           } finally {
             testing.resetToolsEffectiveCacheForTest();
-            resetPreparedModelRuntimeSnapshotsForTest();
+            await resetPreparedModelRuntimeSnapshotsForTest();
             clearPluginMetadataLifecycleCaches();
             resetPluginLoaderTestStateForTest();
             cleanupPluginLoaderFixturesForTest();

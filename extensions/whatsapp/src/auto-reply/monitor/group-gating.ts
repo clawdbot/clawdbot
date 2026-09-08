@@ -155,7 +155,7 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
   const conversationGroupPolicy = inboundPolicy.resolveConversationGroupPolicy(conversationId);
   if (conversationGroupPolicy.allowlistEnabled && !conversationGroupPolicy.allowed) {
     const accountId = inboundPolicy.account.accountId;
-    const warnKey = `${accountId}:${conversationId}`;
+    const warnKey = JSON.stringify([accountId, conversationId, "group registry"]);
     if (shouldWarnForGroupDrop(warnKey)) {
       const groupsPath = resolveWhatsAppGroupsConfigPath({ cfg: params.cfg, accountId });
       params.replyLogger.warn(
@@ -269,6 +269,14 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
         `Deferring group mention skip until audio preflight completes in ${conversationId}`,
       );
       return { shouldProcess: false, needsMentionText: true } as const;
+    }
+    const accountId = inboundPolicy.account.accountId;
+    if (shouldWarnForGroupDrop(JSON.stringify([accountId, conversationId, "no mention"]))) {
+      const groupsPath = resolveWhatsAppGroupsConfigPath({ cfg: params.cfg, accountId });
+      params.replyLogger.warn(
+        { conversationId, accountId, groupsPath },
+        `WhatsApp group ${conversationId}: skipping messages without a mention. Mention patterns can be derived from the agent identity name. Use /activation always for this session, or set ${groupsPath}[${JSON.stringify(conversationId)}].requireMention=false for the default. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
+      );
     }
     // Mention matching needs raw STT text, but deferred history is model-visible later.
     const pendingHistoryBody =

@@ -7,7 +7,7 @@ import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionMemoryTranscript } from "../../hooks/bundled/session-memory/capture.js";
 import type { PluginCommandContext } from "../../plugins/types.js";
-import type { SkillCommandSpec } from "../../skills/types.js";
+import type { ExplicitSkillSelection, SkillCommandSpec } from "../../skills/types.js";
 import type { MsgContext } from "../templating.js";
 import type {
   ElevatedLevel,
@@ -89,6 +89,7 @@ export type HandleCommandsParams = {
   isGroup: boolean;
   skillCommands?: SkillCommandSpec[];
   loadSkillCommands?: () => Promise<SkillCommandSpec[]>;
+  loadBundledSkillCommand?: (skillName: string) => Promise<SkillCommandSpec | undefined>;
   typing?: TypingController;
   /** Invocation authority for host-bound plugin command capabilities. */
   commandInvocationSignal?: AbortSignal;
@@ -99,6 +100,8 @@ export type HandleCommandsParams = {
 /** Result returned by a command handler. */
 export type CommandHandlerResult = {
   reply?: ReplyPayload;
+  /** Exact skill files deliberately selected by a continuing command. */
+  explicitSkillSelections?: ExplicitSkillSelection[];
   /** Turn-local queue override requested by an authorized continuation command. */
   queueModeOverride?: QueueMode;
   sessionCompaction?: Awaited<

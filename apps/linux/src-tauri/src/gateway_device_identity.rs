@@ -33,7 +33,7 @@ const MAX_IDENTITY_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct StoredGatewayIdentity {
+pub(crate) struct GatewayDeviceIdentity {
     version: u8,
     device_id: String,
     public_key: String,
@@ -55,18 +55,13 @@ enum DecodeIdentityError {
     Malformed(String),
 }
 
-impl Drop for StoredGatewayIdentity {
+impl Drop for GatewayDeviceIdentity {
     fn drop(&mut self) {
         self.private_key.zeroize();
         if let Some(device_token) = self.device_token.as_mut() {
             device_token.zeroize();
         }
     }
-}
-
-#[derive(Clone)]
-pub(crate) struct GatewayDeviceIdentity {
-    stored: StoredGatewayIdentity,
 }
 
 pub(crate) struct GatewayDeviceIdentityStore {
@@ -128,7 +123,7 @@ impl GatewayDeviceIdentityStore {
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 let identity = generate_identity()?;
-                write_identity(&path, &identity.stored)?;
+                write_identity(&path, &identity)?;
                 identity
             }
             Err(error) => {
@@ -151,8 +146,8 @@ impl GatewayDeviceIdentityStore {
         shared_password: Option<&str>,
     ) -> GatewayAuth {
         select_auth(
-            self.identity.stored.device_token.as_deref(),
-            self.identity.stored.device_token_gateway.as_deref(),
+            self.identity.device_token.as_deref(),
+            self.identity.device_token_gateway.as_deref(),
             gateway,
             shared_token,
             shared_password,
@@ -168,30 +163,30 @@ impl GatewayDeviceIdentityStore {
         if device_token.is_empty() {
             return Err("Gateway issued an empty device token.".to_string());
         }
-        if self.identity.stored.device_token.as_deref() == Some(device_token)
-            && self.identity.stored.device_token_gateway.as_deref() == Some(gateway)
+        if self.identity.device_token.as_deref() == Some(device_token)
+            && self.identity.device_token_gateway.as_deref() == Some(gateway)
         {
             return Ok(());
         }
-        let mut updated = self.identity.stored.clone();
+        let mut updated = self.identity.clone();
         updated.device_token = Some(device_token.to_string());
         updated.device_token_gateway = Some(gateway.to_string());
         write_identity(&self.path, &updated)?;
-        self.identity.stored = updated;
+        self.identity = updated;
         Ok(())
     }
 
     pub(crate) fn clear_device_token(&mut self, gateway: &str) -> Result<(), String> {
-        if self.identity.stored.device_token_gateway.as_deref() != Some(gateway) {
+        if self.identity.device_token_gateway.as_deref() != Some(gateway) {
             return Ok(());
         }
-        let mut updated = self.identity.stored.clone();
+        let mut updated = self.identity.clone();
         if let Some(mut token) = updated.device_token.take() {
             token.zeroize();
         }
         updated.device_token_gateway = None;
         write_identity(&self.path, &updated)?;
-        self.identity.stored = updated;
+        self.identity = updated;
         Ok(())
     }
 }
@@ -203,14 +198,14 @@ impl GatewayDeviceIdentity {
         nonce: &str,
         signed_at_ms: u64,
     ) -> Result<Value, String> {
-        let signing_key_bytes = Zeroizing::new(decode_key(&self.stored.private_key, "private")?);
+        let signing_key_bytes = Zeroizing::new(decode_key(&self.private_key, "private")?);
         let signing_key = SigningKey::from_bytes(&signing_key_bytes);
         let public_key = signing_key.verifying_key().to_bytes();
-        if STANDARD.encode(public_key) != self.stored.public_key {
+        if STANDARD.encode(public_key) != self.public_key {
             return Err("Gateway device identity keypair is invalid.".to_string());
         }
         let payload = build_device_auth_payload(DeviceAuthPayloadFields {
-            device_id: &self.stored.device_id,
+            device_id: &self.device_id,
             client_id: CLIENT_ID,
             client_mode: CLIENT_MODE,
             role: CLIENT_ROLE,
@@ -223,7 +218,7 @@ impl GatewayDeviceIdentity {
         });
         let signature = signing_key.sign(payload.as_bytes()).to_bytes();
         Ok(json!({
-            "id": self.stored.device_id,
+            "id": self.device_id,
             "publicKey": URL_SAFE_NO_PAD.encode(public_key),
             "signature": URL_SAFE_NO_PAD.encode(signature),
             "signedAt": signed_at_ms,
@@ -264,17 +259,7 @@ fn build_device_auth_payload(fields: DeviceAuthPayloadFields<'_>) -> String {
 }
 
 fn normalize_metadata(value: &str) -> String {
-    value
-        .trim()
-        .chars()
-        .map(|character| {
-            if character.is_ascii_uppercase() {
-                character.to_ascii_lowercase()
-            } else {
-                character
-            }
-        })
-        .collect()
+    value.trim().to_ascii_lowercase()
 }
 
 fn non_empty_trimmed(value: Option<&str>) -> Option<&str> {
@@ -309,15 +294,13 @@ fn generate_identity() -> Result<GatewayDeviceIdentity, String> {
     secret.zeroize();
     let public_key = signing_key.verifying_key().to_bytes();
     Ok(GatewayDeviceIdentity {
-        stored: StoredGatewayIdentity {
-            version: IDENTITY_VERSION,
-            device_id: device_id(&public_key),
-            public_key: STANDARD.encode(public_key),
-            private_key: STANDARD.encode(signing_key.to_bytes()),
-            created_at_ms: unix_time_ms()?,
-            device_token: None,
-            device_token_gateway: None,
-        },
+        version: IDENTITY_VERSION,
+        device_id: device_id(&public_key),
+        public_key: STANDARD.encode(public_key),
+        private_key: STANDARD.encode(signing_key.to_bytes()),
+        created_at_ms: unix_time_ms()?,
+        device_token: None,
+        device_token_gateway: None,
     })
 }
 
@@ -330,7 +313,7 @@ fn decode_identity(bytes: &[u8]) -> Result<GatewayDeviceIdentity, DecodeIdentity
     if version != IDENTITY_VERSION {
         return Err(DecodeIdentityError::VersionMismatch { found: version });
     }
-    let stored = serde_json::from_slice::<StoredGatewayIdentity>(bytes).map_err(|error| {
+    let stored = serde_json::from_slice::<GatewayDeviceIdentity>(bytes).map_err(|error| {
         DecodeIdentityError::Malformed(format!("Gateway device identity is invalid: {error}"))
     })?;
     let signing_key_bytes = Zeroizing::new(
@@ -354,7 +337,7 @@ fn decode_identity(bytes: &[u8]) -> Result<GatewayDeviceIdentity, DecodeIdentity
             "Gateway device token binding is invalid.".to_string(),
         ));
     }
-    Ok(GatewayDeviceIdentity { stored })
+    Ok(stored)
 }
 
 fn decode_key(encoded: &str, kind: &str) -> Result<[u8; 32], String> {
@@ -439,11 +422,11 @@ fn quarantine_and_regenerate(
     );
 
     let identity = generate_identity()?;
-    write_identity(path, &identity.stored)?;
+    write_identity(path, &identity)?;
     Ok(identity)
 }
 
-fn write_identity(path: &Path, identity: &StoredGatewayIdentity) -> Result<(), String> {
+fn write_identity(path: &Path, identity: &GatewayDeviceIdentity) -> Result<(), String> {
     let bytes = Zeroizing::new(
         serde_json::to_vec(identity)
             .map_err(|error| format!("Could not encode Gateway device identity: {error}"))?,
@@ -519,13 +502,10 @@ mod tests {
         let reloaded = GatewayDeviceIdentityStore::load_or_create(path.clone())
             .expect("reload recovered identity");
 
+        assert_eq!(recovered.identity.device_id, reloaded.identity.device_id);
         assert_eq!(
-            recovered.identity.stored.device_id,
-            reloaded.identity.stored.device_id
-        );
-        assert_eq!(
-            recovered.identity.stored.private_key,
-            reloaded.identity.stored.private_key
+            recovered.identity.private_key,
+            reloaded.identity.private_key
         );
         let quarantined = quarantined_identity_paths(&directory);
         assert_eq!(quarantined.len(), 1);
@@ -543,7 +523,7 @@ mod tests {
             Uuid::new_v4()
         ));
         let path = directory.join("quickchat-gateway-device.json");
-        let mut stored = generate_identity().expect("generate identity").stored;
+        let mut stored = generate_identity().expect("generate identity");
         stored.version = version;
         write_identity(&path, &stored).expect("write version-mismatched identity");
         let original_bytes = fs::read(&path).expect("read version-mismatched identity");
@@ -612,19 +592,17 @@ mod tests {
         original
             .persist_device_token("ws://127.0.0.1:18789", "test-token-fresh")
             .expect("persist device token");
+        let persisted: Value = serde_json::from_slice(&fs::read(&path).expect("read identity"))
+            .expect("identity JSON");
+        assert_eq!(persisted["deviceId"], original.identity.device_id);
+        assert_eq!(persisted["deviceToken"], "test-token-fresh");
         let reloaded = GatewayDeviceIdentityStore::load_or_create(path.clone())
             .expect("reload device identity");
 
+        assert_eq!(original.identity.device_id, reloaded.identity.device_id);
+        assert_eq!(original.identity.private_key, reloaded.identity.private_key);
         assert_eq!(
-            original.identity.stored.device_id,
-            reloaded.identity.stored.device_id
-        );
-        assert_eq!(
-            original.identity.stored.private_key,
-            reloaded.identity.stored.private_key
-        );
-        assert_eq!(
-            reloaded.identity.stored.device_token.as_deref(),
+            reloaded.identity.device_token.as_deref(),
             Some("test-token-fresh")
         );
         #[cfg(unix)]
@@ -718,10 +696,7 @@ mod tests {
         let loaded = GatewayDeviceIdentityStore::load_or_create(path.clone())
             .expect("load symlinked identity");
 
-        assert_eq!(
-            loaded.identity.stored.device_id,
-            original.identity.stored.device_id
-        );
+        assert_eq!(loaded.identity.device_id, original.identity.device_id);
         assert!(fs::symlink_metadata(&path)
             .expect("identity symlink metadata")
             .file_type()
@@ -749,10 +724,7 @@ mod tests {
         let reloaded = GatewayDeviceIdentityStore::load_or_create(path.clone())
             .expect("reload recovered identity");
 
-        assert_eq!(
-            recovered.identity.stored.device_id,
-            reloaded.identity.stored.device_id
-        );
+        assert_eq!(recovered.identity.device_id, reloaded.identity.device_id);
         assert!(fs::symlink_metadata(&path)
             .expect("recovered identity metadata")
             .is_file());
@@ -863,7 +835,7 @@ mod tests {
         let path = directory.join("quickchat-gateway-device.json");
         let mut store =
             GatewayDeviceIdentityStore::load_or_create(path.clone()).expect("create identity");
-        let device_id = store.identity.stored.device_id.clone();
+        let device_id = store.identity.device_id.clone();
         store
             .persist_device_token("wss://gateway.example", "test-token-stale")
             .expect("persist token");
@@ -872,7 +844,7 @@ mod tests {
             .expect("clear token");
 
         let reloaded = GatewayDeviceIdentityStore::load_or_create(path).expect("reload identity");
-        assert_eq!(reloaded.identity.stored.device_id, device_id);
+        assert_eq!(reloaded.identity.device_id, device_id);
         assert!(matches!(
             reloaded.select_auth("wss://gateway.example", Some("shared-token"), None),
             GatewayAuth::SharedToken(ref token) if token == "shared-token"

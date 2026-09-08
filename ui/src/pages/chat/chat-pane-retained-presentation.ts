@@ -7,12 +7,14 @@ import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.t
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
 import { loadChatBranches, retireChatBranchRequests } from "./chat-history-branches.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneBoard } from "./chat-pane-board.ts";
 import {
   consumePaneSessionHandoff,
   type PaneSessionHandoff,
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
+import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import { setChatError } from "./chat-send-queue-state.ts";
@@ -169,6 +171,15 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       const deferredHydrationActive = this.resumeDeferredSessionHydration();
       if (state && !deferredHydrationActive) {
         this.markSessionRead(selectedChatSessionRow(state));
+        if (
+          state.connected &&
+          this.resolveChatReadTarget() &&
+          (state.chatRunId || selectedChatSessionRow(state)?.hasActiveRun)
+        ) {
+          // Keep the retained transcript visible while reconciling the live run's
+          // authoritative start time and activity after a foreground return.
+          void loadChatHistory(state, { deferBranches: true });
+        }
       }
       if (
         state &&
@@ -185,6 +196,9 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     this.minutePoll.stop();
     if (this.state) {
       retireChatBranchRequests(this.state);
+      // Unwatch can cancel an admitted refresh before sync; a later presentation
+      // must not inherit a receipt for work its watch no longer owns.
+      retirePullRequestRefreshes(this.state);
     }
     this.swarmHydrator?.dispose();
     this.swarmHydrator = null;
@@ -221,6 +235,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       if (scope) {
         storeChatComposerMemoryFallback(state, scope, {
           message: state.chatMessage,
+          mentions: state.chatMentions,
           goalMode: state.chatGoalDraftMode,
           attachments: state.chatAttachments,
           draftRetry: persistResult,
@@ -232,6 +247,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       // fallbacks. This transfer carries only composer metadata and the draft.
       attachments: [],
       draft: state.chatMessage,
+      ...(state.chatMentions?.length ? { mentions: state.chatMentions } : {}),
       ...(state.chatGoalDraftMode ? { goalMode: state.chatGoalDraftMode } : {}),
       restore: true,
       storageFailed: persistResult.status === "storage-failed",
@@ -269,9 +285,10 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     }
     state.chatGoalDraftMode = handoff.goalMode ?? null;
     if (notifyDraftChange) {
-      state.handleChatDraftChange(handoff.draft);
+      state.handleChatDraftChange(handoff.draft, handoff.mentions ?? []);
     } else {
       state.chatMessage = handoff.draft;
+      state.chatMentions = handoff.mentions;
     }
     if (handoff.storageFailed) {
       state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;

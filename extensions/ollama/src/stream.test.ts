@@ -2,6 +2,7 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
+import { onLlmRequestActivity } from "openclaw/plugin-sdk/provider-stream-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -348,6 +349,8 @@ describe("createOllamaStreamFn thinking events", () => {
           messages: [{ role: "user", content: "test" }],
           stream: true,
           options: {},
+          truncate: false,
+          shift: false,
         }),
       },
       policy: {
@@ -523,6 +526,9 @@ describe("createOllamaStreamFn thinking events", () => {
       makeOllamaResponse({ content: "" }),
     ];
     const refreshTimeout = vi.fn();
+    const controller = new AbortController();
+    const onActivity = vi.fn();
+    const unsubscribe = onLlmRequestActivity(controller.signal, onActivity);
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(makeNdjsonBody(chunks), { status: 200 }),
       release: vi.fn(async () => undefined),
@@ -533,16 +539,21 @@ describe("createOllamaStreamFn thinking events", () => {
     const stream = streamFn(
       STREAM_MODEL as never,
       { messages: [{ role: "user", content: "test" }] } as never,
-      {},
+      { signal: controller.signal },
     );
 
     const events: Array<{ type: string }> = [];
-    for await (const event of stream as AsyncIterable<{ type: string }>) {
-      events.push(event);
+    try {
+      for await (const event of stream as AsyncIterable<{ type: string }>) {
+        events.push(event);
+      }
+    } finally {
+      unsubscribe();
     }
 
     expect(events.some((event) => event.type === "done")).toBe(true);
     expect(refreshTimeout).toHaveBeenCalledTimes(chunks.length);
+    expect(onActivity).toHaveBeenCalledTimes(chunks.length);
   });
 
   it("redacts reflected credentials from a real non-2xx Ollama response", async () => {
@@ -870,38 +881,50 @@ describe("createOllamaStreamFn thinking events", () => {
     });
   });
 
-  it("keeps provider usage authoritative over the CJK fallback", async () => {
-    const events = await streamOllamaEvents(
-      [
-        {
-          model: "qwen3.5",
-          created_at: "2026-01-01T00:00:00Z",
-          message: { role: "assistant", content: "你好世界测试" },
-          done: false,
-        },
-        {
-          model: "qwen3.5",
-          created_at: "2026-01-01T00:00:01Z",
-          message: { role: "assistant", content: "" },
-          done: true,
-          done_reason: "stop",
-          prompt_eval_count: 77,
-          eval_count: 19,
-        },
-      ],
-      {},
-      { messages: [{ role: "user", content: "这是一个测试用的句子呢" }] } as never,
-    );
+  it.each([
+    [77, 19, 77, 19],
+    [0, 0, 0, 0],
+    [undefined, 19, 12, 19],
+    [77, undefined, 77, 6],
+    [-1, 19, 12, 19],
+    [77, -1, 77, 6],
+  ])(
+    "resolves provider counters %s/%s independently of CJK estimates",
+    async (promptCount, completionCount, expectedInput, expectedOutput) => {
+      const events = await streamOllamaEvents(
+        [
+          {
+            model: "qwen3.5",
+            created_at: "2026-01-01T00:00:00Z",
+            message: { role: "assistant", content: "你好世界测试" },
+            done: false,
+          },
+          {
+            model: "qwen3.5",
+            created_at: "2026-01-01T00:00:01Z",
+            message: { role: "assistant", content: "" },
+            done: true,
+            done_reason: "stop",
+            prompt_eval_count: promptCount,
+            eval_count: completionCount,
+          },
+        ],
+        {},
+        { messages: [{ role: "user", content: "这是一个测试用的句子呢" }] } as never,
+      );
 
-    const done = events.find((event) => event.type === "done") as {
-      message?: { usage?: { input?: number; output?: number; cacheTelemetry?: { state: string } } };
-    };
-    expect(done?.message?.usage).toMatchObject({
-      input: 77,
-      output: 19,
-      cacheTelemetry: { state: "unavailable" },
-    });
-  });
+      const done = events.find((event) => event.type === "done") as {
+        message?: {
+          usage?: { input?: number; output?: number; cacheTelemetry?: { state: string } };
+        };
+      };
+      expect(done?.message?.usage).toMatchObject({
+        input: expectedInput,
+        output: expectedOutput,
+        cacheTelemetry: { state: "unavailable" },
+      });
+    },
+  );
 
   it("keeps the existing fallback estimate for ASCII-only usage", async () => {
     const events = await streamOllamaEvents(

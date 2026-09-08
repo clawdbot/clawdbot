@@ -38,6 +38,7 @@ vi.mock("../config/config.js", () => ({
     writeOptions: {
       assertConfigPathForWrite: assertConfigPathForWriteMock,
       basePluginMetadataSnapshot: {} as never,
+      envSnapshotForRestore: { INSTALL_CONFIG_READ_VALUE: "read-time" },
       expectedConfigPath: "/tmp/config.json5",
       ownedConfigPathForWrite: "/tmp/config.json5",
       includeFileHashesForWrite: includeFileHashesForWriteMock(),
@@ -62,6 +63,8 @@ vi.mock("./plugins-location-bridges.js", () => ({
 
 const DISCORD_REPO_INSTALL_SPEC = repoInstallSpec("discord");
 const installWriteOptions = {
+  inputBase: "source",
+  envSnapshotForRestore: { INSTALL_CONFIG_READ_VALUE: "read-time" },
   assertConfigPathForWrite: assertConfigPathForWriteMock,
   // Central install persistence stamps the journal origin onto every write.
   auditOrigin: "plugin-install",
@@ -908,6 +911,20 @@ describe("loadConfigForInstall", () => {
     await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
       "Config invalid outside the plugin recovery path for discord",
     );
+  });
+
+  it("reports unrelated config errors before an unsupported recovery include", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue(
+      makeSnapshot({
+        parsed: { $include: "./external.json5", plugins: {} },
+        issues: [{ path: "gateway.mode", message: "invalid mode" }],
+      }),
+    );
+
+    await expect(loadConfigForInstall(discordNpmRequest)).rejects.toMatchObject({
+      code: "INVALID_CONFIG",
+      message: expect.stringContaining("Config invalid outside the plugin recovery path"),
+    });
   });
 
   it("rejects non-Discord install requests when config is invalid", async () => {

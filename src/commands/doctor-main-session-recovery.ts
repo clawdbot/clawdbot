@@ -81,6 +81,7 @@ export async function noteMainSessionRecoveryIntegrity(
   let repaired = 0;
   for (const sessionKeys of iterateDoctorSessionKeyBatches(staleAborted.map(({ key }) => key))) {
     repaired += await applySessionEntryReplacements<number>({
+      consumePendingReset: true,
       sessionKeys,
       storePath: params.storePath,
       update: (currentEntries) => {

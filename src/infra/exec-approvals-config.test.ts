@@ -17,7 +17,7 @@ import {
   type ExecApprovalsFile,
 } from "./exec-approvals.js";
 
-describe.sequential("exec approval temp fixture cleanup", () => {
+describe("exec approval temp fixture cleanup", { concurrent: false }, () => {
   let cleanupProbeRoot = "";
 
   it("creates a disposable fixture root", () => {
@@ -128,6 +128,7 @@ describe("exec approvals node host allowlist check", () => {
       kind: "executable" as const,
       rawExecutable: "head",
       resolvedPath: "/usr/bin/head",
+      resolvedRealPath: "/usr/bin/head",
       executableName: "head",
     };
     // Not in allowlist

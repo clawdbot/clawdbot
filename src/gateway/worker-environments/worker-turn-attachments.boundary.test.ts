@@ -239,6 +239,9 @@ describe("current attachments in an active remote placement", () => {
           resume: async () => {},
         })),
         reconcileWorkspace: vi.fn(async (request) => {
+          if (request.source.kind !== "local") {
+            throw new Error("expected a local workspace source");
+          }
           const capture = await runCommandWithTimeout(
             [process.execPath, "-e", REMOTE_WORKSPACE_MANIFEST_JS, remote],
             { timeoutMs: 10_000, baseEnv: { ...process.env, HOME: remoteHome } },
@@ -257,7 +260,7 @@ describe("current attachments in an active remote placement", () => {
             currentManifestRef: manifestRef,
             base: base.manifest,
             current,
-            journal: request.journal,
+            journal: request.source.journal,
           });
           workerManifestPaths = JSON.parse(raw).entries.map(
             (entry: { path: string }) => entry.path,
@@ -274,7 +277,7 @@ describe("current attachments in an active remote placement", () => {
       };
       const provider = createWorkerSessionTurnPlacementProvider({
         placements,
-        resolveWorkspacePath: async () => local,
+        resolveWorkspace: async () => ({ kind: "local", path: local }),
         environments: {
           ...unusedEnvironments(),
           get: () => attachedEnvironment(),
@@ -292,8 +295,10 @@ describe("current attachments in an active remote placement", () => {
         },
       );
       if (executionMode === "remote-exec") {
+        const commands = vi.mocked(tunnel.runWorkspaceCommand).mock.calls;
+        expect(commands.at(-1)?.[0].input).toBe(JSON.stringify({ op: "discover" }));
         // At most one setup, three PDF chunks, and one image chunk.
-        expect(vi.mocked(tunnel.runWorkspaceCommand).mock.calls.length).toBeLessThanOrEqual(5);
+        expect(commands.length - 1).toBeLessThanOrEqual(5);
       }
       expect(tunnel.syncWorkspace).not.toHaveBeenCalled();
       expect(tunnel.reconcileWorkspace).toHaveBeenCalledOnce();

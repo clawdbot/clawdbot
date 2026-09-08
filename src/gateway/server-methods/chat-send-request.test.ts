@@ -29,7 +29,128 @@ function validParams(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function humanClient(): NonNullable<GatewayRequestHandlerOptions["client"]> {
+  const client = copilotClient();
+  client.connect.client.id = "openclaw-control-ui";
+  client.authenticatedUserProfile = {
+    profileId: "alice",
+    displayName: "Alice",
+    hasAvatar: false,
+    updatedAt: 1,
+  };
+  return client;
+}
+
 describe("normalizeChatSendRequest", () => {
+  it("normalizes Unicode and whitespace together with selected mention spans", () => {
+    const message = "  e\u0301 @Zoe\u0308 🌈  ";
+    const mentions = [{ profileId: "zoe", start: 5, end: 10 }];
+    const result = normalizeChatSendRequest({
+      params: validParams({ message, mentions }),
+      client: humanClient(),
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        rawMessage: "é @Zoë 🌈",
+        mentions: [{ profileId: "zoe", start: 2, end: 6 }],
+        p: { message, mentions },
+      },
+    });
+  });
+
+  it("shifts spans across stripped controls outside the selected token", () => {
+    expect(
+      normalizeChatSendRequest({
+        params: validParams({
+          message: "hi\u0001 @Bob",
+          mentions: [{ profileId: "bob", start: 4, end: 8 }],
+        }),
+        client: humanClient(),
+      }),
+    ).toMatchObject({
+      ok: true,
+      value: { rawMessage: "hi @Bob", mentions: [{ profileId: "bob", start: 3, end: 7 }] },
+    });
+  });
+
+  it.each([
+    { message: "hello Bob", mentions: [{ profileId: "bob", start: 6, end: 9 }] },
+    { message: "@Bob", mentions: [{ profileId: "bob", start: 0, end: 5 }] },
+    {
+      message: "@Bob",
+      mentions: [
+        { profileId: "bob", start: 0, end: 4 },
+        { profileId: "other", start: 0, end: 4 },
+      ],
+    },
+    { message: "@Bo\nb", mentions: [{ profileId: "bob", start: 0, end: 5 }] },
+    { message: "@Bo\u0001b", mentions: [{ profileId: "bob", start: 0, end: 5 }] },
+    { message: "@😀", mentions: [{ profileId: "bob", start: 0, end: 2 }] },
+    { message: "@e\u0301", mentions: [{ profileId: "bob", start: 0, end: 2 }] },
+  ])("rejects annotations that do not bind a complete visible token: %j", (input) => {
+    expect(
+      normalizeChatSendRequest({ params: validParams(input), client: humanClient() }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("keeps ordinary typed @names inert and fingerprints only explicit selections", () => {
+    const fingerprint = (profileId?: string) => {
+      const result = normalizeChatSendRequest({
+        params: validParams({
+          message: "@Alex hello",
+          ...(profileId ? { mentions: [{ profileId, start: 0, end: 5 }] } : {}),
+        }),
+        client: humanClient(),
+      });
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+      return result.value;
+    };
+    expect(fingerprint().mentions).toBeUndefined();
+    expect(fingerprint("alex-one").requestIdentity).not.toBe(
+      fingerprint("alex-two").requestIdentity,
+    );
+    expect(fingerprint("alex-one").requestIdentity).not.toBe(fingerprint().requestIdentity);
+    expect(fingerprint("alex-one").requestIdentity).toBe(fingerprint("alex-one").requestIdentity);
+  });
+
+  it("requires authenticated human ingress and rejects unsupported mention modes", () => {
+    const mentions = [{ profileId: "bob", start: 0, end: 4 }];
+    const unqualified = humanClient();
+    delete unqualified.authenticatedUserProfile;
+    const synthetic = humanClient();
+    synthetic.internal = { syntheticClient: true };
+    for (const client of [null, unqualified, synthetic]) {
+      expect(
+        normalizeChatSendRequest({
+          params: validParams({ message: "@Bob hello", mentions }),
+          client,
+        }),
+      ).toMatchObject({ ok: false });
+    }
+    expect(
+      normalizeChatSendRequest({
+        params: validParams({
+          message: "@Bob hello",
+          mentions,
+          intent: { kind: "session-goal-start", version: 1, issuedAtMs: 1 },
+        }),
+        client: humanClient(),
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      normalizeChatSendRequest({
+        params: validParams({
+          message: "/btw @Bob hello",
+          mentions: [{ profileId: "bob", start: 5, end: 9 }],
+        }),
+        client: humanClient(),
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
   it.each(["clear the backlog", "/stop", "/btw investigate", "  résumé\n\n  preserve spacing  "])(
     "admits Goal objective %j literally without command interpretation",
     (message) => {

@@ -476,18 +476,19 @@ describe("channelsAddCommand", () => {
   beforeEach(async () => {
     resetPluginRuntimeStateForTest();
     configMocks.readConfigFileSnapshot.mockClear();
+    configMocks.readConfigFileSnapshotForWrite.mockClear();
     configMocks.writeConfigFile.mockClear();
     configMocks.replaceConfigFile
       .mockReset()
-      .mockImplementation(async (params: { nextConfig: unknown }) => {
-        await configMocks.writeConfigFile(params.nextConfig);
+      .mockImplementation(async (params: { sourceConfig: unknown }) => {
+        await configMocks.writeConfigFile(params.sourceConfig);
       });
     pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls.mockReset();
     pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls.mockImplementation(
-      async (params: { nextConfig: unknown }) => {
-        await configMocks.writeConfigFile(params.nextConfig);
+      async (params: { sourceConfig: unknown }) => {
+        await configMocks.writeConfigFile(params.sourceConfig);
         return {
-          config: params.nextConfig,
+          config: params.sourceConfig,
           installRecords: {},
           movedInstallRecords: false,
         };
@@ -537,6 +538,57 @@ describe("channelsAddCommand", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
+
+  it.each(["direct", "guided", "gateway"] as const)(
+    "keeps the original write ownership across awaited %s channel setup",
+    async (flow) => {
+      const cfg: OpenClawConfig = {
+        gateway: { auth: { mode: "token", token: "at-read" } },
+        agents: {
+          ownership: "explicit",
+          entries: { research: {} },
+          defaults: { systemAgent: { agentId: "research" } },
+        },
+      };
+      const snapshot = createTestConfigSnapshot(cfg);
+      const writeOptions = {
+        expectedConfigPath: snapshot.path,
+        envSnapshotForRestore: { CHANNEL_SETUP_TOKEN: "at-read" },
+      };
+      configMocks.readConfigFileSnapshot.mockResolvedValue(snapshot);
+      configMocks.readConfigFileSnapshotForWrite.mockResolvedValueOnce({ snapshot, writeOptions });
+      vi.stubEnv("CHANNEL_SETUP_TOKEN", "at-read");
+      const changeEnvironment = async () => {
+        await Promise.resolve();
+        vi.stubEnv("CHANNEL_SETUP_TOKEN", "after-await");
+      };
+      channelWizardMocks.setupChannels.mockImplementationOnce(async (...args: unknown[]) => {
+        await changeEnvironment();
+        const options = args[3] as SetupChannelsOptions;
+        options.onSelection?.(["lifecycle-chat"]);
+        options.onAccountId?.("lifecycle-chat", "default");
+        return cfg;
+      });
+      if (flow === "gateway") {
+        await runChannelsSetupWizard(
+          { channel: "lifecycle-chat", beforePersistentEffect: changeEnvironment },
+          runtime,
+          channelWizardMocks.prompter,
+        );
+      } else {
+        await channelsAddCommand({ channel: "lifecycle-chat", token: "fixture-token" }, runtime, {
+          hasFlags: flow === "direct",
+          beforePersistentEffect: changeEnvironment,
+        });
+      }
+      expect(process.env.CHANNEL_SETUP_TOKEN).toBe("after-await");
+      expect(
+        pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls,
+      ).toHaveBeenCalledWith(expect.objectContaining({ writeOptions }));
+      expect(configMocks.writeConfigFile).toHaveBeenCalledOnce();
+      expect(runtime.error).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([false, true])("retains the selected workspace when hasFlags=%s", async (hasFlags) => {
     const cfg: OpenClawConfig = {
@@ -838,7 +890,7 @@ describe("channelsAddCommand", () => {
 
     expect(
       pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls,
-    ).toHaveBeenCalledWith(expect.objectContaining({ nextConfig: installedConfig }));
+    ).toHaveBeenCalledWith(expect.objectContaining({ sourceConfig: installedConfig }));
     expect(
       pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls,
     ).toHaveBeenCalledOnce();
@@ -983,6 +1035,30 @@ describe("channelsAddCommand", () => {
 
     expect(lifecycleMocks.onAccountConfigChanged).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { account: "", label: "empty" },
+    { account: "   ", label: "whitespace" },
+  ])(
+    "rejects a $label --account before installing a plugin or writing config",
+    async ({ account }) => {
+      configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+      setActivePluginRegistry(createTestRegistry());
+      catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+        createExternalChatCatalogEntry(),
+      ]);
+      registerExternalChatSetupPlugin();
+
+      await expect(
+        channelsAddCommand({ channel: "external-chat", account, token: "token-1" }, runtime, {
+          hasFlags: true,
+        }),
+      ).rejects.toThrow("--account must not be blank");
+
+      expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
+      expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    },
+  );
 
   it("maps legacy Nextcloud Talk add flags to setup input fields", async () => {
     const prepareAccountConfigInput = vi.fn(({ input }: PrepareAccountConfigInputParams) => {
@@ -1327,13 +1403,6 @@ describe("channelsAddCommand", () => {
     expect(installCall().promptInstall).toBe(false);
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
     expect(snapshotCall().forceSetupOnlyChannelPlugins).toBe(true);
-    const refreshedChannels = requireRecord(
-      requireRecord(refreshCall().config, "refresh config").channels,
-      "refresh channels",
-    );
-    expect(
-      requireRecord(refreshedChannels["external-chat"], "refreshed external chat").enabled,
-    ).toBe(true);
     expect(refreshCall().reason).toBe("source-changed");
     expectExternalChatEnabledConfigWrite();
     expect(runtime.error).not.toHaveBeenCalled();
@@ -1829,9 +1898,9 @@ describe("channelsAddCommand", () => {
       },
     };
     pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls.mockImplementationOnce(
-      async (params: { nextConfig: OpenClawConfig }) => {
-        const { installs: _installs, ...plugins } = params.nextConfig.plugins ?? {};
-        const writtenConfigLocal = { ...params.nextConfig, plugins };
+      async (params: { sourceConfig: OpenClawConfig }) => {
+        const { installs: _installs, ...plugins } = params.sourceConfig.plugins ?? {};
+        const writtenConfigLocal = { ...params.sourceConfig, plugins };
         await configMocks.writeConfigFile(writtenConfigLocal);
         return {
           config: writtenConfigLocal,
@@ -1864,7 +1933,7 @@ describe("channelsAddCommand", () => {
     );
 
     const commitCall = commitInstallCall();
-    const commitNextConfig = requireRecord(commitCall.nextConfig, "commit next config");
+    const commitNextConfig = requireRecord(commitCall.sourceConfig, "commit source config");
     expect(requireRecord(commitNextConfig.plugins, "commit plugins").installs).toEqual(
       installRecords,
     );

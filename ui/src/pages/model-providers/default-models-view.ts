@@ -135,9 +135,11 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
 
   const body = html`
     <div class="model-providers__defaults">
-      ${!props.loading && props.models.length === 0
-        ? html`<div class="callout warning">${t("modelProviders.defaults.noModels")}</div>`
-        : nothing}
+      ${
+        !props.loading && props.models.length === 0
+          ? html`<div class="callout warning">${t("modelProviders.defaults.noModels")}</div>`
+          : nothing
+      }
       ${renderSettingsRow({
         title: t("modelProviders.defaults.primary"),
         stackedOnNarrow: true,
@@ -276,17 +278,21 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           })}
         `,
       })}
-      ${props.canMutate && props.message
-        ? html`<div
-            class="callout ${props.message.kind}"
-            role=${props.message.kind === "error" ? "alert" : "status"}
-          >
-            ${props.message.text}
-          </div>`
-        : nothing}
-      ${props.canMutate && props.message?.warning
-        ? html`<div class="callout warning" role="status">${props.message.warning}</div>`
-        : nothing}
+      ${
+        props.canMutate && props.message
+          ? html`<div
+              class="callout ${props.message.kind}"
+              role=${props.message.kind === "error" ? "alert" : "status"}
+            >
+              ${props.message.text}
+            </div>`
+          : nothing
+      }
+      ${
+        props.canMutate && props.message?.warning
+          ? html`<div class="callout warning" role="status">${props.message.warning}</div>`
+          : nothing
+      }
     </div>
   `;
   return renderSettingsSection(

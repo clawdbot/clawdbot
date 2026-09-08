@@ -18,6 +18,28 @@ describe("project runner native empty-file policy", () => {
   it.for([
     { name: "delegated default", code: 1 },
     { name: "package test entry default", code: 1, entry: "projects" },
+    {
+      name: "projects compound help executes",
+      code: 0,
+      entry: "projects",
+      excluded: false,
+      tests: 1,
+      flags: ["--help", "--no-help"],
+    },
+    {
+      name: "projects compound help validates",
+      code: 1,
+      entry: "projects",
+      flags: ["--help", "--no-help", "--passWithNoTests", "--passWithNoTests"],
+      invalid: true,
+    },
+    {
+      name: "projects compound help metadata",
+      code: 0,
+      entry: "projects",
+      flags: ["--no-help", "--help", "--unknown-router-option"],
+      help: true,
+    },
     { name: "several exact files", code: 1, selectors: [target, sibling] },
     {
       name: "exact files across lanes",
@@ -241,6 +263,7 @@ it${scenario.skipped ? ".skip" : ""}("records execution", () => fs.appendFileSyn
         ).toHaveLength(scenario.emptyInvocations);
       } else if (scenario.help) {
         expect(stdout.text().match(/Usage:/gu), evidence).toHaveLength(1);
+        expect(stdout.text(), evidence).toMatch(/^vitest\//mu);
         expect(report).toBeUndefined();
       } else if (scenario.invalid) {
         expect(stderr.text()).toContain("Expected a single value for option");

@@ -6,12 +6,16 @@ import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { getChannelAgentToolMeta, setChannelAgentToolMeta } from "./channel-tool-metadata.js";
+import { buildAgentSystemPrompt } from "./system-prompt.js";
 import {
   describeSessionsSearchTool,
   describeSessionsSendTool,
   describeSessionsSpawnTool,
 } from "./tool-description-presets.js";
+import { createAgentsWaitTool } from "./tools/agents-wait-tool.js";
 import { createConversationsSendTool } from "./tools/conversation-tools.js";
+import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
+import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
 function findToolDescription(
   toolName: string,
@@ -33,6 +37,66 @@ function findToolDescription(
 }
 
 describe("createOpenClawCodingTools availability guidance", () => {
+  it.each([
+    { available: [], mode: "suggest", deferred: false },
+    { available: ["sessions_yield"], mode: "suggest", deferred: false },
+    { available: ["agents_wait"], mode: "suggest", deferred: false },
+    { available: ["sessions_yield", "agents_wait"], mode: "suggest", deferred: false },
+    { available: [], mode: "prefer", deferred: true },
+    { available: ["sessions_yield"], mode: "prefer", deferred: true },
+    { available: ["agents_wait"], mode: "prefer", deferred: true },
+    { available: ["sessions_yield", "agents_wait"], mode: "prefer", deferred: true },
+  ] as const)(
+    "separates collector waits from announcing yields: $available $mode deferred=$deferred",
+    ({ available, mode, deferred }) => {
+      const availableNames = new Set<string>(available);
+      const toolOptions = {
+        config: {
+          agents: { entries: { main: { default: true } } },
+          tools: { swarm: true },
+        },
+        agentSessionKey: "agent:main:main",
+      };
+      const spawn = createSessionsSpawnTool(toolOptions);
+      const tools = applyToolAvailabilityDescriptions([
+        spawn,
+        ...available.map((name) =>
+          name === "sessions_yield"
+            ? createSessionsYieldTool()
+            : createAgentsWaitTool({ ...toolOptions, agentId: "main" }),
+        ),
+      ]);
+      const toolNames = tools.map((tool) => tool.name);
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        subagentDelegationMode: mode,
+        toolNames: deferred ? ["tool_search"] : toolNames,
+        capabilityToolNames: deferred ? toolNames : [],
+      });
+      const guidance = [prompt, ...tools.map((tool) => tool.description)].join("\n");
+      expect.soft(guidance).not.toContain("completion push-based.");
+      expect.soft(guidance).not.toContain("Need results before reply: `sessions_yield`");
+      expect
+        .soft(guidance)
+        .not.toContain("End turn after subagent spawn; results arrive next message");
+      for (const name of ["agents_wait", "sessions_yield"] as const) {
+        expect(guidance.includes(name)).toBe(availableNames.has(name));
+      }
+      if (availableNames.has("agents_wait")) {
+        expect.soft(guidance).toMatch(/collector[^.\n]*no completion notification/i);
+        expect(guidance).toMatch(/await with agents_wait/);
+        for (const field of ["collect", "outputSchema", "groupId"]) {
+          expect(spawn.parameters).toHaveProperty(`properties.${field}`);
+        }
+      } else {
+        for (const field of ["collect", "outputSchema", "groupId"]) {
+          expect(spawn.parameters).not.toHaveProperty(`properties.${field}`);
+        }
+        expect(guidance).not.toContain("collect=true");
+      }
+    },
+  );
+
   it.each(["automations", "cron"] as const)(
     "uses canonical automation guidance when %s survives filtering",
     (schedulerToolName) => {
@@ -277,11 +341,9 @@ describe("createOpenClawCodingTools availability guidance", () => {
 
   it("preserves original inline spawn guidance when every follow-up remains available", () => {
     const [tool] = applyToolAvailabilityDescriptions([
-      {
-        name: "sessions_spawn",
-        description: describeSessionsSpawnTool({ acpAvailable: false, swarmEnabled: true }),
-      },
-      ...["agents_list", "agents_wait", "subagents", "sessions_history"].map((name) => ({
+      createSessionsSpawnTool({ config: { tools: { swarm: true } } }),
+      createAgentsWaitTool({}),
+      ...["agents_list", "subagents", "sessions_history"].map((name) => ({
         name,
         description: "available",
       })),
@@ -289,6 +351,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
 
     expect(tool?.description).toContain("configured agent (see agents_list);");
     expect(tool?.description).toContain("`groupId` groups a batch; await with agents_wait.");
+    expect(tool?.description).toContain("(all: all sessions, cross-agent per tools.agentToAgent)");
     expect(tool?.description).toContain(
       "No spawn for quick lookup/single read. Check spawns via `subagents`/`sessions_history`. After spawn,",
     );

@@ -32,12 +32,12 @@ describe("provider failover hook structured signals", () => {
     },
     {
       errorMessage: "opaque provider refusal",
-      copy: "⚠️ openai/test-model request failed.",
+      copy: "⚠️ Agent run failed (model: openai/test-model).",
       runtimeKind: "unclassified",
     },
     {
       errorMessage: "model input limit reached",
-      copy: "⚠️ openai/test-model request failed.",
+      copy: "⚠️ Agent run failed (model: openai/test-model).",
       runtimeKind: "unclassified",
     },
     {

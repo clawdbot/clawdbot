@@ -46,6 +46,20 @@ export function findCatalogTemplate(params: {
     .find((entry) => entry !== undefined);
 }
 
+/** Selects one complete auth result in caller-defined order, including unresolved secret markers. */
+export function resolveFirstProviderCatalogAuth(
+  resolveProviderApiKey: ProviderCatalogContext["resolveProviderApiKey"],
+  providerIds: readonly string[],
+): ReturnType<ProviderCatalogContext["resolveProviderApiKey"]> | undefined {
+  for (const providerId of providerIds) {
+    const auth = resolveProviderApiKey(providerId);
+    if (auth.apiKey || auth.discoveryApiKey) {
+      return auth;
+    }
+  }
+  return undefined;
+}
+
 /** Builds a provider catalog result for providers that share one API key. */
 export async function buildSingleProviderApiKeyCatalog(params: {
   ctx: ProviderCatalogContext;

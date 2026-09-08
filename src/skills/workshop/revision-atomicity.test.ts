@@ -126,17 +126,36 @@ vi.mock("./store-sqlite-transition.js", async (importOriginal) => {
   };
 });
 
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  evaluateSkillProposal,
-  inspectSkillProposal,
-  listSkillProposalEvents,
-  proposeCreateSkill,
-  reviseSkillProposal,
+  evaluateSkillProposal as evaluateSkillProposalImpl,
+  inspectSkillProposal as inspectSkillProposalImpl,
+  listSkillProposalEvents as listSkillProposalEventsImpl,
+  proposeCreateSkill as proposeCreateSkillImpl,
+  reviseSkillProposal as reviseSkillProposalImpl,
 } from "./service.js";
 import type { SkillProposalReadResult } from "./types.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
+const workshopConfig: OpenClawConfig = {};
+type OptionalWorkshopConfig<T> = Omit<T, "config"> & { config?: OpenClawConfig };
+const evaluateSkillProposal = (
+  input: OptionalWorkshopConfig<Parameters<typeof evaluateSkillProposalImpl>[0]>,
+) => evaluateSkillProposalImpl({ config: workshopConfig, ...input });
+const inspectSkillProposal = (
+  proposalId: string,
+  options?: Partial<Parameters<typeof inspectSkillProposalImpl>[1]>,
+) => inspectSkillProposalImpl(proposalId, { config: workshopConfig, agentId: "main", ...options });
+const listSkillProposalEvents = (
+  input: OptionalWorkshopConfig<Parameters<typeof listSkillProposalEventsImpl>[0]>,
+) => listSkillProposalEventsImpl({ config: workshopConfig, ...input });
+const proposeCreateSkill = (
+  input: OptionalWorkshopConfig<Parameters<typeof proposeCreateSkillImpl>[0]>,
+) => proposeCreateSkillImpl({ config: workshopConfig, ...input });
+const reviseSkillProposal = (
+  input: OptionalWorkshopConfig<Parameters<typeof reviseSkillProposalImpl>[0]>,
+) => reviseSkillProposalImpl({ config: workshopConfig, ...input });
 
 beforeAll(async () => {
   testState = await createOpenClawTestState({
@@ -161,6 +180,7 @@ describe("Skill Workshop revision generation atomicity", () => {
     const proposal = await proposeCreateSkill({
       workspaceDir,
       env: testState.env,
+      agentId: "main",
       name: "Atomic Revision",
       description: "Keep proposal revisions whole across crashes",
       content: "# Atomic Revision\n\nVersion 1.\n",
@@ -177,6 +197,7 @@ describe("Skill Workshop revision generation atomicity", () => {
     return await reviseSkillProposal({
       workspaceDir,
       env: testState.env,
+      agentId: "main",
       proposalId: proposal.record.id,
       expectedRevisionHash: proposal.revisionHash,
       content: `# Atomic Revision\n\nVersion ${version}.\n`,
@@ -193,6 +214,7 @@ describe("Skill Workshop revision generation atomicity", () => {
       evaluateSkillProposal({
         workspaceDir: params.workspaceDir,
         env: testState.env,
+        agentId: "main",
         proposalId: params.proposal.record.id,
         expectedRevisionHash: params.proposal.revisionHash,
       }),
@@ -201,8 +223,8 @@ describe("Skill Workshop revision generation atomicity", () => {
     });
     await expect(
       inspectSkillProposal(params.proposal.record.id, {
-        workspaceDir: params.workspaceDir,
         env: testState.env,
+        agentId: "main",
       }),
     ).resolves.toMatchObject({
       record: { proposedVersion: params.proposal.record.proposedVersion },
@@ -229,7 +251,6 @@ describe("Skill Workshop revision generation atomicity", () => {
     );
     expect(
       listSkillProposalEvents({
-        workspaceDir,
         proposalId: proposal.record.id,
         env: testState.env,
       }).events.map((event) => event.type),
@@ -249,7 +270,6 @@ describe("Skill Workshop revision generation atomicity", () => {
     const revised = await reviseToVersion(proposal, workspaceDir, 2);
     expect(
       listSkillProposalEvents({
-        workspaceDir,
         proposalId: proposal.record.id,
         env: testState.env,
       }).events.map((event) => event.type),
@@ -268,7 +288,6 @@ describe("Skill Workshop revision generation atomicity", () => {
     const revised = await reviseToVersion(proposal, workspaceDir, 2);
     expect(
       listSkillProposalEvents({
-        workspaceDir,
         proposalId: proposal.record.id,
         env: testState.env,
       }).events.map((event) => event.type),

@@ -1,5 +1,6 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
+import { CodexHistoryRejection } from "./history-rejection.js";
 import { projectSettledCodexMessages } from "./settled-turn-projection.js";
 import { attachUpstreamUserText } from "./upstream-prompt-provenance.js";
 
@@ -109,7 +110,7 @@ describe("projectSettledCodexMessages", () => {
     ]);
   });
 
-  it("rejects tool names outside the projectable charset and names the offender", () => {
+  it("rejects invalid tool names without including transcript text", () => {
     expect(() =>
       projectSettledCodexMessages([
         message({
@@ -123,7 +124,7 @@ describe("projectSettledCodexMessages", () => {
           content: [{ type: "text", text: "failed" }],
         }),
       ]),
-    ).toThrow("invalid tool name: bad tool");
+    ).toThrowError(new CodexHistoryRejection("invalid_content"));
   });
 
   it("preserves failed tool-result status in the projected output", () => {
@@ -209,8 +210,8 @@ describe("projectSettledCodexMessages", () => {
   });
 
   it.each([
-    { count: 205, text: "old", error: "exceeds the item limit" },
-    { count: 9, text: "x".repeat(60 * 1024), error: "exceeds the byte limit" },
+    { count: 205, text: "old", error: "item_limit" },
+    { count: 9, text: "x".repeat(60 * 1024), error: "byte_limit" },
   ])("stops acquiring later payloads after $error", ({ count, text, error }) => {
     let laterReads = 0;
     const later = message({
@@ -276,7 +277,7 @@ describe("projectSettledCodexMessages", () => {
         toolCall(),
         toolResult(),
       ]),
-    ).toThrow("oversized upstream user text");
+    ).toThrow("field_limit");
   });
 
   it("charges upstream user text against the aggregate byte limit", () => {
@@ -291,7 +292,7 @@ describe("projectSettledCodexMessages", () => {
         toolCall(),
         toolResult(),
       ]),
-    ).toThrow("exceeds the byte limit");
+    ).toThrow("byte_limit");
   });
 
   it("does not let provenance hide non-text user content", () => {
@@ -308,7 +309,7 @@ describe("projectSettledCodexMessages", () => {
         toolCall(),
         toolResult(),
       ]),
-    ).toThrow("does not support user content image");
+    ).toThrow("unsupported_user_image");
   });
 
   it.each([
@@ -328,7 +329,7 @@ describe("projectSettledCodexMessages", () => {
       ],
     },
   ])("fails closed for $name", ({ messages }) => {
-    expect(() => projectSettledCodexMessages(messages)).toThrow(/Codex settled-turn projection/u);
+    expect(() => projectSettledCodexMessages(messages)).toThrowError(CodexHistoryRejection);
   });
 
   it("preserves valid image tool results as bounded non-vision evidence", () => {
@@ -354,7 +355,7 @@ describe("projectSettledCodexMessages", () => {
         toolCall(),
         toolResult(),
       ]),
-    ).toThrow("oversized user message");
+    ).toThrow("field_limit");
   });
 
   it("rejects a complete transcript above the aggregate byte limit", () => {
@@ -362,7 +363,7 @@ describe("projectSettledCodexMessages", () => {
       message({ role: "user", content: "x".repeat(60 * 1024) }),
     );
     expect(() => projectSettledCodexMessages([...messages, toolCall(), toolResult()])).toThrow(
-      "exceeds the byte limit",
+      "byte_limit",
     );
   });
 });

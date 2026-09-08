@@ -1,5 +1,6 @@
 /** Shared helpers for model commands that read or mutate model config. */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { listAgentIds, resolveAgentDir, resolveSoleAgentId } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
@@ -13,7 +14,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import {
   type OpenClawConfig,
   readConfigFileSnapshot,
-  replaceConfigFile,
+  transformConfigFile,
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { normalizeAgentModelRefForConfig, toAgentModelListLike } from "../../config/model-input.js";
@@ -21,7 +22,10 @@ import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { inspectModelReference } from "./model-reference-validation.js";
-import { canonicalizeModelCatalogProviderRef } from "./provider-aliases.js";
+import {
+  canonicalizeModelCatalogProviderRef,
+  createModelCatalogProviderAliasCanonicalizer,
+} from "./provider-aliases.js";
 
 export { formatTokenK } from "./list.format.js";
 export { ensureFlagCompatibility } from "./list.options.js";
@@ -62,21 +66,20 @@ export async function updateConfig(
     context: UpdateConfigContext,
   ) => OpenClawConfig | Promise<OpenClawConfig>,
 ): Promise<OpenClawConfig> {
-  const snapshot = await readConfigFileSnapshot();
-  if (!snapshot.valid) {
-    const issues = formatConfigIssueLines(snapshot.issues, "-").join("\n");
-    throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
-  }
-  const sourceConfig = structuredClone(snapshot.sourceConfig ?? snapshot.config);
-  const runtimeConfig = structuredClone(snapshot.runtimeConfig ?? snapshot.config);
-  // Mutate source config so SecretRefs and unresolved placeholders do not get
-  // overwritten by runtime-resolved secret values.
-  const next = await mutator(sourceConfig, { runtimeConfig });
-  await replaceConfigFile({
-    nextConfig: next,
-    baseHash: snapshot.hash,
+  const result = await transformConfigFile({
+    transform: async (currentConfig, { snapshot }) => {
+      if (!snapshot.valid) {
+        const issues = formatConfigIssueLines(snapshot.issues, "-").join("\n");
+        throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
+      }
+      const nextConfig = await mutator(structuredClone(currentConfig), {
+        runtimeConfig: structuredClone(snapshot.runtimeConfig),
+      });
+      // The public SDK returns the mutator's value; persisted readback may restore env refs.
+      return { nextConfig, result: nextConfig };
+    },
   });
-  return next;
+  return expectDefined(result.result, "model config mutation result");
 }
 
 /** Resolves a CLI model reference through aliases and catalog provider aliases. */
@@ -115,25 +118,25 @@ function resolveAuthoredModelAliasTarget(params: {
   return resolved?.alias ? resolved.ref : undefined;
 }
 
-/** Resolves model reference strings to canonical provider/model keys. */
+/** Resolves model reference strings to index-aligned canonical provider/model keys. */
 export function resolveModelKeysFromEntries(params: {
   cfg: OpenClawConfig;
   entries: readonly string[];
-}): string[] {
+}): Array<string | undefined> {
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: DEFAULT_PROVIDER,
   });
-  return params.entries
-    .map((entry) =>
-      resolveModelRefFromString({
-        raw: entry,
-        defaultProvider: DEFAULT_PROVIDER,
-        aliasIndex,
-      }),
-    )
-    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
-    .map((entry) => modelKey(entry.ref.provider, entry.ref.model));
+  const canonicalizer = createModelCatalogProviderAliasCanonicalizer({ cfg: params.cfg });
+  return params.entries.map((entry) => {
+    const resolved = resolveModelRefFromString({
+      raw: entry,
+      defaultProvider: DEFAULT_PROVIDER,
+      aliasIndex,
+    });
+    const ref = resolved ? canonicalizer.ref(resolved.ref) : undefined;
+    return ref ? modelKey(ref.provider, ref.model) : undefined;
+  });
 }
 
 function resolveKnownAgentId(cfg: OpenClawConfig, rawAgentId: string): string {

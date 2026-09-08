@@ -15,14 +15,12 @@ import {
 
 // --- Module mocks (must precede dynamic import) ---
 const loadOutboundMediaFromUrlMock = vi.hoisted(() =>
-  vi.fn(
-    async (_mediaUrl: string, _options?: unknown): Promise<WebMediaResult> => ({
-      buffer: Buffer.from("fake-image"),
-      contentType: "image/png",
-      kind: "image",
-      fileName: "screenshot.png",
-    }),
-  ),
+  vi.fn(async (_mediaUrl: string, _options?: unknown): Promise<WebMediaResult> => ({
+    buffer: Buffer.from("fake-image"),
+    contentType: "image/png",
+    kind: "image",
+    fileName: "screenshot.png",
+  })),
 );
 const cleanupUploadTimeout = vi.hoisted(() => vi.fn());
 const uploadTimeoutControllers = vi.hoisted(() => [] as AbortController[]);

@@ -17,7 +17,7 @@ import {
  * Loads the model catalog shape used by browse/list commands without letting optional
  * provider discovery stall the CLI path.
  */
-const DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS = 750;
+export const MODEL_CATALOG_BROWSE_TIMEOUT_MS = 750;
 
 /** Visible model subset requested by model browse callers. */
 export type ModelCatalogBrowseView = "default" | "configured" | "provider-config" | "all";
@@ -65,10 +65,7 @@ export function modelCatalogBrowseRequiresFullDiscovery(params: {
 }
 
 function resolveModelCatalogBrowseTimeoutMs(value: number | undefined): number {
-  return (
-    clampTimerTimeoutMs(value, 1) ??
-    resolveTimerTimeoutMs(DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS, 1)
-  );
+  return clampTimerTimeoutMs(value, 1) ?? resolveTimerTimeoutMs(MODEL_CATALOG_BROWSE_TIMEOUT_MS, 1);
 }
 
 /** Loads an explicit logical/physical catalog snapshot for route-aware browse surfaces. */

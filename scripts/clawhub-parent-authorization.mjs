@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual, parseArgs } from "node:util";
@@ -130,6 +130,17 @@ export function clawHubIdentityFromEnvironment(env) {
     throw new Error("ClawHub identity does not match the executing workflow context.");
   }
   return identity;
+}
+
+// actions/download-artifact writes a lone `pattern` match straight into `path`
+// instead of `path/<artifact>`, so a one-package matrix must read the flat
+// layout; anything else keeps the per-artifact directory contract.
+export function resolvePackedClawHubArtifactDir({ directory, artifactName, matrixSize }) {
+  const nested = join(directory, artifactName);
+  if (existsSync(nested) || matrixSize !== 1) {
+    return nested;
+  }
+  return directory;
 }
 
 export function readPackedClawHubTransaction({ artifactDir, packageName, version, artifactName }) {
@@ -267,6 +278,101 @@ export function createClawHubParentAuthorization(transactions, authorizationRout
   }
   return receipt;
 }
+
+function listRunArtifactNames(runId, runGhJson) {
+  const names = [];
+  for (let page = 1; page <= 20; page++) {
+    const response = runGhJson(`actions/runs/${runId}/artifacts?per_page=100&page=${page}`);
+    if (
+      !Array.isArray(response.artifacts) ||
+      !Number.isSafeInteger(response.total_count) ||
+      response.total_count > 2000
+    ) {
+      throw new Error("Invalid release parent artifact inventory.");
+    }
+    names.push(...response.artifacts.map((artifact) => String(artifact.name)));
+    if (names.length >= response.total_count) {
+      if (names.length !== response.total_count) {
+        throw new Error("Inconsistent release parent artifact inventory.");
+      }
+      return names;
+    }
+    if (response.artifacts.length === 0) {
+      break;
+    }
+  }
+  throw new Error("Incomplete release parent artifact inventory.");
+}
+
+// A completed parent cannot mint another receipt, so recovery names the original
+// child attempt its parent receipt is bound to. Explicit dispatch inputs win;
+// otherwise the parent attempt must own exactly one v2 receipt naming that child.
+function resolveAuthorizedClawHubChild(env, parentRunId, parentRunAttempt, runGhJson) {
+  const explicitRunId = env.RECOVERED_CLAWHUB_RUN_ID?.trim() ?? "";
+  const explicitRunAttempt = env.RECOVERED_CLAWHUB_RUN_ATTEMPT?.trim() ?? "";
+  if (explicitRunId || explicitRunAttempt) {
+    return {
+      authorizedChildRunId: pattern(explicitRunId, ID, "Recovered ClawHub run id"),
+      authorizedChildRunAttempt: pattern(explicitRunAttempt, ID, "Recovered ClawHub run attempt"),
+    };
+  }
+  const prefix = `openclaw-clawhub-parent-authorization-v2-${parentRunId}-${parentRunAttempt}-`;
+  const candidates = listRunArtifactNames(parentRunId, runGhJson).filter((name) =>
+    name.startsWith(prefix),
+  );
+  const remedy = "pass recovered_clawhub_run_id and recovered_clawhub_run_attempt explicitly";
+  if (candidates.length !== 1) {
+    throw new Error(
+      candidates.length === 0
+        ? `Release parent attempt ${parentRunId}/${parentRunAttempt} has no ${prefix}* receipt; ${remedy}.`
+        : `Release parent attempt ${parentRunId}/${parentRunAttempt} has ambiguous receipts (${candidates.join(", ")}); ${remedy}.`,
+    );
+  }
+  const child = /^([1-9][0-9]*)-([1-9][0-9]*)$/u.exec(candidates[0].slice(prefix.length));
+  if (!child) {
+    throw new Error(`Malformed parent authorization receipt name ${candidates[0]}.`);
+  }
+  return { authorizedChildRunId: child[1], authorizedChildRunAttempt: child[2] };
+}
+
+// Mirrors openclaw/clawhub convex/lib/openClawPublishAuthorization.ts RECOVERY_RECEIPT_KEYS /
+// parseRecoveryReceipt / validateRecoveryReceipt: version 2, a human actor, the authorized
+// original child attempt, and an exact receipt within the verifier's 8 KiB file bound.
+export function createClawHubRecoveryApproval(env, runGhJson = api) {
+  if (env.GITHUB_REPOSITORY !== REPOSITORY) {
+    throw new Error("ClawHub recovery approval repository mismatch.");
+  }
+  const actor = env.GITHUB_ACTOR;
+  if (typeof actor !== "string" || !actor.trim() || /\[bot\]$/iu.test(actor)) {
+    throw new Error("ClawHub recovery approval actor must be a human login.");
+  }
+  const parentRunId = pattern(env.RELEASE_PUBLISH_RUN_ID, ID, "Recovery parent run id");
+  const parentRunAttempt = pattern(
+    env.RELEASE_PUBLISH_RUN_ATTEMPT,
+    ID,
+    "Recovery parent run attempt",
+  );
+  const receipt = {
+    version: 2,
+    kind: "openclaw-clawhub-recovery-approval",
+    repository: env.GITHUB_REPOSITORY,
+    workflow: CLAWHUB_CHILD_WORKFLOW,
+    runId: pattern(env.GITHUB_RUN_ID, ID, "Recovery run id"),
+    runAttempt: pattern(env.GITHUB_RUN_ATTEMPT, ID, "Recovery run attempt"),
+    actor,
+    environment: "clawhub-plugin-release",
+    approvalJob: "approve_plugins_clawhub_release",
+    authorizationRoute: "explicit-recovery",
+    parentRunId,
+    parentRunAttempt,
+    ...resolveAuthorizedClawHubChild(env, parentRunId, parentRunAttempt, runGhJson),
+  };
+  if (Buffer.byteLength(JSON.stringify(receipt)) + 1 > 8 * 1024) {
+    throw new Error("ClawHub recovery approval exceeds 8 KiB.");
+  }
+  return receipt;
+}
+
 export function validateClawHubParentAuthorization(receipt, transactions) {
   const expected = createClawHubParentAuthorization(transactions, receipt?.authorizationRoute);
   exactKeys(receipt, Object.keys(expected), "ClawHub parent authorization");
@@ -437,10 +543,11 @@ async function main() {
     const packages = matrix
       .map((entry) =>
         readPackedClawHubTransaction({
-          artifactDir: join(
-            values.directory,
-            pattern(entry.artifactName, ARTIFACT, "Artifact name"),
-          ),
+          artifactDir: resolvePackedClawHubArtifactDir({
+            directory: values.directory,
+            artifactName: pattern(entry.artifactName, ARTIFACT, "Artifact name"),
+            matrixSize: matrix.length,
+          }),
           artifactName: entry.artifactName,
           packageName: entry.packageName,
           version: entry.version,
@@ -533,8 +640,10 @@ async function main() {
       env.WAIT_FOR_CLAWHUB === "true" ? "automated-awaited" : "automated-detached",
     );
     appendFileSync(env.GITHUB_OUTPUT, `artifact_name=${clawHubParentArtifactName(identity)}\n`);
+  } else if (positionals[0] === "recovery-approval") {
+    result = createClawHubRecoveryApproval(process.env);
   } else {
-    throw new Error("Expected seal or authorize.");
+    throw new Error("Expected seal, authorize, or recovery-approval.");
   }
   mkdirSync(dirname(values.output), { recursive: true });
   writeFileSync(values.output, `${JSON.stringify(result)}\n`, { flag: "wx" });

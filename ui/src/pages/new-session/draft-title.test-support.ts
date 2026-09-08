@@ -7,8 +7,11 @@ import { TestReactiveControllerHost } from "./reactive-controller-host.test-supp
 const DEFAULT_PREPARED_TITLE = "Repair naming";
 
 export function createDraftTitleFixture(
-  request = async (_method: string): Promise<unknown> => ({ title: DEFAULT_PREPARED_TITLE }),
+  request = async (_method: string, _params?: unknown): Promise<unknown> => ({
+    title: DEFAULT_PREPARED_TITLE,
+  }),
   data?: NewSessionRouteData,
+  requestOther = async (_method: string, _params?: unknown): Promise<unknown> => ({}),
 ) {
   const fixture = createDraftFixture({
     data,
@@ -22,12 +25,12 @@ export function createDraftTitleFixture(
         model: { primary: "test/primary" },
       },
     ],
-    request: async (method) =>
+    request: async (method, params) =>
       method === "sessions.title.prepare"
-        ? request(method)
+        ? request(method, params)
         : method === "worktrees.branches"
           ? { repositoryStatus: "git", branches: [], defaultBranch: "main" }
-          : {},
+          : requestOther(method, params),
     takePreparedTitle: () => titles.takePreparedTitle(),
   });
   const titles = new NewSessionTitleController(new TestReactiveControllerHost(), () => ({

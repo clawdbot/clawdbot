@@ -47,6 +47,21 @@ import {
 - `dispatchChannelInboundReply(...)`: records and dispatches an already
   assembled inbound reply with a delivery adapter.
 
+For intentional skips, `logInboundDrop({ log, channel, reason, target?, onceKey?, hint? })`
+formats a diagnostic through the supplied logger. Use a default-level logger and
+an actionable `hint` for mention-gated groups. Set `onceKey` to an account/conversation
+scope, such as `JSON.stringify([accountId, conversationId])`, to suppress repeats
+for that channel and reason. The process-local cache retains 512 recently used
+keys; evicted keys can log again. Omit `onceKey` for per-message logging. Keep
+message bodies and sender details out of default-level diagnostics.
+
+For a group-setting hint, use `resolveChannelGroupsConfigPath({ cfg, channel, accountId, groups })`
+from `openclaw/plugin-sdk/channel-policy`. Pass the exact groups map selected by
+the channel owner, without cloning it: `resolveChannelGroups(cfg, channel, accountId)`
+for shared group-policy resolution, or the resolved account's map for a plugin
+with its own inheritance rules. This identifies the authored root or account map
+without replacing inherited wildcard or per-group policies.
+
 For media-only inbound events, keep the message body and command text empty and
 pass one `ChannelInboundMediaInput` fact per native attachment. When an ambient
 history line or another text-only carrier must describe those facts, use
@@ -148,6 +163,17 @@ entering the provider funnel; it is mutually exclusive with `deliver` and
 `ChannelInboundTurnPlan<"provider_message_sending">`. Caller-assembled
 `dispatchChannelInboundReply(...)` remains the
 compatibility boundary and keeps its caller-provided dispatcher ownership.
+
+Low-level `createReplyDispatcher(...)` callbacks from
+`openclaw/plugin-sdk/reply-runtime` may return `ambiguous: true` when a send may
+have completed but its outcome is unconfirmed. Core records existing `unknown`
+custody and `failedAfterSend` receipt counts, suppressing duplicate fallbacks
+without attesting observed delivery. A settled `suppression` with reason
+`channel_transform` records `suppressed` custody. The receipt's
+`anyVisibleDelivered` remains conservative: it includes uncertain sends.
+A proven no-send can still belong to the durable recovery queue. Core retains
+that retry owner and records `failedBeforeSend` without issuing a caption or
+final fallback; it does not count the failed attempt as observed delivery.
 
 `preparePayload` may return `null` when channel policy intentionally suppresses the
 logical payload. Core records a typed non-visible result and skips durable selection,

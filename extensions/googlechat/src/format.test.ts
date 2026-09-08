@@ -92,6 +92,7 @@ describe("formatGoogleChatText", () => {
   });
 
   it("keeps raw angle-link labels as inert text", () => {
+    expect(formatGoogleChatText("<https://example.com/a.pdf|Manual>")).toBe("Manual");
     expect(formatGoogleChatText("<https://example.com/a.pdf|User Manual>")).toBe("User Manual");
     expect(formatGoogleChatText("<mailto:a/b@example.com|Contact Support>")).toBe(
       "Contact Support",

@@ -8,6 +8,10 @@ bin_for_arch() {
   echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/$PRODUCT"
 }
 
+mac_cli_bin_for_arch() {
+  echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/openclaw-mac"
+}
+
 helper_build_path_for_arch() {
   echo "$MLX_TTS_HELPER_BUILD_ROOT/$1"
 }
@@ -301,7 +305,6 @@ create_verified_peekaboo_snapshot() {
   PEEKABOO_SNAPSHOT_ROOT="$SWIFT_WORK_ROOT/snapshot"
   mkdir -p "$PEEKABOO_SNAPSHOT_ROOT"
   PEEKABOO_SNAPSHOT_IMAGE="$PEEKABOO_SNAPSHOT_ROOT/Peekaboo.dmg"
-  PEEKABOO_SNAPSHOT_MOUNT="$PEEKABOO_SNAPSHOT_ROOT/mount"
   mkdir "$PEEKABOO_SNAPSHOT_MOUNT"
   # -quiet suppresses failure stderr too; discard only routine stdout.
   hdiutil create -fs APFS -format UDRO \
@@ -450,7 +453,7 @@ cleanup_swift_architecture() {
     }
   fi
   if [[ "$cleanup_status" == "0" ]]; then
-    rm -rf "$PEEKABOO_SNAPSHOT_ROOT" "$SWIFT_PACKAGE_CONTAINER" "$SWIFT_WORK_ROOT/resource-backups"
+    rm -rf "$PEEKABOO_SNAPSHOT_ROOT" "$PEEKABOO_SNAPSHOT_MOUNT" "$SWIFT_PACKAGE_CONTAINER" "$SWIFT_WORK_ROOT/resource-backups"
   fi
   return "$cleanup_status"
 }
@@ -472,6 +475,9 @@ build_swift_architecture() {
   echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [$arch]"
   verify_snapshot_swift_lock
   swift build -c "$BUILD_CONFIG" --jobs "$SWIFT_BUILD_JOBS" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  verify_snapshot_swift_lock
+  echo "🔨 Building openclaw-mac ($BUILD_CONFIG) [$arch]"
+  swift build -c "$BUILD_CONFIG" --jobs "$SWIFT_BUILD_JOBS" --product openclaw-mac --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
   verify_snapshot_swift_lock
   arch_peekaboo_commit="$(compiled_peekaboo_commit "$PEEKABOO_SNAPSHOT_MOUNT" "$PEEKABOO_LOCKED_SOURCE_COMMIT")"
   printf '%s\n' "$arch_peekaboo_commit" > "$SWIFT_WORK_ROOT/peekaboo-commit"
@@ -511,7 +517,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   SWIFT_PACKAGE_CONTAINER="$SWIFT_WORK_ROOT/package"
   SWIFT_PACKAGE_ROOT="$SWIFT_PACKAGE_CONTAINER/apps/macos"
   PEEKABOO_SNAPSHOT_ROOT="$SWIFT_WORK_ROOT/snapshot"
-  PEEKABOO_SNAPSHOT_MOUNT="$PEEKABOO_SNAPSHOT_ROOT/mount"
+  PEEKABOO_SNAPSHOT_MOUNT="$9"
   case "$operation" in
     build) build_swift_architecture "$arch" ;;
     cleanup) cleanup_swift_architecture ;;

@@ -8,7 +8,7 @@ import {
 import {
   assertNoLegacyPrimaryAuthRows,
   assertOpenAiEnvAuthProfileStore,
-  readSharedAuthProfileStoreText,
+  readCanonicalAuthProfileStoreText,
 } from "../auth-profile-store-assertions.mjs";
 import { readPositiveIntEnv } from "../env-limits.mjs";
 import {
@@ -89,7 +89,7 @@ function assertOnboardState() {
     throw new Error("onboard did not write openclaw.json");
   }
   assertNoLegacyPrimaryAuthRows(stateDir);
-  const authStoreText = readSharedAuthProfileStoreText(stateDir);
+  const authStoreText = readCanonicalAuthProfileStoreText(stateDir);
   if (!authStoreText) {
     throw new Error("onboard did not persist auth profile store");
   }

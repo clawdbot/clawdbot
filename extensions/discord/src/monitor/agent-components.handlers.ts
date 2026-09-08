@@ -65,6 +65,7 @@ async function handleDiscordComponentEvent(params: {
     return;
   }
   const {
+    ctx,
     interactionCtx,
     channelCtx,
     guildInfo,
@@ -113,7 +114,7 @@ async function handleDiscordComponentEvent(params: {
   const pluginCallbackData = consumed.callbackData ?? selectedCallbackData;
   if (pluginCallbackData) {
     const pluginDispatch = await dispatchPluginDiscordInteractiveEvent({
-      ctx: params.ctx,
+      ctx,
       interaction: params.interaction,
       interactionCtx,
       channelCtx,
@@ -155,7 +156,7 @@ async function handleDiscordComponentEvent(params: {
   }
 
   await dispatchDiscordComponentEvent({
-    ctx: params.ctx,
+    ctx,
     interaction: params.interaction,
     interactionCtx,
     channelCtx,

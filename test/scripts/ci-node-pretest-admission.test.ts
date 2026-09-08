@@ -20,7 +20,7 @@ function setGroups(groups: Array<[string, Mode, number]>) {
     mode === "private-qa"
       ? "test/vitest/vitest.extension-qa.config.ts"
       : mode === "runtime"
-        ? "test/vitest/vitest.gateway-core.config.ts"
+        ? "test/vitest/vitest.gateway-server.config.ts"
         : "test/vitest/vitest.unit-support.config.ts";
   fixture.shards.splice(
     0,
@@ -133,17 +133,17 @@ describe("compact node prerequisite admission", () => {
   });
 
   it.each([
-    { seconds: [180, 100, 20], blacksmithJobs: 1 },
-    { seconds: [280, 20], blacksmithJobs: 2 },
+    { seconds: [180, 100, 20], parallelJobs: 1 },
+    { seconds: [280, 20], parallelJobs: 2 },
   ])("shares ordinary job setup without adding work to oversized groups: $seconds", (sample) => {
     for (const profile of ["blacksmith", "github", "hybrid"]) {
       setGroups(sample.seconds.map((seconds, index) => [`plain-${index}`, undefined, seconds]));
       const jobs = plan(profile);
-      expect(jobs).toHaveLength(profile === "blacksmith" ? sample.blacksmithJobs : 2);
+      expect(jobs).toHaveLength(profile === "github" ? 2 : sample.parallelJobs);
       if (jobs.length === 1) {
         expect(jobs[0]).toMatchObject({
           planConcurrency: 2,
-          predictedSeconds: 300,
+          predictedSeconds: profile === "hybrid" ? 261 : 300,
           runner: "blacksmith-32vcpu-ubuntu-2404",
         });
         expect(jobs[0]?.pretestBuildMode).toBeUndefined();

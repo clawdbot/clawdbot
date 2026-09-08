@@ -4,13 +4,37 @@ import { describe, expect, it } from "vitest";
 import { resolveOwnerPromptNumbers } from "../agents/owner-display.js";
 import { buildAgentSystemPrompt } from "../agents/system-prompt.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveCommandAuthorization } from "./command-auth.js";
+import { isResetAuthorizedForContext, resolveCommandAuthorization } from "./command-auth.js";
 import type { MsgContext } from "./templating.js";
 import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registry-fixture.js";
 
 installDiscordRegistryHooks();
 
 describe("senderIsOwner only reflects explicit owner authorization", () => {
+  it.each([{ allowFrom: ["*"] }, { allowFrom: ["456"] }])(
+    "suppresses command access without revoking owner identity for allowFrom $allowFrom",
+    ({ allowFrom }) => {
+      const cfg = { commands: { ownerAllowFrom: ["456"], allowFrom: { "*": allowFrom } } };
+      const ctx = {
+        Provider: "discord",
+        Surface: "discord",
+        SenderId: "456",
+        CommandInterpretationSuppressed: true,
+      };
+      const params = { ctx, cfg, commandAuthorized: true };
+
+      expect(resolveCommandAuthorization(params)).toMatchObject({
+        senderId: "456",
+        senderIsOwner: true,
+        isAuthorizedSender: false,
+      });
+      expect(isResetAuthorizedForContext(params)).toBe(false);
+      ctx.CommandInterpretationSuppressed = false;
+      expect(resolveCommandAuthorization(params).isAuthorizedSender).toBe(true);
+      expect(isResetAuthorizedForContext(params)).toBe(true);
+    },
+  );
+
   it("does not treat direct-message senders as owners when no ownerAllowFrom is configured", () => {
     const cfg = {
       channels: { discord: {} },

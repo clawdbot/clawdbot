@@ -115,6 +115,9 @@ describe("prepared model catalog worker plugin scope", () => {
         agentDir,
         workspaceDir,
         config,
+        observationConfig: prepared.snapshot.observationConfig,
+        isCurrent: prepared.snapshot.isCurrent,
+        pluginRegistry: prepared.snapshot.pluginRegistry,
         catalogComplete: full,
         authModes: prepared.snapshot.authModes,
         authStore,
@@ -129,6 +132,9 @@ describe("prepared model catalog worker plugin scope", () => {
           authStore: _authStore,
           metadataSnapshot: _metadataSnapshot,
           authMaterializations: _authMaterializations,
+          observationConfig: _observationConfig,
+          isCurrent: _isCurrent,
+          pluginRegistry: _pluginRegistry,
           ...snapshot
         } = await projectSnapshot(params?.readOnly === false);
         return snapshot;

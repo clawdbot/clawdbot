@@ -151,16 +151,15 @@ function hasRequestCompatOverrides(compat: ModelDefinitionConfig["compat"]): boo
   });
 }
 
-/** Projects authored request behavior without exposing values or local commands. */
-export function resolveModelProviderRouteOverridePresence(params: {
+/** Prepares row lookups within one stable authored config view. */
+export function createModelProviderRouteOverrideResolver(params: {
   provider: string;
-  modelId?: string;
   authoredConfig?: OpenClawConfig;
   canonicalizeModelId?: (modelId: string) => string;
-}): ProviderRouteOverridePresence {
+}): (modelId?: string) => ProviderRouteOverridePresence {
   const providerConfig = resolveMergedModelProviderConfig(params.authoredConfig, params.provider);
   if (!providerConfig) {
-    return "none";
+    return () => "none";
   }
   if (
     readRecord(providerConfig.localService) !== undefined ||
@@ -170,27 +169,31 @@ export function resolveModelProviderRouteOverridePresence(params: {
     typeof providerConfig.authHeader === "boolean" ||
     typeof providerConfig.timeoutSeconds === "number"
   ) {
-    return "present";
-  }
-  if (!params.modelId) {
-    return "none";
+    return () => "present";
   }
   const canonicalize = (modelId: string) => {
     const normalized = normalizeModelId(params.provider, modelId);
     const canonical = params.canonicalizeModelId?.(normalized).trim();
     return canonical || normalized;
   };
-  const modelId = canonicalize(params.modelId);
-  const configuredModel = resolveMergedModelProviderModels({
-    models: providerConfig.models,
-    normalizeModelId: canonicalize,
-  }).get(modelId);
-  return configuredModel &&
-    (hasNonEmptyRecord(configuredModel.headers) ||
-      hasNonEmptyRecord(configuredModel.params) ||
-      hasRequestCompatOverrides(configuredModel.compat))
-    ? "present"
-    : "none";
+  let configuredModels: ReadonlyMap<string, ModelDefinitionConfig> | undefined;
+  return (modelId) => {
+    if (!modelId) {
+      return "none";
+    }
+    // Keep provider-only queries lazy and normalize the query before the first row pass.
+    const canonicalModelId = canonicalize(modelId);
+    const configuredModel = (configuredModels ??= resolveMergedModelProviderModels({
+      models: providerConfig.models,
+      normalizeModelId: canonicalize,
+    })).get(canonicalModelId);
+    return configuredModel &&
+      (hasNonEmptyRecord(configuredModel.headers) ||
+        hasNonEmptyRecord(configuredModel.params) ||
+        hasRequestCompatOverrides(configuredModel.compat))
+      ? "present"
+      : "none";
+  };
 }
 
 /** Resolves the provider entry produced by models-config key normalization. */

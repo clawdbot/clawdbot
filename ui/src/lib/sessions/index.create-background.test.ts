@@ -2,10 +2,10 @@ import { expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { createSessionCapability } from "./index.ts";
 import {
   createGatewayHarness,
   createSessionCapabilityHarness,
+  createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
 
@@ -315,7 +315,7 @@ it("retires a created thinking claim before replacement state is published", asy
     throw new Error(`Unexpected request: ${method}`);
   });
   const { gateway, publish } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-  const sessions = createSessionCapability(gateway);
+  const sessions = createTestSessionCapability(gateway);
 
   await sessions.createResult({ agentId: "main" });
   expect(sessions.think(key)).toBe("xhigh");
@@ -346,7 +346,7 @@ it("isolates delayed raw-global thinking claims by agent", async () => {
     }
     throw new Error(`Unexpected request: ${method}`);
   });
-  const sessions = createSessionCapability({
+  const sessions = createTestSessionCapability({
     snapshot: {
       client: { request } as unknown as GatewayBrowserClient,
       phase: "connected",

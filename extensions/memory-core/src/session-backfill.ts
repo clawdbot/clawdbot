@@ -1,8 +1,8 @@
 import path from "node:path";
 import { listSessionTranscriptCorpusEntriesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-dreams-file.js";
 import type { SessionIngestionFileState } from "./dreaming-ingestion-state.js";
-import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-narrative.js";
 import {
   listMemorySessionTombstones,
   recordMemoryEntryOrigins,
@@ -228,6 +228,8 @@ function mergeSessionBackfillFileProgress(params: {
       ...(firstUnselected ? [firstUnselected.contentIndex] : []),
       ...(scan.progressBlockIndex !== undefined ? [scan.progressBlockIndex] : []),
     ];
+    // The full snapshot identity stays paired while only its consumption cursor rewinds.
+    // Session ingestion uses that snapshot as the append-prefix proof on the next scan.
     files[scan.stateKey] = {
       mtimeMs: scan.mtimeMs,
       size: scan.size,

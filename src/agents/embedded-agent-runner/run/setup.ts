@@ -14,12 +14,9 @@ import {
   isAgentHarnessSessionKey,
   isValidAgentHarnessSessionStoreEntry,
   resolveAgentHarnessSessionStoreEntryError,
+  resolveSessionPinnedHarnessId,
 } from "../../../sessions/agent-harness-session-key.js";
-import {
-  isDefaultAgentRuntimeId,
-  normalizeOptionalAgentRuntimeId,
-  OPENCLAW_AGENT_RUNTIME_ID,
-} from "../../agent-runtime-id.js";
+import { normalizeOptionalAgentRuntimeId } from "../../agent-runtime-id.js";
 import {
   evaluateContextWindowGuard,
   formatContextWindowBlockMessage,
@@ -81,7 +78,7 @@ export function resolveAgentHarnessRunAdmissionError(params: {
     return undefined;
   }
   const requestedHarnessId = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
-  const durableHarnessId = normalizeOptionalAgentRuntimeId(entry.agentHarnessId);
+  const durableHarnessId = resolveSessionPinnedHarnessId(entry);
   const matchesRequestedRuntime =
     params.modelSelectionLocked === true && requestedHarnessId === durableHarnessId;
   const matchesDurableRuntime =
@@ -156,28 +153,6 @@ export function buildBeforeModelResolveAttachments(
     kind: "image",
     mimeType: img.mimeType,
   }));
-}
-
-/** Resolves a pinned non-default harness that owns native model selection. */
-export function resolveNativeModelOwnedHarnessId(params: {
-  agentHarnessId?: string;
-  modelSelectionLocked?: boolean;
-  selectedHarnessId: string;
-}): string | undefined {
-  if (params.modelSelectionLocked !== true) {
-    return undefined;
-  }
-  const requestedHarnessId = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
-  const selectedHarnessId = normalizeOptionalAgentRuntimeId(params.selectedHarnessId);
-  if (
-    !requestedHarnessId ||
-    isDefaultAgentRuntimeId(requestedHarnessId) ||
-    requestedHarnessId === OPENCLAW_AGENT_RUNTIME_ID ||
-    requestedHarnessId !== selectedHarnessId
-  ) {
-    return undefined;
-  }
-  return requestedHarnessId;
 }
 
 /** Builds structural model metadata for a harness that resolves its real model natively. */

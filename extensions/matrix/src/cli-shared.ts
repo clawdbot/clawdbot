@@ -1,8 +1,17 @@
+import { isDeepStrictEqual } from "node:util";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { formatZonedTimestamp } from "openclaw/plugin-sdk/time-runtime";
+import {
+  hasExplicitMatrixAccountConfig,
+  resolveMatrixAccountConfig,
+} from "./matrix/account-config.js";
 import { resolveMatrixRoomKeyBackupIssue } from "./matrix/backup-health.js";
 import { resolveMatrixAuthContext } from "./matrix/client.js";
 import { setMatrixSdkConsoleLogging, setMatrixSdkLogMode } from "./matrix/client/logging.js";
@@ -98,6 +107,51 @@ export function resolveMatrixCliAccountContext(accountId?: string): {
   return {
     accountId: resolveMatrixAuthContext({ cfg, accountId }).accountId,
     cfg,
+  };
+}
+
+export function createMatrixCliAccountConfigPublisher({
+  accountId,
+  previousCfg,
+}: {
+  accountId: string;
+  previousCfg: CoreConfig;
+}): (update: (cfg: CoreConfig) => CoreConfig) => Promise<void> {
+  const configApi = getMatrixRuntime().config;
+  // Bind the host's source/runtime pair before crypto, including its absence.
+  const pairedSource =
+    getRuntimeConfigSnapshot() === previousCfg ? getRuntimeConfigSourceSnapshot() : null;
+  const comparisonBase = pairedSource ? "sourceConfig" : "runtimeConfig";
+  const comparisonCfg = pairedSource ?? previousCfg;
+  const expectedChannelEnabled = comparisonCfg.channels?.matrix?.enabled !== false;
+  const expectedExists = hasExplicitMatrixAccountConfig(comparisonCfg, accountId);
+  const expectedAccount = structuredClone(
+    resolveMatrixAccountConfig({
+      cfg: comparisonCfg,
+      accountId,
+    }),
+  );
+  return async (update) => {
+    await configApi.mutateConfigFile({
+      afterWrite: { mode: "auto" },
+      mutate: (draft, { snapshot }) => {
+        // Preserve refs and unrelated edits without activating a replaced account.
+        const current = snapshot[comparisonBase];
+        if (
+          (current.channels?.matrix?.enabled !== false) !== expectedChannelEnabled ||
+          hasExplicitMatrixAccountConfig(current, accountId) !== expectedExists ||
+          !isDeepStrictEqual(
+            resolveMatrixAccountConfig({ cfg: current, accountId }),
+            expectedAccount,
+          )
+        ) {
+          throw new Error(
+            `Matrix account "${accountId}" changed during setup; review its configuration and run the setup command again.`,
+          );
+        }
+        draft.channels = update(draft).channels;
+      },
+    });
   };
 }
 

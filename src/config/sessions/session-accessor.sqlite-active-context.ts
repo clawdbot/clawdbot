@@ -13,6 +13,11 @@ import type {
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
+import { resolveTranscriptBoundaryWindow } from "./session-accessor.sqlite-reset-window.js";
+import {
+  readTranscriptContextVersionInTransaction,
+  type SessionTranscriptContextVersion,
+} from "./session-accessor.sqlite-transcript-state.js";
 import {
   DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
   DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
@@ -24,7 +29,9 @@ import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-re
 
 export type SessionTranscriptBoundedActiveContext = {
   activeLeafEntryId: string | null;
+  version: SessionTranscriptContextVersion;
   opaqueParents: Map<string, string | null>;
+  parents: Map<string, string | null>;
   firstKeptRanges: Map<string, { startIndex: number; endIndex: number }>;
   boundaryCount: number;
   events: TranscriptEvent[];
@@ -144,6 +151,14 @@ export function readSessionTranscriptBoundedActiveContextCore(
     if (headerBytes > maxBytes) {
       throw new RangeError("Session transcript header exceeds the active-context byte limit");
     }
+    // Explicit reset retention wins over ordinary exclusion. The window owner
+    // selects paired entries; only its newest candidates can fit this bounded read.
+    const retained =
+      resolveTranscriptBoundaryWindow(
+        projection,
+        "context",
+        fence?.beforeRawSeq,
+      )?.keptMessagePositions.slice(-(maxEvents + 1)) ?? [];
     const metadata = executeSqliteQuerySync(
       projection.database.db,
       db
@@ -162,7 +177,14 @@ export function readSessionTranscriptBoundedActiveContextCore(
         .$if(fence !== undefined, (query) =>
           query.where("active.event_seq", "<", fence!.beforeRawSeq),
         )
-        .where("active.context_eligible", "=", 1)
+        .where((eb) =>
+          retained.length > 0
+            ? eb.or([
+                eb("active.context_eligible", "=", 1),
+                eb("active.message_position", "in", retained),
+              ])
+            : eb("active.context_eligible", "=", 1),
+        )
         .orderBy("active.active_position", "desc")
         .limit(maxEvents + 1),
     ).rows;
@@ -237,6 +259,38 @@ export function readSessionTranscriptBoundedActiveContextCore(
           ).rows
       ).map((row) => [row.seq, JSON.parse(row.event_json)]),
     );
+    // Retain logical ancestry across the byte cutoff without loading parent payloads.
+    // Raw parent_id can point into an abandoned branch after a leaf control.
+    const parents = new Map(
+      (contextSequences.length === 0
+        ? []
+        : executeSqliteQuerySync(
+            projection.database.db,
+            db
+              .selectFrom("session_transcript_active_events as active")
+              .innerJoin("transcript_event_identities as entry", (join) =>
+                join
+                  .onRef("entry.session_id", "=", "active.session_id")
+                  .onRef("entry.seq", "=", "active.event_seq"),
+              )
+              .leftJoin("session_transcript_active_events as previous", (join) =>
+                join
+                  .onRef("previous.session_id", "=", "active.session_id")
+                  .on((eb) =>
+                    eb("previous.active_position", "=", eb("active.active_position", "-", 1)),
+                  ),
+              )
+              .leftJoin("transcript_event_identities as parent", (join) =>
+                join
+                  .onRef("parent.session_id", "=", "previous.session_id")
+                  .onRef("parent.seq", "=", "previous.event_seq"),
+              )
+              .select(["entry.event_id", "parent.event_id as parent_id"])
+              .where("active.session_id", "=", projection.resolved.sessionId)
+              .where("active.event_seq", "in", contextSequences),
+          ).rows
+      ).map((row) => [row.event_id, row.parent_id]),
+    );
     const events: TranscriptEvent[] = header ? [payloads.get(header.seq)!] : [];
     const rows = contextSequences.map((seq) => ({ event: payloads.get(seq)!, seq }));
     const opaqueParents = new Map<string, string | null>();
@@ -268,8 +322,13 @@ export function readSessionTranscriptBoundedActiveContextCore(
     // outside the byte-counted events so excluded payloads cannot change either boundary.
     const firstKeptRanges = readBoundedRetentionRanges(projection, rows, header ? 1 : 0);
     return {
+      version: readTranscriptContextVersionInTransaction(
+        projection.database,
+        projection.resolved.sessionId,
+      ),
       activeLeafEntryId,
       opaqueParents,
+      parents,
       firstKeptRanges,
       boundaryCount: boundary?.boundary_count ?? 0,
       events,

@@ -185,9 +185,12 @@ describe("voice-call diagnostic stream ownership", () => {
     }
     const fd = opened.value;
     expect(fs.fstatSync(fd).isFile()).toBe(true);
+    // The OS can reuse fd before the command continuation resumes; observe the real close.
+    const close = vi.spyOn(fs, "closeSync");
     process.stdout.emit("error", failed);
     expect(await running).toBe(failed);
-    expect(() => fs.fstatSync(fd)).toThrow();
+    expect(close).toHaveBeenCalledExactlyOnceWith(fd);
+    expect(close).toHaveReturnedWith(undefined);
     expect(sleepMock).not.toHaveBeenCalled();
     expect(process.stdout.listenerCount("drain")).toBe(drainListeners);
   });

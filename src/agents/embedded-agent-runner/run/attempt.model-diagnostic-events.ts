@@ -92,7 +92,7 @@ async function* observeModelCallIterator<T>(
       // the agent loop returns on the terminal event after awaiting result().
       // Close the underlying iterator for provider cleanup (idle-timeout abort
       // listeners, SSE readers) even when result() already emitted the terminal
-      // event; emitModelCallCompleted self-dedupes via state.terminalEventEmitted.
+      // event; lifecycle completion self-dedupes via state.terminalEventEmitted.
       await safeReturnIterator(iterator);
       lifecycle.emitCompleted();
     }

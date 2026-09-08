@@ -1,6 +1,11 @@
 let lastIssuedDraftRevision = 0;
-type DraftHighWater = { committed: number; attempted: number };
-const draftHighWaterByStorage = new WeakMap<Storage, Map<string, Map<string, DraftHighWater>>>();
+type DraftHighWater = {
+  committed: number;
+  attempted: number;
+  edited: number;
+  replacement?: symbol;
+};
+const draftHighWaterByOwner = new WeakMap<object, Map<string, Map<string, DraftHighWater>>>();
 
 export function observeDraftRevision(draftRevision: number | undefined): void {
   lastIssuedDraftRevision = Math.max(lastIssuedDraftRevision, draftRevision ?? 0);
@@ -13,7 +18,7 @@ export function nextDraftRevision(baseline = 0): number {
 }
 
 export function rememberDraftRevision(
-  storage: Storage,
+  storage: object,
   storageKey: string,
   storeSessionKey: string,
   draftRevision: number | undefined,
@@ -26,7 +31,7 @@ export function rememberDraftRevision(
 }
 
 export function rememberDraftAttempt(
-  storage: Storage,
+  storage: object,
   storageKey: string,
   storeSessionKey: string,
   draftRevision: number,
@@ -35,11 +40,43 @@ export function rememberDraftAttempt(
   highWater.attempted = Math.max(highWater.attempted, draftRevision);
 }
 
-function draftHighWater(storage: Storage, storageKey: string, storeSessionKey: string) {
-  let byStorageKey = draftHighWaterByStorage.get(storage);
+export function rememberDraftEdit(
+  owner: object,
+  storageKey: string,
+  storeSessionKey: string,
+  draftRevision: number,
+) {
+  // Pending edits retire async replacements without changing when earlier
+  // ordinary debounce writes may commit before the newer write starts.
+  const highWater = draftHighWater(owner, storageKey, storeSessionKey);
+  highWater.edited = Math.max(highWater.edited, draftRevision);
+}
+
+export function captureDraftReplacement(
+  owner: object,
+  storageKey: string,
+  storeSessionKey: string,
+  observedRevision: number,
+): () => boolean {
+  const highWater = draftHighWater(owner, storageKey, storeSessionKey);
+  const replacement = Symbol("composer-replacement");
+  const revision = Math.max(
+    observedRevision,
+    highWater.committed,
+    highWater.attempted,
+    highWater.edited,
+  );
+  highWater.replacement = replacement;
+  return () =>
+    highWater.replacement === replacement &&
+    Math.max(highWater.committed, highWater.attempted, highWater.edited) <= revision;
+}
+
+function draftHighWater(storage: object, storageKey: string, storeSessionKey: string) {
+  let byStorageKey = draftHighWaterByOwner.get(storage);
   if (!byStorageKey) {
     byStorageKey = new Map();
-    draftHighWaterByStorage.set(storage, byStorageKey);
+    draftHighWaterByOwner.set(storage, byStorageKey);
   }
   let bySession = byStorageKey.get(storageKey);
   if (!bySession) {
@@ -48,19 +85,19 @@ function draftHighWater(storage: Storage, storageKey: string, storeSessionKey: s
   }
   let highWater = bySession.get(storeSessionKey);
   if (!highWater) {
-    highWater = { committed: 0, attempted: 0 };
+    highWater = { committed: 0, attempted: 0, edited: 0 };
     bySession.set(storeSessionKey, highWater);
   }
   return highWater;
 }
 
 export function readDraftRevisionState(
-  storage: Storage,
+  storage: object,
   storageKey: string,
   storeSessionKey: string,
   storedRevision: number | undefined,
 ): { committed: number; latestAttempt: number } {
-  const highWater = draftHighWaterByStorage.get(storage)?.get(storageKey)?.get(storeSessionKey);
+  const highWater = draftHighWaterByOwner.get(storage)?.get(storageKey)?.get(storeSessionKey);
   const committed = Math.max(storedRevision ?? 0, highWater?.committed ?? 0);
   return {
     committed,

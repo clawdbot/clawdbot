@@ -19,9 +19,10 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-ke
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
+import { assertAccountSelectorForMutation } from "./account-selector.js";
 import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { channelLabel } from "./runtime-label.js";
-import { type ChatChannel, requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
+import { type ChatChannel, requireValidConfigForWrite, shouldUseWizard } from "./shared.js";
 
 export type ChannelsRemoveOptions = {
   agent?: string;
@@ -78,12 +79,12 @@ export async function channelsRemoveCommand(
   runtime: RuntimeEnv = defaultRuntime,
   params?: { hasFlags?: boolean },
 ) {
-  const configSnapshot = await requireValidConfigFileSnapshot(runtime);
-  if (!configSnapshot) {
+  assertAccountSelectorForMutation(opts.account);
+  const writeSnapshot = await requireValidConfigForWrite(runtime);
+  if (!writeSnapshot) {
     return;
   }
-  const baseHash = configSnapshot.hash;
-  const cfg: OpenClawConfig = configSnapshot.sourceConfig;
+  const cfg: OpenClawConfig = writeSnapshot.snapshot.sourceConfig;
 
   const useWizard = shouldUseWizard(params);
   const prompter = useWizard ? createClackPrompter() : null;
@@ -217,7 +218,8 @@ export async function channelsRemoveCommand(
   await persistChannelPluginConfig({
     cfg: removal.value.nextConfig,
     pluginInstalled: false,
-    ...(baseHash !== undefined ? { baseHash } : {}),
+    writeOptions: writeSnapshot.writeOptions,
+    baseHash: writeSnapshot.snapshot.hash,
     runtime,
   });
   if (useWizard && prompter) {

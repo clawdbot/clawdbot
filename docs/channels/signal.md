@@ -263,7 +263,7 @@ Groups:
 - `channels.signal.groups["<group-id>" | "*"]` can override group behavior with `requireMention`, `tools`, and `toolsBySender`.
 - Use `channels.signal.accounts.<id>.groups` for per-account overrides in multi-account setups.
 - Allowlisting a Signal group through `groupAllowFrom` does not disable mention gating by itself. A specifically configured `channels.signal.groups["<group-id>"]` entry processes every group message unless `requireMention=true` is set.
-- With `requireMention=true`, Signal native @mentions are matched from structured mention metadata against the bot account phone or `accountUuid`. Configured `mentionPatterns` remain a plain-text fallback.
+- With `requireMention=true`, Signal native @mentions are matched from structured mention metadata against the bot account phone or `accountUuid`. Plain-text matching uses `agents.entries.*.groupChat.mentionPatterns`, then `messages.groupChat.mentionPatterns`; when neither is set, it derives patterns from the routed agent's `identity.name` and `identity.emoji`. An explicit `mentionPatterns: []` at the selected level disables this text fallback without disabling native @mentions.
 - Runtime note: if `channels.signal` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
 
 Mention-gated group with bounded context:

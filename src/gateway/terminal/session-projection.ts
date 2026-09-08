@@ -32,9 +32,9 @@ export function terminalSessionSummary(session: TerminalSession): TerminalSessio
 }
 
 export function terminalSessionRecipientIds(session: TerminalSession): string[] {
-  const connIds = new Set(session.viewers);
-  if (session.owner?.kind === "conn") {
-    connIds.add(session.owner.connId);
+  const connIds = [...session.viewers];
+  if (session.owner?.kind === "conn" && !session.viewers.has(session.owner.connId)) {
+    connIds.push(session.owner.connId);
   }
-  return [...connIds];
+  return connIds;
 }

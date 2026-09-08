@@ -231,9 +231,9 @@ describe("sandbox fs bridge anchored ops", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")(
-    "write resolves symlink parents to canonical pinned paths",
-    async () => {
+  it.runIf(process.platform !== "win32").each(["write", "readdir"] as const)(
+    "%s resolves directory aliases to canonical pinned paths",
+    async (operation) => {
       // Parent symlinks are resolved once to a canonical path, then the write is
       // anchored there so later alias changes cannot redirect the target.
       await withTempDir("openclaw-fs-bridge-contract-write-", async (stateDir) => {
@@ -251,6 +251,9 @@ describe("sandbox fs bridge anchored ops", () => {
           if (script.includes('stat -c "%F|%s|%y"')) {
             return dockerExecResult("regular file|1|2");
           }
+          if (getDockerArg(args, 1) === "readdir") {
+            return dockerExecResult('[{"name":"note.txt","isDirectory":false}]');
+          }
           return dockerExecResult("");
         });
 
@@ -261,13 +264,20 @@ describe("sandbox fs bridge anchored ops", () => {
           }),
         });
 
-        await bridge.writeFile({ filePath: "alias/note.txt", data: "updated" });
+        if (operation === "write") {
+          await bridge.writeFile({ filePath: "alias/note.txt", data: "updated" });
+        } else {
+          await expect(bridge.readDirectory!({ filePath: "alias" })).resolves.toEqual([
+            { name: "note.txt", isDirectory: false },
+          ]);
+        }
 
-        const writeCall = findCallByDockerArg(1, "write");
-        const args = requireDockerCall(writeCall, "write")[0];
+        const args = requireDockerCall(findCallByDockerArg(1, operation), operation)[0];
         expect(getDockerArg(args, 2)).toBe("/workspace");
         expect(getDockerArg(args, 3)).toBe("real");
-        expect(getDockerArg(args, 4)).toBe("note.txt");
+        if (operation === "write") {
+          expect(getDockerArg(args, 4)).toBe("note.txt");
+        }
         expect(args).not.toContain("alias");
 
         const canonicalCalls = findCallsByScriptFragment('readlink -f -- "$cursor"');

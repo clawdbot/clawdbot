@@ -15,15 +15,15 @@ import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
 import { renderReadOnlyTranscript } from "./chat-read-only-transcript.ts";
 import { renderChatThread } from "./chat-thread.ts";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
-import type { TranscriptRow } from "./chat-transcript-layout.ts";
-import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
+  mountTestTranscript,
   observedElements,
   resetTranscriptTestDom,
   resizeObservers,
   threadProps,
+  type TestContentRow,
   transcriptDomState,
   transcriptRows,
 } from "./chat-transcript.test-support.ts";
@@ -35,8 +35,6 @@ function transcriptSize(container: ParentNode): number {
   );
   return Number.parseFloat(sizer.style.height);
 }
-
-type TestContentRow = Extract<TranscriptRow, { kind: "content" }>;
 
 function stubMcpAppLifecycle(
   container: ParentNode,
@@ -51,41 +49,6 @@ function stubMcpAppLifecycle(
     teardown: vi.fn(teardown),
   };
   return { app: Object.assign(app, lifecycle), ...lifecycle };
-}
-
-async function mountTestTranscript(
-  paneId: string,
-  initialRows: readonly TestContentRow[],
-  transcript = createTestTranscript(),
-) {
-  const container = document.body.appendChild(document.createElement("div"));
-  let currentSession: ChatTranscriptSession;
-  container.addEventListener("focusin", (event) => currentSession.handleFocusIn(event));
-  container.addEventListener("focusout", (event) => currentSession.handleFocusOut(event));
-  const renderRows = (rows: readonly TestContentRow[]) => {
-    const view = transcript.renderSession(paneId, `agent:main:${paneId}`, (session) => {
-      currentSession = session;
-      return session.render(
-        rows,
-        (row) => (row.kind === "content" ? row.content : nothing),
-        null,
-        false,
-      );
-    });
-    render(view, container);
-    transcript.hostUpdated();
-  };
-  transcript.hostConnected();
-  renderRows(initialRows);
-  await flushDeferredRowPrune();
-  return {
-    container,
-    renderRows,
-    transcript,
-    get session() {
-      return currentSession;
-    },
-  };
 }
 
 function mcpRangeRows(appContent: unknown): TestContentRow[] {
@@ -591,70 +554,6 @@ describe("chat transcript controller", () => {
     detail.hostDisconnected();
     expect(main.scrollElement).toBeNull();
     expect(detail.scrollElement).toBeNull();
-  });
-
-  it.each([
-    "wheel",
-    "downward wheel",
-    "stationary wheel",
-    "pointer",
-    "latest",
-    "automatic follow",
-  ] as const)("resolves pending restoration ownership for %s", async (command) => {
-    const flushFrames = stubAnimationFrames();
-    const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
-      kind: "content",
-      key: `row:${index}`,
-      content: html`<div>row ${index}</div>`,
-    }));
-    const { container, renderRows, transcript } = await mountTestTranscript(
-      `restore-${command}`,
-      rows,
-    );
-    Object.defineProperties(container, {
-      clientHeight: { configurable: true, value: 600 },
-      scrollHeight: { configurable: true, value: 4800 },
-    });
-    const writes: ScrollToOptions[] = [];
-    container.scrollTo = (options?: ScrollToOptions | number) => {
-      if (typeof options === "object") {
-        writes.push(options);
-        container.scrollTop = options.top ?? container.scrollTop;
-      }
-    };
-    const settled = vi.fn();
-    transcript.scrollToOffset(420, settled);
-    renderRows(rows);
-    expect(container.scrollTop).toBe(420);
-    if (["wheel", "downward wheel", "stationary wheel", "pointer"].includes(command)) {
-      container.dispatchEvent(
-        command === "pointer"
-          ? new PointerEvent("pointerdown")
-          : new WheelEvent("wheel", { deltaY: command === "wheel" ? -100 : 100 }),
-      );
-      if (command !== "stationary wheel") {
-        container.scrollTop = command === "downward wheel" ? 520 : 300;
-        container.dispatchEvent(new Event("scroll"));
-      }
-    } else if (command === "automatic follow") {
-      expect(transcript.scrollToEnd({ source: "auto" })).toBe(false);
-    } else {
-      expect(transcript.scrollToEnd()).toBe(true);
-    }
-    const expectedOffset = container.scrollTop;
-    writes.length = 0;
-    for (let frame = 0; frame < 15; frame++) {
-      flushFrames();
-      renderRows(rows);
-    }
-    if (command === "automatic follow") {
-      expect(settled).toHaveBeenCalledWith({ scrollTop: 420, anchorToEnd: false });
-    } else {
-      expect(settled).not.toHaveBeenCalled();
-      expect(writes.some((write) => write.top === 420)).toBe(false);
-    }
-    expect(container.scrollTop).toBe(expectedOffset);
-    transcript.hostDisconnected();
   });
 
   it.each([true, false])(

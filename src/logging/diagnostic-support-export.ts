@@ -38,6 +38,7 @@ import {
   type SupportRedactionContext,
 } from "./diagnostic-support-redaction.js";
 import { readConfiguredLogTail, type LogTailPayload } from "./log-tail.js";
+import { formatDiagnosticFilenameTimestamp } from "./timestamps.js";
 
 const DIAGNOSTIC_SUPPORT_EXPORT_VERSION = 1;
 
@@ -182,10 +183,6 @@ type CollectedSupportSnapshot = {
   summary: SupportSnapshotStatus;
   file?: DiagnosticSupportExportFile;
 };
-
-function formatExportTimestamp(now: Date): string {
-  return now.toISOString().replace(/[:.]/g, "-");
-}
 
 function normalizePositiveInteger(value: unknown, fallback: number): number {
   const parsed = typeof value === "number" ? value : Number(value);
@@ -636,7 +633,7 @@ function defaultOutputPath(options: { now: Date; stateDir: string }): string {
     options.stateDir,
     "logs",
     "support",
-    `${SUPPORT_EXPORT_PREFIX}${formatExportTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`,
+    `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`,
   );
 }
 
@@ -659,7 +656,7 @@ function resolveOutputPath(options: {
     if (fs.statSync(resolved).isDirectory()) {
       return path.join(
         resolved,
-        `${SUPPORT_EXPORT_PREFIX}${formatExportTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`,
+        `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`,
       );
     }
   } catch {

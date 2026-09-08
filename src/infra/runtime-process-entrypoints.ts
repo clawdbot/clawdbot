@@ -2,6 +2,11 @@
 const currentModuleUrl = import.meta.url;
 
 export const runtimeProcessEntrypoints = {
+  stateMigrationSnapshot: {
+    currentModuleUrl,
+    sourceWorkerName: "state-migrations.snapshot.worker",
+    distWorkerPath: "infra/state-migrations.snapshot.worker.js",
+  },
   githubExec: {
     currentModuleUrl,
     sourceWorkerName: "../agents/github-exec-launcher",
@@ -11,6 +16,31 @@ export const runtimeProcessEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "sqlite-readonly-location.worker",
     distWorkerPath: "infra/sqlite-readonly-location.worker.js",
+  },
+  sqliteIntegrity: {
+    currentModuleUrl,
+    sourceWorkerName: "sqlite-integrity.worker",
+    distWorkerPath: "infra/sqlite-integrity.worker.js",
+  },
+  preparedModelCatalog: {
+    currentModuleUrl,
+    sourceWorkerName: "../agents/prepared-model-catalog.worker",
+    distWorkerPath: "agents/prepared-model-catalog.worker.js",
+  },
+  updateRepair: {
+    currentModuleUrl,
+    sourceWorkerName: "update-repair.worker",
+    distWorkerPath: "infra/update-repair.worker.js",
+  },
+  updateMigratedFinalize: {
+    currentModuleUrl,
+    sourceWorkerName: "update-migrated-finalize.worker",
+    distWorkerPath: "infra/update-migrated-finalize.worker.js",
+  },
+  updateCandidateState: {
+    currentModuleUrl,
+    sourceWorkerName: "update-candidate-state.worker",
+    distWorkerPath: "infra/update-candidate-state.worker.js",
   },
   databaseVerify: {
     currentModuleUrl,
@@ -41,6 +71,11 @@ export const runtimeProcessEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "../process/supervisor/service-child-relay",
     distWorkerPath: "process/supervisor/service-child-relay.js",
+  },
+  terminalPty: {
+    currentModuleUrl,
+    sourceWorkerName: "../process/terminal-pty-worker",
+    distWorkerPath: "process/terminal-pty-worker.js",
   },
   serviceChildGroupAnchor: {
     currentModuleUrl,

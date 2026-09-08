@@ -4,13 +4,41 @@
 // The agent runtime cannot force every upstream provider, so the HTTP boundary
 // narrows exposed tools, nudges the model, then rejects turns without a matching
 // structured client-tool call. Keeping this here keeps the endpoints aligned.
+import type { ClientToolDefinition } from "../agents/command/shared-types.js";
 
 export type ToolChoiceConstraint = { type: "required" } | { type: "function"; name: string };
 
-export function toolChoiceConstraintPrompt(constraint: ToolChoiceConstraint): string {
-  return constraint.type === "function"
-    ? `You must call the ${constraint.name} tool before responding.`
-    : "You must call one of the available tools before responding.";
+export function applyToolChoice(
+  tools: ClientToolDefinition[],
+  choice: ToolChoiceConstraint | "none" | undefined,
+): {
+  tools: ClientToolDefinition[];
+  extraSystemPrompt?: string;
+  constraint?: ToolChoiceConstraint;
+} {
+  if (!choice) {
+    return { tools };
+  }
+  if (choice === "none") {
+    return { tools: [] };
+  }
+  const selectedTools =
+    choice.type === "function" ? tools.filter((tool) => tool.function.name === choice.name) : tools;
+  if (selectedTools.length === 0) {
+    throw new Error(
+      choice.type === "function"
+        ? `tool_choice requested unknown tool: ${choice.name}`
+        : "tool_choice=required but no tools were provided",
+    );
+  }
+  return {
+    tools: selectedTools,
+    extraSystemPrompt:
+      choice.type === "function"
+        ? `You must call the ${choice.name} tool before responding.`
+        : "You must call one of the available tools before responding.",
+    constraint: choice,
+  };
 }
 
 // True when no constraint is active, or the agent produced a structured tool

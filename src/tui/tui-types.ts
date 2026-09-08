@@ -161,7 +161,7 @@ export type GatewayStatusSummary = {
       everyMs?: number | null;
     }>;
   };
-  providerSummary?: string[];
+  channelSummary?: string[];
   queuedSystemEvents?: string[];
   sessions?: {
     paths?: string[];

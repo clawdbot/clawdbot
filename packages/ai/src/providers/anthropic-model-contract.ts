@@ -21,6 +21,7 @@ import type {
   StopReason,
 } from "../types.js";
 export {
+  bindsClaudeThinkingPrefix,
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,

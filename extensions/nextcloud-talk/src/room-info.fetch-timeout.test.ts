@@ -18,7 +18,7 @@ describe("nextcloud talk room info fetch timeout", () => {
         request.resume();
       },
       async (baseUrl) => {
-        const kind = await resolveNextcloudTalkRoomKind({
+        const lookup = resolveNextcloudTalkRoomKind({
           account: {
             accountId: "acct-hanging-room-info",
             baseUrl,
@@ -37,11 +37,11 @@ describe("nextcloud talk room info fetch timeout", () => {
           timeoutMs: REQUEST_TIMEOUT_MS,
         });
 
-        expect(kind).toBeUndefined();
+        await expect(lookup).rejects.toThrow();
       },
     );
 
     expect(received).toBe(true);
-    expect(String(runtimeError.mock.calls[0]?.[0] ?? "")).toMatch(/abort|timeout/i);
+    expect(runtimeError).not.toHaveBeenCalled();
   });
 });

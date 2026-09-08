@@ -4,16 +4,22 @@ import { attachRuntimePromptMediaFacts, type MediaFact } from "../../media/media
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { readRuntimePromptImageFactIndexes } from "../../media/runtime-prompt-image-provenance.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
+import { mergePreparedUserTurnMessageForRuntime } from "../../sessions/user-turn-transcript.message.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
-import { isOpenClawRuntimeContextCustomMessage } from "../internal-runtime-context.js";
+import { resolvePendingRuntimeContextReplay } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
 import { AgentSessionBase } from "./agent-session-base.js";
 import type { PromptOptions } from "./agent-session-types.js";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.js";
+import {
+  createCompactionRequestBudget,
+  takePromptCompactionRequestBudget,
+  withCompactionQueuedContext,
+} from "./compaction/request-budget.js";
 import type { CustomMessage } from "./messages.js";
 import { expandPromptTemplate } from "./prompt-templates.js";
 import type { ResourceLoader } from "./resource-loader.js";
@@ -39,7 +45,7 @@ export const agentSessionQueuePromptContext: unique symbol = Symbol.for(
 
 export abstract class AgentSessionPrompting extends AgentSessionBase {
   private logicalPromptActive = false;
-  private promptPreparation?: () => Promise<void>;
+  private promptPreparation?: () => Promise<void | (() => void)>;
 
   [agentSessionQueuePromptContext](message: CustomMessage): () => void {
     // The carrier belongs immediately after its user, ahead of queued extension context.
@@ -51,7 +57,9 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     };
   }
 
-  [agentSessionSetPromptPreparation](prepare: (() => Promise<void>) | undefined): void {
+  [agentSessionSetPromptPreparation](
+    prepare: (() => Promise<void | (() => void)>) | undefined,
+  ): void {
     this.promptPreparation = prepare;
   }
 
@@ -120,10 +128,11 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
   private async runPreparedAgentLoop(run: () => Promise<void>): Promise<void> {
     const prepare = this.promptPreparation;
     if (prepare) {
-      await prepare();
+      const admit = await prepare();
       if (prepare !== this.promptPreparation) {
         throw new Error("Session prompt preparation is stale after replacement or disposal.");
       }
+      admit?.();
     }
     // Start synchronously after the owner check; disposal must not reopen a core loop.
     return run();
@@ -171,19 +180,25 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     return [{ type: "text", text }, ...(images ?? [])];
   }
 
-  private createUserMessage(text: string, images?: ImageContent[]): PersistedUserTurnMessage {
+  private createUserMessage(
+    text: string,
+    images?: ImageContent[],
+    preparedMessage?: PersistedUserTurnMessage,
+  ): PersistedUserTurnMessage {
+    const imageFactIndexes = readRuntimePromptImageFactIndexes(images);
     const message = {
       role: "user",
       content: this.createUserContent(text, images),
       timestamp: Date.now(),
+      ...(imageFactIndexes ? { __openclaw: { mediaImageBlockFactIndexes: imageFactIndexes } } : {}),
     } satisfies PersistedUserTurnMessage;
-    const imageFactIndexes = readRuntimePromptImageFactIndexes(images);
-    return imageFactIndexes
-      ? Object.assign({}, message, {
-          ...message,
-          __openclaw: { mediaImageBlockFactIndexes: imageFactIndexes },
-        })
-      : message;
+    // Admission facts must precede accepted steering input. Keep expanded runtime
+    // content separate from the prepared display text used during persistence.
+    return Object.assign(
+      message,
+      mergePreparedUserTurnMessageForRuntime({ runtimeMessage: message, preparedMessage }),
+      { content: message.content },
+    );
   }
 
   /**
@@ -196,6 +211,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * @throws Error if no model selected or no API key available (when not streaming)
    */
   async prompt(text: string, options?: PromptOptions): Promise<void> {
+    const preparedCompactionBudget = takePromptCompactionRequestBudget(options);
     const expandPromptTemplates = options?.expandPromptTemplates ?? true;
     const preflightResult = options?.preflightResult;
     let messages: AgentMessage[] | undefined;
@@ -276,50 +292,63 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
 
       // Check if we need to compact before sending (catches aborted responses).
       // The pending user prompt below starts the next run; no intermediate continuation is needed.
+      const persistedUserIdempotencyKey = options?.persistedUserIdempotencyKey;
+      const contextWindow = this.model.contextWindow;
       const lastAssistant = this.findLastAssistantMessage();
       if (lastAssistant) {
-        await this.checkCompaction(lastAssistant, false);
+        const pendingQueuedContextMessages = resolvePendingRuntimeContextReplay({
+          messages: this.agent.state.messages,
+          pendingContextMessages: this.pendingNextTurnMessages,
+          persistedUserIdempotencyKey,
+        }).pendingContextMessages;
+        await this.checkCompaction(
+          lastAssistant,
+          false,
+          preparedCompactionBudget
+            ? withCompactionQueuedContext(preparedCompactionBudget, pendingQueuedContextMessages)
+            : typeof contextWindow === "number" &&
+                Number.isFinite(contextWindow) &&
+                contextWindow > 0
+              ? createCompactionRequestBudget({
+                  contextWindow,
+                  reserveTokens: this.settingsManager.getCompactionSettings().reserveTokens,
+                  systemPrompt: this.agent.state.systemPrompt,
+                  tools: this.agent.state.tools,
+                  pendingPrompt: expandedText,
+                  pendingImageCount: currentImages?.length,
+                  pendingQueuedContextMessages,
+                  pendingUserIdempotencyKey: persistedUserIdempotencyKey,
+                })
+              : undefined,
+        );
       }
 
-      const persistedUserIdempotencyKey = options?.persistedUserIdempotencyKey;
-      const persistedUserIndex = persistedUserIdempotencyKey
-        ? this.agent.state.messages.findLastIndex(
-            (message) =>
-              message.role === "user" &&
-              "idempotencyKey" in message &&
-              message.idempotencyKey === persistedUserIdempotencyKey,
-          )
-        : -1;
-      // Outer retries reuse the recorded user/carrier pair. Re-enqueuing either
-      // would duplicate the turn and detach runtime context from its original prefix.
-      const replayPersistedTurn =
-        persistedUserIndex >= 0 &&
-        isOpenClawRuntimeContextCustomMessage(this.agent.state.messages[persistedUserIndex + 1]);
-      const activeTail = this.agent.state.messages.at(-1);
-      if (
-        !replayPersistedTurn &&
-        persistedUserIdempotencyKey &&
-        activeTail?.role === "user" &&
-        "idempotencyKey" in activeTail &&
-        activeTail.idempotencyKey === persistedUserIdempotencyKey
-      ) {
-        // Compaction can restore the durable current user after the runner removed its replay.
-        // The prompt below supplies that exact turn, so keep one provider-visible copy.
-        this.agent.state.messages = this.agent.state.messages.slice(0, -1);
+      // Re-read after compaction: indices and queued context may have changed.
+      const { persistedUserIndex, replayPersistedCarrier, pendingContextMessages } =
+        resolvePendingRuntimeContextReplay({
+          messages: this.agent.state.messages,
+          pendingContextMessages: this.pendingNextTurnMessages,
+          persistedUserIdempotencyKey,
+        });
+      const replayPersistedTurn = persistedUserIndex >= 0;
+      const persistedUser = this.agent.state.messages[persistedUserIndex];
+      if (!replayPersistedCarrier && persistedUser?.role === "user") {
+        // Transient replay still consumes freshly resolved text/images. Preserve
+        // admission facts in place; a recorded carrier pair must keep its signed prefix.
+        const runtimeUser = this.createUserMessage(expandedText, currentImages, persistedUser);
+        this.agent.state.messages = this.agent.state.messages.with(persistedUserIndex, runtimeUser);
       }
 
       messages = [];
 
       if (!replayPersistedTurn) {
-        messages.push(this.createUserMessage(expandedText, currentImages));
+        messages.push({
+          ...this.createUserMessage(expandedText, currentImages),
+          ...(persistedUserIdempotencyKey ? { idempotencyKey: persistedUserIdempotencyKey } : {}),
+        });
       }
 
-      // Inject any pending "nextTurn" messages as context alongside the user message
-      for (const msg of this.pendingNextTurnMessages) {
-        if (!replayPersistedTurn || !isOpenClawRuntimeContextCustomMessage(msg)) {
-          messages.push(msg);
-        }
-      }
+      messages.push(...pendingContextMessages);
       this.pendingNextTurnMessages = [];
 
       // Emit before_agent_start extension event
@@ -509,7 +538,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     imageOrder?: PromptImageOrderEntry[],
     queueIdentity?: string,
   ): Promise<void> {
-    const runtimeMessage = this.createUserMessage(text, images);
+    const runtimeMessage = this.createUserMessage(text, images, transcriptContext?.message);
     const promptMessage = media?.length
       ? attachRuntimePromptMediaFacts(runtimeMessage, media, imageOrder)
       : runtimeMessage;

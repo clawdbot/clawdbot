@@ -3,9 +3,9 @@ import {
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES,
+  resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { describe, expect, it } from "vitest";
-import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 import type { PromotionWeights } from "./short-term-promotion-types.js";
 import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
@@ -170,7 +170,7 @@ describe("short-term promotion score calibration", () => {
   });
 
   it("keeps sweep and direct promotion fallback defaults aligned", () => {
-    const sweep = resolveShortTermPromotionDreamingConfig({ pluginConfig: {} });
+    const sweep = resolveMemoryDeepDreamingConfig({ pluginConfig: {} });
     expect({
       minScore: sweep.minScore,
       minRecallCount: sweep.minRecallCount,

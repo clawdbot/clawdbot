@@ -1,3 +1,4 @@
+import { calculateCost } from "openclaw/plugin-sdk/llm";
 import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
@@ -27,6 +28,72 @@ const preferredModels = [
 
 describe("OpenAI dynamic model capabilities", () => {
   afterEach(() => vi.unstubAllEnvs());
+
+  it.each([
+    { promptTokens: 272_000, inputRate: 10, output: 0.05, cacheRead: 0.0005, cacheWrite: 0.00625 },
+    { promptTokens: 272_001, inputRate: 20, output: 0.075, cacheRead: 0.001, cacheWrite: 0.0125 },
+  ])(
+    "prices Astra's full request at $promptTokens input tokens",
+    ({ promptTokens, inputRate, ...expected }) => {
+      const model = buildOpenAIProvider().resolveDynamicModel?.({
+        provider: "openai",
+        modelId: "gpt-6-astra",
+        modelRegistry: modelRegistry(),
+      });
+      if (!model) {
+        throw new Error("Astra must resolve before pricing");
+      }
+      const usage = {
+        input: promptTokens - 1_000,
+        output: 1_000,
+        cacheRead: 500,
+        cacheWrite: 500,
+        totalTokens: promptTokens + 1_000,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      };
+      const cost = calculateCost(model, usage);
+      expect(cost).toMatchObject(expected);
+      expect(cost.input).toBeCloseTo((usage.input * inputRate) / 1_000_000);
+    },
+  );
+
+  it.each(["openai-responses", "openai-chatgpt-responses"] as const)(
+    "resolves GPT-6 Astra with its own capabilities over %s",
+    (api) => {
+      const model = buildOpenAIProvider().resolveDynamicModel?.({
+        provider: "openai",
+        modelId: "gpt-6-astra",
+        providerConfig: {
+          api,
+          baseUrl:
+            api === "openai-responses"
+              ? "https://api.openai.com/v1"
+              : "https://chatgpt.com/backend-api/codex",
+          models: [],
+        },
+        modelRegistry: modelRegistry(),
+      });
+
+      expect(model).toMatchObject({
+        id: "gpt-6-astra",
+        provider: "openai",
+        api,
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+        cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+        thinkingLevelMap: { off: null, minimal: "low", xhigh: "xhigh", max: "max" },
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+          supportsTemperature: false,
+          codeMode: "preferred",
+        },
+      });
+    },
+  );
 
   it.each(preferredModels)(
     "retains preferred capabilities for $id without discovery",
@@ -67,6 +134,11 @@ describe("OpenAI dynamic model capabilities", () => {
   );
 
   it.each([
+    {
+      id: "gpt-6-astra",
+      cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+      codeMode: "preferred",
+    },
     {
       id: "gpt-5.6-sol",
       cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
@@ -143,6 +215,45 @@ describe("OpenAI dynamic model capabilities", () => {
     });
     expect(model?.compat?.codeMode).toBe("preferred");
   });
+
+  it.each(["openai-responses", "openai-chatgpt-responses"] as const)(
+    "constructs %s models without adding the template's transport defaults",
+    (api) => {
+      const template: ProviderRuntimeModel = {
+        id: "gpt-5.4",
+        name: "Template",
+        provider: "openai",
+        api: "openai-completions",
+        baseUrl: "https://template.example/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 128_000,
+        maxTokens: 8_192,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        headers: { "X-Template": "preserved" },
+        compat: { supportsDeveloperRole: true, codeMode: "capable" },
+      };
+      const original = structuredClone(template);
+      const model = buildOpenAIProvider().resolveDynamicModel?.({
+        provider: "openai",
+        modelId: template.id,
+        providerConfig: {
+          api,
+          baseUrl:
+            api === "openai-responses"
+              ? "https://api.openai.com/v1"
+              : "https://chatgpt.com/backend-api/codex",
+          models: [],
+        },
+        modelRegistry: modelRegistry([template]),
+      });
+
+      expect(model).not.toBe(template);
+      expect(model).toMatchObject({ id: template.id, api, headers: original.headers });
+      expect(model?.compat).toEqual(original.compat);
+      expect(template).toEqual(original);
+    },
+  );
 
   it("retains the environment-selected endpoint with preferred metadata", () => {
     vi.stubEnv("OPENAI_BASE_URL", "https://proxy.example/v1");

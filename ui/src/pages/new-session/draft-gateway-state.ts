@@ -45,6 +45,7 @@ type DraftGatewaySnapshot = Readonly<{
     recoveryScope: string;
   }>;
   agentsHydrated: boolean;
+  runtimeId: string;
 }>;
 
 type DraftGatewayCallbacks = {
@@ -64,6 +65,7 @@ export class DraftGatewayState {
   private environmentsValue: DraftEnvironment[] | null = null;
   private cloudProfilesReadyValue = false;
   private catalogRetryingValue = false;
+  private catalogRevalidationPending = false;
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private gatewayClientValue: ApplicationContext["gateway"]["snapshot"]["client"] = null;
   private gatewayUrlValue = "";
@@ -113,9 +115,10 @@ export class DraftGatewayState {
           hasOperatorWriteAccess(this.read().context?.gateway.snapshot.hello?.auth ?? null),
           this.read().isAdmin,
           this.gatewayRecoveryScopeValue,
+          this.read().runtimeId,
         ] as const,
-      task: ([client, _connectionEpoch, canWrite, isAdmin]) =>
-        client ? discoverPlaceCatalog(client, canWrite, isAdmin) : initialState,
+      task: ([client, _connectionEpoch, canWrite, isAdmin, _recoveryScope, runtimeId]) =>
+        client ? discoverPlaceCatalog(client, canWrite, isAdmin, runtimeId) : initialState,
       onComplete: (placeCatalog) => {
         this.resetCloudProfileRetry();
         this.environmentsValue = placeCatalog.environments;
@@ -283,7 +286,11 @@ export class DraftGatewayState {
     }
     if (becameConnected) {
       this.gatewayConnectionEpochValue += 1;
-      this.retryPendingCatalogTarget();
+      if (!firstBind && this.read().data?.startTerminal) {
+        this.handleCatalogRetry();
+      } else {
+        this.retryPendingCatalogTarget();
+      }
     }
     this.synchronizeIdentityPreferences(snapshot.selfUser?.id);
     this.callbacks.requestUpdate();
@@ -359,11 +366,14 @@ export class DraftGatewayState {
   readonly handleCatalogRetry = () => {
     const { context, data } = this.read();
     if (
-      this.catalogRetryingValue ||
       !this.gatewayConnectedValue ||
       (data?.group && context?.sessions.groupsStatus() === "loading") ||
       (!data?.startTerminal && !catalog.isRoutePending(data, context?.sessions))
     ) {
+      return;
+    }
+    if (this.catalogRetryingValue) {
+      this.catalogRevalidationPending = true;
       return;
     }
     if (data?.group) {
@@ -382,7 +392,12 @@ export class DraftGatewayState {
       .then(() => this.callbacks.updateComplete())
       .finally(() => {
         this.catalogRetryingValue = false;
-        this.retryPendingCatalogTarget();
+        if (this.catalogRevalidationPending) {
+          this.catalogRevalidationPending = false;
+          this.handleCatalogRetry();
+        } else {
+          this.retryPendingCatalogTarget();
+        }
         this.callbacks.requestUpdate();
       });
   };

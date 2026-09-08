@@ -65,6 +65,68 @@ describe("isImageWithMediaPayload", () => {
 });
 
 describe("extractToolResultText", () => {
+  it.each([
+    { blocks: ["A\ud800", "\udc00B"], expected: "A\nB" },
+    { blocks: ["😀\ud800x\udc00漢"], expected: "😀x漢" },
+    { blocks: ["\ud800", "\udc00"], expected: "" },
+    { blocks: ["  before\n", "after  "], expected: "  before\n\nafter  " },
+  ])("sanitizes separate text blocks before joining: $blocks", ({ blocks, expected }) => {
+    expect(extractToolResultText(blocks.map((text) => ({ type: "text", text })))).toBe(expected);
+  });
+
+  it("keeps structured fallback and inclusion after block sanitation", () => {
+    const structured = { type: "json", value: "😀漢" };
+    const expected = '{"type":"json","value":"😀漢"}';
+    expect(extractToolResultText([{ type: "text", text: "\ud800" }, structured])).toBe(expected);
+    expect(
+      extractToolResultText([{ type: "text", text: "head\ud800" }, structured], {
+        includeStructured: true,
+      }),
+    ).toBe(`head\n${expected}`);
+  });
+
+  it.each([7_999, 8_000])(
+    "preserves explicit continuation text beyond %i UTF-16 units",
+    (length) => {
+      const text = `${"x".repeat(length)}😀\n[More content follows. Use offset=225 to continue.]\n`;
+      const blocks = [{ type: "text", text }];
+      expect(extractToolResultText(blocks, { includeStructured: true })).toBe(text);
+      expect(extractToolResultText(blocks)).toBe(text);
+    },
+  );
+
+  it("bounds and redacts aggregate structured additions without truncating explicit text", () => {
+    const explicit = `${"numbered file row\n".repeat(900)}[Use offset=225 to continue.]\n`;
+    const tail = "  final explicit block 😀  ";
+    const result = extractToolResultText(
+      [
+        {
+          type: "json",
+          bytes: [1, 2, 3],
+          encrypted_content: "opaque-ciphertext",
+          preview: "data:image/png;base64,AAECAwQFBgc=",
+          value: "x".repeat(5_000),
+        },
+        { type: "text", text: explicit },
+        { type: "json", value: "😀".repeat(5_000) },
+        { type: "text", text: tail },
+      ],
+      { includeStructured: true },
+    );
+
+    const prefix = `${explicit}\n${tail}\n`;
+    expect(result.startsWith(prefix)).toBe(true);
+    const structured = result.slice(prefix.length);
+    expect(structured.length).toBeLessThanOrEqual(8_000 + "\n…(truncated)…".length);
+    expect(structured).toContain("…(truncated)…");
+    expect(structured).toContain("[omitted bytes]");
+    expect(structured).toContain("[omitted encrypted_content]");
+    expect(structured).toContain("[inline data URI:");
+    expect(structured).not.toContain("opaque-ciphertext");
+    expect(structured).not.toContain("AAECAwQFBgc=");
+    expect(() => encodeURIComponent(result)).not.toThrow();
+  });
+
   it("keeps media-only blocks out of provider replay text", () => {
     const text = extractToolResultText([
       { type: "text", text: "summary" },

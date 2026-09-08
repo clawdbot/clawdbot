@@ -10,6 +10,7 @@ import {
   mocks,
   useTempStateDir,
   SystemAgentChatEngine,
+  SystemAgentInferenceUnavailableError,
   expectDefined,
   hashSystemAgentOperation,
   type SystemAgentVerifiedInferenceBinding,
@@ -39,7 +40,6 @@ function createRouterHarness(options: ConstructorParameters<typeof ChatTurnRoute
       rebindVerifiedInference: () => {},
       getVerifiedInference: () => verifiedInference,
       loadOverview: fakeOverviewLoader(),
-      getHistory: () => [],
       verifyConfigAfterWrite: async () => null,
     },
   );
@@ -213,8 +213,7 @@ describe("SystemAgentChatEngine approval", () => {
         config: {},
       }));
       const engine = new SystemAgentChatEngine({
-        runAgentTurn: async () => null,
-        planWithAssistant: async () => null,
+        runAgentTurn: async () => ({ text: "noted" }),
         classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
         deps: { createAgent, loadOverview: fakeOverviewLoader() },
         ...(requesterAgentId ? { requesterAgentId, operatorApprovalOnly: true } : {}),
@@ -265,8 +264,7 @@ describe("SystemAgentChatEngine approval", () => {
       lines: ["Workspace: /tmp/established-work"],
     }));
     const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
+      runAgentTurn: async () => ({ text: "noted" }),
       classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
       deps: {
         applySetup,
@@ -324,7 +322,6 @@ describe("SystemAgentChatEngine approval", () => {
     });
     const engine = new SystemAgentChatEngine({
       runAgentTurn: async () => ({ text: "repair suggestion" }),
-      planWithAssistant: async () => null,
       classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
       deps: {
         applySetup,
@@ -346,8 +343,7 @@ describe("SystemAgentChatEngine approval", () => {
   it("routes model provider changes out of the active inference session", async () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
-      runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
+      runAgentTurn: async () => ({ text: "noted" }),
       deps: { loadOverview: fakeOverviewLoader() },
     });
 
@@ -487,111 +483,6 @@ describe("SystemAgentChatEngine approval", () => {
     expect(router.getPendingOperatorProposal()).toBeNull();
   });
 
-  it("preserves the verified setup model when planner fallback changes only the workspace", async () => {
-    useTempStateDir();
-    const verifyInferenceConfig = vi.fn(async () => ({
-      ok: true as const,
-      modelRef: "openai/gpt-5.5",
-      latencyMs: 100,
-    }));
-    const applySetup = vi.fn(async () => ({
-      configPath: "/tmp/openclaw.json",
-      configHashBefore: "before",
-      configHashAfter: "after",
-      bootstrapPending: false,
-      workspaceReady: true,
-      gateway: { status: "ready" as const, action: "reused" as const },
-      lines: ["Workspace: /tmp/new-work"],
-    }));
-    let pendingOperation = "";
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => null,
-      planWithAssistant: async (params) => {
-        pendingOperation = params.pendingOperation ?? "";
-        return {
-          reply: "I'll use the new workspace and keep the selected AI route.",
-          command: "setup workspace /tmp/new-work",
-          modelLabel: "planner",
-        };
-      },
-      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
-      deps: {
-        applySetup,
-        verifyInferenceConfig,
-        loadOverview: fakeOverviewLoader({ defaultModel: "openai/gpt-5.5" }),
-      },
-    });
-    engine.propose({
-      kind: "setup",
-      workspace: "/tmp/old-work",
-      model: "openai/gpt-5.5",
-    });
-
-    const revised = await engine.handle("put the workspace under /tmp/new-work instead");
-    expect(revised.text).toContain("Model choice: keep verified default openai/gpt-5.5.");
-    expect(pendingOperation).toContain('"model":"openai/gpt-5.5"');
-
-    await engine.handle("yes");
-
-    expect(verifyInferenceConfig).toHaveBeenCalledOnce();
-    expect(applySetup).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspace: "/tmp/new-work",
-        expectedInferenceRoute: expect.objectContaining({
-          route: expect.objectContaining({ modelLabel: "openai/gpt-5.5" }),
-        }),
-      }),
-      expect.any(Object),
-    );
-  });
-
-  it("preserves the pending first-agent name when a planner adds the verified model", async () => {
-    useTempStateDir();
-    const applySetup = vi.fn(async () => ({
-      configPath: "/tmp/openclaw.json",
-      configHashBefore: "before",
-      configHashAfter: "after",
-      bootstrapPending: false,
-      workspaceReady: true,
-      gateway: { status: "ready" as const, action: "reused" as const },
-      lines: [],
-    }));
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => null,
-      planWithAssistant: async () => ({
-        reply: "I'll keep the verified model.",
-        command: "setup workspace /tmp/new-work model openai/gpt-5.5",
-        modelLabel: "planner",
-      }),
-      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
-      deps: {
-        applySetup,
-        verifyInferenceConfig: vi.fn(async () => ({
-          ok: true as const,
-          modelRef: "openai/gpt-5.5",
-          latencyMs: 100,
-        })),
-        loadOverview: fakeOverviewLoader({ defaultModel: "openai/gpt-5.5" }),
-      },
-    });
-    engine.propose({
-      kind: "setup",
-      workspace: "/tmp/old-work",
-      agentName: "robby",
-    });
-
-    await engine.handle("keep the model and change the workspace");
-    await engine.handle("yes");
-
-    expect(applySetup).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspace: "/tmp/new-work",
-        firstAgent: { name: "robby" },
-      }),
-      expect.any(Object),
-    );
-  });
-
   it("tells the agent loop when a preserved proposal was resolved", async () => {
     const observedInputs: string[] = [];
     const router = createRouterHarness({
@@ -612,26 +503,25 @@ describe("SystemAgentChatEngine approval", () => {
     expect(observedInputs[1]).toContain("was approved");
   });
 
-  it("keeps a host-resolution marker queued across planner fallback", async () => {
+  it("keeps a host-resolution marker queued across a failed turn", async () => {
     const observedInputs: string[] = [];
     const runAgentTurn = vi.fn(async (params: { input: string }) => {
       observedInputs.push(params.input);
       return observedInputs.length === 1 ? null : { text: "native reply" };
     });
-    const planner = vi.fn(async () => ({ reply: "planner fallback", modelLabel: "planner" }));
     const router = createRouterHarness({
       runAgentTurn: runAgentTurn as never,
-      planWithAssistant: planner,
       classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
     });
     router.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
 
     await router.resolveTurn("yes");
-    await router.resolveTurn("what next?");
+    await expect(router.resolveTurn("what next?")).rejects.toBeInstanceOf(
+      SystemAgentInferenceUnavailableError,
+    );
     await router.resolveTurn("try the native session again");
     await router.resolveTurn("and now?");
 
-    expect(planner).toHaveBeenCalledOnce();
     expect(observedInputs).toHaveLength(3);
     expect(observedInputs[0]).toContain("was approved");
     expect(observedInputs[1]).toContain("was approved");
@@ -672,11 +562,9 @@ describe("SystemAgentChatEngine approval", () => {
   ])("keeps hint-sensitive config set %s away from every model path", async (path) => {
     useTempStateDir();
     const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
-    const planner = vi.fn(async () => ({ reply: "should never run" }));
     const runConfigSet = vi.fn(async () => {});
     const engine = new SystemAgentChatEngine({
       runAgentTurn: runAgentTurn as never,
-      planWithAssistant: planner as never,
       deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
     });
 
@@ -687,7 +575,6 @@ describe("SystemAgentChatEngine approval", () => {
     const proposed = await engine.handle(`config set ${path} ${value}`);
 
     expect(runAgentTurn).not.toHaveBeenCalled();
-    expect(planner).not.toHaveBeenCalled();
     expect(proposed.text).toContain("<redacted>");
     expect(proposed.text).not.toContain("very-secret");
     expect(engine.getPendingOperatorProposal()?.operation).toEqual({
@@ -707,17 +594,14 @@ describe("SystemAgentChatEngine approval", () => {
     ['channels.modelByChannel["token=prod"].chat', '"openai/gpt-5.5"', "openai/gpt-5.5"],
   ])("keeps kernel-owned channel config %s visible in its approval", async (path, value, shown) => {
     const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
-    const planner = vi.fn(async () => ({ reply: "should never run" }));
     const engine = new SystemAgentChatEngine({
       runAgentTurn: runAgentTurn as never,
-      planWithAssistant: planner as never,
       deps: { runConfigSet: vi.fn(async () => {}), loadOverview: fakeOverviewLoader() },
     });
 
     const proposed = await engine.handle(`config set ${path} ${value}`);
 
     expect(runAgentTurn).not.toHaveBeenCalled();
-    expect(planner).not.toHaveBeenCalled();
     expect(proposed.text).toContain(path);
     expect(proposed.text).toContain(shown);
     expect(proposed.text).not.toContain("<redacted>");
@@ -730,18 +614,15 @@ describe("SystemAgentChatEngine approval", () => {
 
   it("host-routes validated SecretRef writes without exposing the command to a model", async () => {
     const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
-    const planner = vi.fn(async () => ({ reply: "should never run" }));
     const runConfigSet = vi.fn(async () => {});
     const engine = new SystemAgentChatEngine({
       runAgentTurn: runAgentTurn as never,
-      planWithAssistant: planner as never,
       deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
     });
 
     const proposed = await engine.handle("config set-ref gateway.auth.token env GATEWAY_TOKEN");
 
     expect(runAgentTurn).not.toHaveBeenCalled();
-    expect(planner).not.toHaveBeenCalled();
     expect(proposed.text).toContain("env SecretRef <redacted>");
     expect(proposed.text).not.toContain("GATEWAY_TOKEN");
     expect(engine.getPendingOperatorProposal()?.operation).toEqual({
@@ -755,17 +636,12 @@ describe("SystemAgentChatEngine approval", () => {
   it("keeps valid SecretRef ids out of pending context and later history", async () => {
     const rawRef = "123:actual-gateway-token";
     const observedInputs: string[] = [];
-    const planner = vi.fn(async (params: unknown) => {
-      observedInputs.push(JSON.stringify(params));
-      return { reply: "still pending" };
-    });
     const engine = new SystemAgentChatEngine({
       classifyApproval: async () => "other",
       runAgentTurn: async (params) => {
         observedInputs.push(params.input);
-        throw new Error("force planner fallback");
+        return { text: "still pending" };
       },
-      planWithAssistant: planner as never,
       deps: { runConfigSet: vi.fn(async () => {}), loadOverview: fakeOverviewLoader() },
     });
 
@@ -782,17 +658,14 @@ describe("SystemAgentChatEngine approval", () => {
     String.raw`channels.telegram.accounts.prod\=us.botToken`,
   ])("host-routes a SecretRef write through dynamic config key %s", async (path) => {
     const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
-    const planner = vi.fn(async () => ({ reply: "should never run" }));
     const engine = new SystemAgentChatEngine({
       runAgentTurn: runAgentTurn as never,
-      planWithAssistant: planner as never,
       deps: { runConfigSet: vi.fn(async () => {}), loadOverview: fakeOverviewLoader() },
     });
 
     const proposed = await engine.handle(`config set-ref ${path} env TELEGRAM_TOKEN`);
 
     expect(runAgentTurn).not.toHaveBeenCalled();
-    expect(planner).not.toHaveBeenCalled();
     expect(proposed.text).toContain(path);
     expect(proposed.text).not.toContain("TELEGRAM_TOKEN");
     expect(engine.getPendingOperatorProposal()?.operation).toEqual({
@@ -815,10 +688,8 @@ describe("SystemAgentChatEngine approval", () => {
     "config schema channels.missing.opaque=abcDEF123",
   ])("keeps malformed config read path %s off model and history", async (command) => {
     const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
-    const planner = vi.fn(async () => ({ reply: "should never run" }));
     const engine = new SystemAgentChatEngine({
       runAgentTurn: runAgentTurn as never,
-      planWithAssistant: planner as never,
       deps: { loadOverview: fakeOverviewLoader() },
     });
 
@@ -826,7 +697,6 @@ describe("SystemAgentChatEngine approval", () => {
 
     expect(reply.text).toContain("Invalid config path");
     expect(runAgentTurn).not.toHaveBeenCalled();
-    expect(planner).not.toHaveBeenCalled();
     expect(JSON.stringify(engine.historySince(0))).not.toContain("abcDEF123");
   });
 
@@ -868,17 +738,14 @@ describe("SystemAgentChatEngine approval", () => {
   ])("keeps malformed sensitive config write %s away from every model path", async (command) => {
     useTempStateDir();
     const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
-    const planner = vi.fn(async () => ({ reply: "should never run" }));
     const engine = new SystemAgentChatEngine({
       runAgentTurn: runAgentTurn as never,
-      planWithAssistant: planner as never,
       deps: { runConfigSet: vi.fn(async () => {}), loadOverview: fakeOverviewLoader() },
     });
 
     const proposed = await engine.handle(command);
 
     expect(runAgentTurn).not.toHaveBeenCalled();
-    expect(planner).not.toHaveBeenCalled();
     expect(proposed.text).toContain("Invalid config path");
     expect(proposed.text).not.toContain("very-secret");
     expect(proposed.text).not.toContain("abcDEF123");
@@ -908,13 +775,9 @@ describe("SystemAgentChatEngine approval", () => {
     "config set plugins.entries.missing.config.opaque=very-secret please",
     'config set plugins.entries.missing.config["opaque=very-secret"].nested please',
     'config set channels.synology-chat.accounts["prod.guild"].webhookUrl.abcDEF123 please',
-  ])("redacts malformed config write %s from model-visible history", async (command) => {
-    const planner = vi.fn(async (_params: { history?: Array<{ role: string; text: string }> }) => ({
-      reply: "noted",
-    }));
+  ])("redacts malformed config write %s from conversation history", async (command) => {
     const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => null,
-      planWithAssistant: planner as never,
+      runAgentTurn: async () => ({ text: "noted" }),
       classifyApproval: async () => "other",
       deps: { loadOverview: fakeOverviewLoader() },
     });
@@ -922,7 +785,7 @@ describe("SystemAgentChatEngine approval", () => {
     await engine.handle(command);
     await engine.handle("did that work?");
 
-    const history = planner.mock.calls.at(-1)?.[0]?.history ?? [];
+    const history = engine.historySince(0);
     const userTurns = history.filter((turn) => turn.role === "user").map((turn) => turn.text);
     expect(userTurns.some((text) => text.includes("very-secret"))).toBe(false);
     expect(userTurns.some((text) => text.includes("abcDEF123"))).toBe(false);
@@ -940,15 +803,9 @@ describe("SystemAgentChatEngine approval", () => {
   ])(
     "keeps sensitive dynamic or unknown-owner path %s out of model paths, responses, and history",
     async (command) => {
-      const planner = vi.fn(
-        async (_params: { history?: Array<{ role: string; text: string }> }) => ({
-          reply: "noted",
-        }),
-      );
-      const runAgentTurn = vi.fn(async () => null);
+      const runAgentTurn = vi.fn(async () => ({ text: "noted" }));
       const engine = new SystemAgentChatEngine({
         runAgentTurn,
-        planWithAssistant: planner as never,
         classifyApproval: async () => "other",
         deps: { loadOverview: fakeOverviewLoader() },
       });
@@ -957,11 +814,10 @@ describe("SystemAgentChatEngine approval", () => {
       expect(proposed.text).not.toContain("abcDEF123");
       expect(proposed.text).not.toContain("Bearer-abc");
       expect(runAgentTurn).not.toHaveBeenCalled();
-      expect(planner).not.toHaveBeenCalled();
 
       await engine.handle("no");
       await engine.handle("did that work?");
-      const history = planner.mock.calls.at(-1)?.[0]?.history ?? [];
+      const history = engine.historySince(0);
       expect(history.some((turn) => turn.text.includes("abcDEF123"))).toBe(false);
       expect(history.some((turn) => turn.text.includes("Bearer-abc"))).toBe(false);
     },
@@ -979,13 +835,9 @@ describe("SystemAgentChatEngine approval", () => {
     "plugins.entries.codex.config.appServer.headers",
     "plugins.entries.codex.config.appServer.headers.Authorization",
     "channels.synology-chat",
-  ])("redacts config-set value at %s from the AI-visible history", async (path) => {
-    const planner = vi.fn(async (_params: { history?: Array<{ role: string; text: string }> }) => ({
-      reply: "noted",
-    }));
+  ])("redacts config-set value at %s from conversation history", async (path) => {
     const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => null,
-      planWithAssistant: planner as never,
+      runAgentTurn: async () => ({ text: "noted" }),
       classifyApproval: async () => "other",
       deps: { loadOverview: fakeOverviewLoader() },
     });
@@ -997,13 +849,13 @@ describe("SystemAgentChatEngine approval", () => {
     await engine.handle(`config set ${path} ${value}`);
     await engine.handle("did that work?");
 
-    const history = planner.mock.calls.at(-1)?.[0]?.history ?? [];
+    const history = engine.historySince(0);
     const userTurns = history.filter((turn) => turn.role === "user").map((turn) => turn.text);
     expect(userTurns.some((text) => text.includes("very-secret"))).toBe(false);
     expect(userTurns.some((text) => text.includes("<redacted secret>"))).toBe(true);
   });
 
-  it("returns the delegated tool handoff through the engine without planner fallback", async () => {
+  it("returns the delegated tool handoff through the engine", async () => {
     const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async (params) => {
       const tool = createSystemAgentTool({
         surface: params.surface,
@@ -1018,20 +870,15 @@ describe("SystemAgentChatEngine approval", () => {
       });
       return { text: extractToolResultText(result) ?? "" };
     });
-    const planner = vi.fn(async () => {
-      throw new Error("planner must not run when the loop replies");
-    });
     const engine = new SystemAgentChatEngine({
       operatorApprovalOnly: true,
       runAgentTurn,
-      planWithAssistant: planner,
       deps: { loadOverview: fakeOverviewLoader() },
     });
 
     const reply = await engine.handle("switch the thinking level");
 
     expect(runAgentTurn).toHaveBeenCalledOnce();
-    expect(planner).not.toHaveBeenCalled();
     expect(reply.text).toContain("requesting session's permission policy");
     expect(reply.text).toContain("returns the final outcome");
     expect(reply.text).not.toContain("OpenClaw operator UI");
@@ -1041,32 +888,6 @@ describe("SystemAgentChatEngine approval", () => {
       kind: "config-set",
       path: "agents.defaults.subagents.thinking",
       value: "high",
-    });
-  });
-
-  it("leaves delegated planner proposals for the host permission policy", async () => {
-    const planner = vi.fn(async () => ({
-      reply: "Let's point your agent at gpt-5.5.",
-      command: "set default model openai/gpt-5.5",
-      modelLabel: "claude-cli",
-    }));
-    const engine = new SystemAgentChatEngine({
-      operatorApprovalOnly: true,
-      runAgentTurn: async () => null,
-      planWithAssistant: planner,
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
-
-    const reply = await engine.handle("actually use an openai model");
-
-    expect(reply.text).toContain("requesting session's permission policy");
-    expect(reply.text).toContain("returns the final outcome");
-    expect(reply.text).toContain("Proposed:");
-    expect(reply.text).not.toContain("OpenClaw operator UI");
-    expect(reply.text).not.toContain("Say yes to apply");
-    expect(engine.getPendingOperatorProposal()?.operation).toEqual({
-      kind: "set-default-model",
-      model: "openai/gpt-5.5",
     });
   });
 });

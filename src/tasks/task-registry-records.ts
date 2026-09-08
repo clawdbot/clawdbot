@@ -1,4 +1,5 @@
 // Clones and normalizes task registry records at persistence boundaries.
+import { isTerminalTaskStatus } from "./task-executor-policy.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
 export function cloneTaskRecord(record: TaskRecord): TaskRecord {
@@ -20,10 +21,11 @@ export function normalizeTaskTimestamps(task: TaskRecord): TaskRecord {
 
   const startedAt =
     typeof task.startedAt === "number" ? Math.max(task.startedAt, createdAt) : task.startedAt;
+  const terminalAt = isTerminalTaskStatus(task.status)
+    ? (task.endedAt ?? task.lastEventAt ?? task.createdAt)
+    : task.endedAt;
   const endedAt =
-    typeof task.endedAt === "number"
-      ? Math.max(task.endedAt, startedAt ?? createdAt)
-      : task.endedAt;
+    typeof terminalAt === "number" ? Math.max(terminalAt, startedAt ?? createdAt) : terminalAt;
   const lastEventAt =
     typeof task.lastEventAt === "number"
       ? Math.max(task.lastEventAt, endedAt ?? startedAt ?? createdAt)

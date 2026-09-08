@@ -3,7 +3,6 @@ import type {
   ChannelMessageAdapterShape,
   ChannelMessageSendAttemptContext,
   ChannelMessageSendAttemptKind,
-  ChannelMessageSendLifecycleAdapter,
   ChannelMessageSendResult,
 } from "../../channels/message/types.js";
 import { unknownSendReconciliationKinds } from "../../channels/message/types.js";
@@ -112,61 +111,6 @@ function scopeChannelHandler(
   ) as ChannelHandler;
 }
 
-async function runChannelMessageSendWithLifecycle<
-  TResult extends ChannelMessageSendResult,
->(params: {
-  lifecycle?: ChannelMessageSendLifecycleAdapter;
-  ctx: ChannelMessageSendAttemptContext;
-  send: () => Promise<TResult>;
-}): Promise<{ result: TResult; afterCommit?: OutboundDeliveryCommitHook }> {
-  if (!params.lifecycle) {
-    return { result: await params.send() };
-  }
-  let attemptToken: unknown;
-  try {
-    attemptToken = await params.lifecycle.beforeSendAttempt?.(params.ctx);
-    const result = await params.send();
-    if (result.outcome === "not_sent") {
-      return { result };
-    }
-    const successCtx = {
-      ...params.ctx,
-      result,
-      ...(attemptToken !== undefined ? { attemptToken } : {}),
-    };
-    try {
-      await params.lifecycle.afterSendSuccess?.(successCtx);
-    } catch (successHookError: unknown) {
-      log.warn(
-        `channel message send success hook failed after platform send; preserving send result: ${formatErrorMessage(successHookError)}`,
-      );
-    }
-    return {
-      result,
-      ...(params.lifecycle.afterCommit
-        ? {
-            afterCommit: async () => {
-              await params.lifecycle?.afterCommit?.(successCtx);
-            },
-          }
-        : {}),
-    };
-  } catch (error: unknown) {
-    try {
-      await params.lifecycle.afterSendFailure?.({
-        ...params.ctx,
-        error,
-        ...(attemptToken !== undefined ? { attemptToken } : {}),
-      });
-    } catch (cleanupError: unknown) {
-      log.warn(
-        `channel message send failure cleanup failed; preserving original send error: ${formatErrorMessage(cleanupError)}`,
-      );
-    }
-    throw error;
-  }
-}
-
 export async function resolveOutboundDurableFinalDeliverySupport(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -240,18 +184,14 @@ function createPluginHandler(
   const messageMedia = params.message?.send?.media;
   const messagePayload = params.message?.send?.payload;
   const messageLifecycle = params.message?.send?.lifecycle;
+  const durableFinal = params.message?.durableFinal;
+  const supportsUnknownSendKind = (kind: ChannelMessageSendAttemptKind): boolean =>
+    !params.requiredUnknownSendReconciliation ||
+    durableFinal?.capabilities?.reconcileUnknownSend !== true ||
+    durableFinal.reconcileUnknownSendKinds === undefined ||
+    durableFinal.reconcileUnknownSendKinds[kind] === true;
   const assertUnknownSendReconciliationKind = (kind: ChannelMessageSendAttemptKind): void => {
-    const durableFinal = params.message?.durableFinal;
-    if (
-      !params.requiredUnknownSendReconciliation ||
-      durableFinal?.capabilities?.reconcileUnknownSend !== true
-    ) {
-      return;
-    }
-    if (
-      durableFinal.reconcileUnknownSendKinds !== undefined &&
-      durableFinal.reconcileUnknownSendKinds[kind] !== true
-    ) {
+    if (!supportsUnknownSendKind(kind)) {
       throw new Error(
         `Required durable message send became unsupported after outbound transforms: ${kind} unknown-send reconciliation is unavailable for ${params.channel}`,
       );
@@ -286,6 +226,60 @@ function createPluginHandler(
         await params.onDeliveryResult?.(normalizeChannelMessageSendResult(params.channel, result));
       }
     : undefined;
+  const sendMessage = async <TContext extends ChannelMessageSendAttemptContext>(
+    ctx: TContext,
+    send: (ctx: TContext) => Promise<ChannelMessageSendResult>,
+  ): Promise<OutboundDeliveryResult> => {
+    if (!messageLifecycle) {
+      return normalizeChannelMessageSendResult(
+        params.channel,
+        await dispatchToAdapter(ctx, () => send(ctx)),
+      );
+    }
+    let attemptToken: unknown;
+    let result: ChannelMessageSendResult;
+    let afterCommit: OutboundDeliveryCommitHook | undefined;
+    try {
+      attemptToken = await messageLifecycle.beforeSendAttempt?.(ctx);
+      result = await dispatchToAdapter(ctx, () => send(ctx));
+      if (result.outcome !== "not_sent") {
+        const successCtx = {
+          ...ctx,
+          result,
+          ...(attemptToken !== undefined ? { attemptToken } : {}),
+        };
+        try {
+          await messageLifecycle.afterSendSuccess?.(successCtx);
+        } catch (successHookError: unknown) {
+          log.warn(
+            `channel message send success hook failed after platform send; preserving send result: ${formatErrorMessage(successHookError)}`,
+          );
+        }
+        if (messageLifecycle.afterCommit) {
+          afterCommit = async () => {
+            await messageLifecycle.afterCommit?.(successCtx);
+          };
+        }
+      }
+    } catch (error: unknown) {
+      try {
+        await messageLifecycle.afterSendFailure?.({
+          ...ctx,
+          error,
+          ...(attemptToken !== undefined ? { attemptToken } : {}),
+        });
+      } catch (cleanupError: unknown) {
+        log.warn(
+          `channel message send failure cleanup failed; preserving original send error: ${formatErrorMessage(cleanupError)}`,
+        );
+      }
+      throw error;
+    }
+    return attachOutboundDeliveryCommitHook(
+      normalizeChannelMessageSendResult(params.channel, result),
+      afterCommit,
+    );
+  };
   const resolveCtx = (overrides?: OutboundMessageSendOverrides) => ({
     ...baseCtx,
     replyToId: overrides && "replyToId" in overrides ? overrides.replyToId : baseCtx.replyToId,
@@ -326,6 +320,13 @@ function createPluginHandler(
     // over sendMedia), so leaving it out here silently drops media for
     // formatted-only adapters and records the fallback as a plain sent text.
     supportsMedia: Boolean(messageMedia ?? sendMedia ?? outbound?.sendFormattedMedia),
+    // Whole media payloads are optional; keep exact media-only reconciliation
+    // on its declared transport even when a fallback payload method exists.
+    supportsMediaPayload:
+      outbound?.sendPayloadGroupsMedia === true &&
+      (durableFinal?.capabilities ?? outbound?.deliveryCapabilities?.durableFinal)?.payload ===
+        true &&
+      supportsUnknownSendKind("payload"),
     sanitizeText: outbound?.sanitizeText
       ? (payload) =>
           outbound.sanitizeText!({
@@ -440,19 +441,9 @@ function createPluginHandler(
             };
             assertUnknownSendReconciliationKind("payload");
             if (messagePayload) {
-              const messagePayloadCtx = {
-                ...payloadCtx,
-                onDeliveryResult: onMessageDeliveryResult,
-              };
-              const sent = await runChannelMessageSendWithLifecycle({
-                lifecycle: messageLifecycle,
-                ctx: messagePayloadCtx,
-                send: () =>
-                  dispatchToAdapter(messagePayloadCtx, () => messagePayload(messagePayloadCtx)),
-              });
-              return attachOutboundDeliveryCommitHook(
-                normalizeChannelMessageSendResult(params.channel, sent.result),
-                sent.afterCommit,
+              return sendMessage(
+                { ...payloadCtx, onDeliveryResult: onMessageDeliveryResult },
+                messagePayload,
               );
             }
             return dispatchToAdapter(payloadCtx, () => outbound!.sendPayload!(payloadCtx));
@@ -491,16 +482,7 @@ function createPluginHandler(
       };
       assertUnknownSendReconciliationKind("text");
       if (messageText) {
-        const messageTextCtx = { ...textCtx, onDeliveryResult: onMessageDeliveryResult };
-        const sent = await runChannelMessageSendWithLifecycle({
-          lifecycle: messageLifecycle,
-          ctx: messageTextCtx,
-          send: () => dispatchToAdapter(messageTextCtx, () => messageText(messageTextCtx)),
-        });
-        return attachOutboundDeliveryCommitHook(
-          normalizeChannelMessageSendResult(params.channel, sent.result),
-          sent.afterCommit,
-        );
+        return sendMessage({ ...textCtx, onDeliveryResult: onMessageDeliveryResult }, messageText);
       }
       return dispatchToAdapter(textCtx, () => sendText!(textCtx));
     },
@@ -514,15 +496,9 @@ function createPluginHandler(
       };
       assertUnknownSendReconciliationKind("media");
       if (messageMedia) {
-        const messageMediaCtx = { ...mediaCtx, onDeliveryResult: onMessageDeliveryResult };
-        const sent = await runChannelMessageSendWithLifecycle({
-          lifecycle: messageLifecycle,
-          ctx: messageMediaCtx,
-          send: () => dispatchToAdapter(messageMediaCtx, () => messageMedia(messageMediaCtx)),
-        });
-        return attachOutboundDeliveryCommitHook(
-          normalizeChannelMessageSendResult(params.channel, sent.result),
-          sent.afterCommit,
+        return sendMessage(
+          { ...mediaCtx, onDeliveryResult: onMessageDeliveryResult },
+          messageMedia,
         );
       }
       if (sendMedia) {
@@ -564,6 +540,8 @@ const createChannelOutboundContextBase = (params: ChannelHandlerParams) => ({
   forceDocument: params.forceDocument,
   deps: params.deps,
   silent: params.silent,
+  signal: params.abortSignal,
+  abortSignal: params.abortSignal,
   mediaAccess: params.mediaAccess,
   mediaLocalRoots: params.mediaAccess?.localRoots,
   mediaReadFile: params.mediaAccess?.readFile,

@@ -1,4 +1,4 @@
-// Timestamp helpers validate time zones and format log timestamps.
+// Timestamp helpers validate time zones and format log and diagnostic timestamps.
 const validTimeZoneCache = new Map<string, boolean>();
 const timestampFormatterCache = new Map<string, Intl.DateTimeFormat>();
 let hostTimeZone: string | undefined;
@@ -35,6 +35,10 @@ function resolveEffectiveTimeZone(timeZone?: string): string {
 
 function formatOffset(offsetRaw: string): string {
   return offsetRaw === "GMT" ? "+00:00" : offsetRaw.slice(3);
+}
+
+export function formatDiagnosticFilenameTimestamp(date: Date): string {
+  return date.toISOString().replace(/[:.]/g, "-");
 }
 
 function getTimestampParts(date: Date, timeZone?: string) {

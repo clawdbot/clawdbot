@@ -7,31 +7,30 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
-import { findStaleOpenClawUpdateLaunchdJobs } from "../daemon/launchd.js";
-import { resolveGatewayService, type GatewayService } from "../daemon/service.js";
+import {
+  findStaleOpenClawUpdateLaunchdJobs,
+  isLaunchAgentEnabled,
+  isLaunchAgentLoaded,
+  launchAgentPlistExists,
+  resolveLaunchAgentLabel,
+} from "../daemon/launchd.js";
+import { resolveGatewayService } from "../daemon/service.js";
 import { runExec } from "../process/exec.js";
 import { shortenHomePath } from "../utils.js";
 
 const DOCTOR_LAUNCHCTL_TIMEOUT_MS = 5_000;
 
-function resolveHomeDir(): string {
-  return process.env.HOME ?? os.homedir();
-}
-
 /** Returns the macOS marker warning when LaunchAgent writes are locally disabled. */
-function collectMacLaunchAgentOverrideWarning(deps?: {
-  platform?: NodeJS.Platform;
-  homeDir?: string;
-  exists?: (candidate: string) => boolean;
-}): string | null {
-  if ((deps?.platform ?? process.platform) !== "darwin") {
+function collectMacLaunchAgentOverrideWarning(): string | null {
+  if (process.platform !== "darwin") {
     return null;
   }
-  const home = deps?.homeDir ?? resolveHomeDir();
-  const markerCandidates = [path.join(home, ".openclaw", "disable-launchagent")];
-  const exists = deps?.exists ?? fs.existsSync;
-  const markerPath = markerCandidates.find((candidate) => exists(candidate));
-  if (!markerPath) {
+  const markerPath = path.join(
+    process.env.HOME ?? os.homedir(),
+    ".openclaw",
+    "disable-launchagent",
+  );
+  if (!fs.existsSync(markerPath)) {
     return null;
   }
 
@@ -51,20 +50,36 @@ export async function noteMacLaunchAgentOverrides() {
   }
 }
 
+/** Diagnose persistent disablement without taking activation authority from update or Doctor. */
+export async function noteMacDisabledGatewayLaunchAgent(env: NodeJS.ProcessEnv = process.env) {
+  if (
+    process.platform !== "darwin" ||
+    !(await launchAgentPlistExists(env)) ||
+    (await isLaunchAgentLoaded({ env })) ||
+    (await isLaunchAgentEnabled({ env }))
+  ) {
+    return;
+  }
+  const label = resolveLaunchAgentLabel(env);
+  const labelEnv = env.OPENCLAW_LAUNCHD_LABEL?.trim() ? `OPENCLAW_LAUNCHD_LABEL=${label} ` : "";
+  note(
+    [
+      `Gateway LaunchAgent ${label} is installed but unloaded and disabled in launchd.`,
+      "A terminated update helper can leave it disabled across logins. Doctor does not automatically re-enable it.",
+      `After verifying the installation is safe to run, use ${labelEnv}${formatCliCommand("openclaw gateway start", env)} to re-enable and start it. Keep the same state/config overrides.`,
+      `If an update was interrupted or installation safety is uncertain, run ${formatCliCommand("openclaw update", env)} or ${formatCliCommand("openclaw doctor", env)} and ${formatCliCommand("openclaw triage", env)} before starting it.`,
+    ].join("\n"),
+    "Gateway (macOS)",
+  );
+}
+
 /** Returns a warning for stale OpenClaw updater launchd jobs left after interrupted updates. */
-async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(deps?: {
-  platform?: NodeJS.Platform;
-  findJobs?: typeof findStaleOpenClawUpdateLaunchdJobs;
-  env?: NodeJS.ProcessEnv;
-}): Promise<string | null> {
-  const platform = deps?.platform ?? process.platform;
-  if (platform !== "darwin") {
+async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(): Promise<string | null> {
+  if (process.platform !== "darwin") {
     return null;
   }
-  const scanEnv = deps?.env ?? process.env;
-  const jobs = await (deps?.findJobs ?? findStaleOpenClawUpdateLaunchdJobs)(scanEnv).catch(
-    () => [],
-  );
+  const scanEnv = await resolveGatewayServiceEnvForPlatformNotes();
+  const jobs = await findStaleOpenClawUpdateLaunchdJobs(scanEnv).catch(() => []);
   if (jobs.length === 0) {
     return null;
   }
@@ -84,23 +99,10 @@ async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(deps?: {
 }
 
 /** Emits stale updater launchd job notes using the gateway service environment when available. */
-export async function noteMacStaleOpenClawUpdateLaunchdJobs(deps?: {
-  platform?: NodeJS.Platform;
-  findJobs?: typeof findStaleOpenClawUpdateLaunchdJobs;
-  env?: NodeJS.ProcessEnv;
-  service?: Pick<GatewayService, "readCommand">;
-  noteFn?: typeof note;
-}) {
-  const platform = deps?.platform ?? process.platform;
-  const serviceEnv =
-    platform === "darwin" ? await resolveGatewayServiceEnvForPlatformNotes(deps) : deps?.env;
-  const warning = await collectMacStaleOpenClawUpdateLaunchdJobsWarning({
-    env: serviceEnv,
-    findJobs: deps?.findJobs,
-    platform,
-  });
+export async function noteMacStaleOpenClawUpdateLaunchdJobs() {
+  const warning = await collectMacStaleOpenClawUpdateLaunchdJobsWarning();
   if (warning) {
-    (deps?.noteFn ?? note)(warning, "Gateway (macOS)");
+    note(warning, "Gateway (macOS)");
   }
 }
 
@@ -110,8 +112,7 @@ async function launchctlGetenv(name: string): Promise<string | undefined> {
       logOutput: false,
       timeoutMs: DOCTOR_LAUNCHCTL_TIMEOUT_MS,
     });
-    const value = normalizeOptionalString(result.stdout) ?? "";
-    return value.length > 0 ? value : undefined;
+    return normalizeOptionalString(result.stdout);
   } catch {
     return undefined;
   }
@@ -132,32 +133,16 @@ function hasConfigGatewayCreds(cfg: OpenClawConfig): boolean {
 /** Returns a warning for host-wide launchctl gateway auth env overrides. */
 async function collectMacLaunchctlGatewayEnvOverrideWarning(
   cfg: OpenClawConfig,
-  deps?: {
-    platform?: NodeJS.Platform;
-    getenv?: (name: string) => Promise<string | undefined>;
-  },
 ): Promise<string | null> {
-  const platform = deps?.platform ?? process.platform;
-  if (platform !== "darwin") {
+  if (process.platform !== "darwin") {
     return null;
   }
   if (!hasConfigGatewayCreds(cfg)) {
     return null;
   }
 
-  const getenv = deps?.getenv ?? launchctlGetenv;
-  const tokenEntries = [
-    ["OPENCLAW_GATEWAY_TOKEN", await getenv("OPENCLAW_GATEWAY_TOKEN")],
-  ] as const;
-  const passwordEntries = [
-    ["OPENCLAW_GATEWAY_PASSWORD", await getenv("OPENCLAW_GATEWAY_PASSWORD")],
-  ] as const;
-  const tokenEntry = tokenEntries.find(([, value]) => normalizeOptionalString(value));
-  const passwordEntry = passwordEntries.find(([, value]) => normalizeOptionalString(value));
-  const envToken = normalizeOptionalString(tokenEntry?.[1]) ?? "";
-  const envPassword = normalizeOptionalString(passwordEntry?.[1]) ?? "";
-  const envTokenKey = tokenEntry?.[0];
-  const envPasswordKey = passwordEntry?.[0];
+  const envToken = await launchctlGetenv("OPENCLAW_GATEWAY_TOKEN");
+  const envPassword = await launchctlGetenv("OPENCLAW_GATEWAY_PASSWORD");
   if (!envToken && !envPassword) {
     return null;
   }
@@ -165,77 +150,54 @@ async function collectMacLaunchctlGatewayEnvOverrideWarning(
   return [
     "- Host-wide launchctl gateway auth overrides detected.",
     "- Current managed Gateway installs do not need these values unless config intentionally references the env var.",
-    envToken && envTokenKey
-      ? `- \`${envTokenKey}\` is set; explicit environment URL or node-host targets can use a different token than gateway.auth.token.`
+    envToken
+      ? "- `OPENCLAW_GATEWAY_TOKEN` is set; explicit environment URL or node-host targets can use a different token than gateway.auth.token."
       : undefined,
     envPassword
-      ? `- \`${envPasswordKey ?? "OPENCLAW_GATEWAY_PASSWORD"}\` is set; explicit environment URL or node-host targets can use a different password than gateway.auth.password.`
+      ? "- `OPENCLAW_GATEWAY_PASSWORD` is set; explicit environment URL or node-host targets can use a different password than gateway.auth.password."
       : undefined,
     "- Clear overrides and restart the app/gateway:",
-    envTokenKey ? `  launchctl unsetenv ${envTokenKey}` : undefined,
-    envPasswordKey ? `  launchctl unsetenv ${envPasswordKey}` : undefined,
+    envToken ? "  launchctl unsetenv OPENCLAW_GATEWAY_TOKEN" : undefined,
+    envPassword ? "  launchctl unsetenv OPENCLAW_GATEWAY_PASSWORD" : undefined,
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
 }
 
 /** Emits macOS launchctl gateway auth override warnings. */
-export async function noteMacLaunchctlGatewayEnvOverrides(
-  cfg: OpenClawConfig,
-  deps?: {
-    platform?: NodeJS.Platform;
-    getenv?: (name: string) => Promise<string | undefined>;
-    noteFn?: typeof note;
-  },
-) {
-  const warning = await collectMacLaunchctlGatewayEnvOverrideWarning(cfg, deps);
+export async function noteMacLaunchctlGatewayEnvOverrides(cfg: OpenClawConfig) {
+  const warning = await collectMacLaunchctlGatewayEnvOverrideWarning(cfg);
   if (warning) {
-    (deps?.noteFn ?? note)(warning, "Gateway (macOS)");
+    note(warning, "Gateway (macOS)");
   }
 }
 
-async function resolveGatewayServiceEnvForPlatformNotes(deps?: {
-  env?: NodeJS.ProcessEnv;
-  service?: Pick<GatewayService, "readCommand">;
-}): Promise<NodeJS.ProcessEnv> {
-  const baseEnv = deps?.env ?? process.env;
-  const service = deps?.service ?? resolveGatewayService();
+async function resolveGatewayServiceEnvForPlatformNotes(): Promise<NodeJS.ProcessEnv> {
+  const baseEnv = process.env;
+  const service = resolveGatewayService();
   const command = await service.readCommand(baseEnv).catch(() => null);
   return command?.environment
-    ? ({
+    ? {
         ...baseEnv,
         ...command.environment,
-      } satisfies NodeJS.ProcessEnv)
+      }
     : baseEnv;
 }
 
 /** Collects all macOS gateway platform warnings without emitting notes. */
 export async function collectMacGatewayPlatformWarnings(
   cfg: OpenClawConfig,
-  deps?: {
-    platform?: NodeJS.Platform;
-    env?: NodeJS.ProcessEnv;
-    service?: Pick<GatewayService, "readCommand">;
-    findJobs?: typeof findStaleOpenClawUpdateLaunchdJobs;
-  },
 ): Promise<readonly string[]> {
-  const platform = deps?.platform ?? process.platform;
   const warnings: string[] = [];
-  const launchAgentWarning = collectMacLaunchAgentOverrideWarning({ platform });
+  const launchAgentWarning = collectMacLaunchAgentOverrideWarning();
   if (launchAgentWarning) {
     warnings.push(launchAgentWarning);
   }
-  const serviceEnv =
-    platform === "darwin" ? await resolveGatewayServiceEnvForPlatformNotes(deps) : deps?.env;
-  const staleUpdateWarning = await collectMacStaleOpenClawUpdateLaunchdJobsWarning({
-    env: serviceEnv,
-    findJobs: deps?.findJobs,
-    platform,
-  });
+  const staleUpdateWarning = await collectMacStaleOpenClawUpdateLaunchdJobsWarning();
   if (staleUpdateWarning) {
     warnings.push(staleUpdateWarning);
   }
-  const launchctlWarning = await collectMacLaunchctlGatewayEnvOverrideWarning(cfg, { platform });
+  const launchctlWarning = await collectMacLaunchctlGatewayEnvOverrideWarning(cfg);
   if (launchctlWarning) {
     warnings.push(launchctlWarning);
   }
@@ -253,21 +215,13 @@ function isTmpCompileCachePath(cachePath: string): boolean {
 }
 
 /** Emits startup tuning hints for low-power Linux hosts when env settings are suboptimal. */
-export function noteStartupOptimizationHints(
-  env: NodeJS.ProcessEnv = process.env,
-  deps?: {
-    platform?: NodeJS.Platform;
-    arch?: string;
-    totalMemBytes?: number;
-    noteFn?: typeof note;
-  },
-) {
-  const platform = deps?.platform ?? process.platform;
+export function noteStartupOptimizationHints(env: NodeJS.ProcessEnv = process.env) {
+  const platform = process.platform;
   if (platform === "win32") {
     return;
   }
-  const arch = deps?.arch ?? os.arch();
-  const totalMemBytes = deps?.totalMemBytes ?? os.totalmem();
+  const arch = os.arch();
+  const totalMemBytes = os.totalmem();
   const isArmHost = arch === "arm" || arch === "arm64";
   const isLowMemoryLinux =
     platform === "linux" && totalMemBytes > 0 && totalMemBytes <= 8 * 1024 ** 3;
@@ -276,7 +230,6 @@ export function noteStartupOptimizationHints(
     return;
   }
 
-  const noteFn = deps?.noteFn ?? note;
   const compileCache = normalizeOptionalString(env.NODE_COMPILE_CACHE) ?? "";
   const disableCompileCache = normalizeOptionalString(env.NODE_DISABLE_COMPILE_CACHE) ?? "";
   const noRespawn = normalizeOptionalString(env.OPENCLAW_NO_RESPAWN) ?? "";
@@ -314,5 +267,5 @@ export function noteStartupOptimizationHints(
     disableCompileCache ? "  unset NODE_DISABLE_COMPILE_CACHE" : undefined,
   ].filter((line): line is string => Boolean(line));
 
-  noteFn([...lines, ...suggestions].join("\n"), "Startup optimization");
+  note([...lines, ...suggestions].join("\n"), "Startup optimization");
 }

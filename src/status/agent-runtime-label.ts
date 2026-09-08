@@ -5,9 +5,14 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import {
+  isDefaultAgentRuntimeId,
+  normalizeOptionalAgentRuntimeId,
+} from "../agents/agent-runtime-id.js";
 import { isCliProvider, type CliProviderClassifier } from "../agents/model-selection.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session-key.js";
 
 // Status runtime labels turn harness/provider/session state into a short
 // operator-facing name, sanitizing any persisted ACP/backend text.
@@ -19,16 +24,24 @@ const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
   "google-gemini-cli": "Gemini CLI",
 };
 
-export function resolveAgentRuntimeLabel(args: {
+type AgentRuntimeLabelArgs = {
   config?: OpenClawConfig;
   sessionEntry?: Pick<
     SessionEntry,
-    "acp" | "agentRuntimeOverride" | "agentHarnessId" | "modelProvider" | "providerOverride"
+    | "acp"
+    | "agentRuntimeOverride"
+    | "agentHarnessId"
+    | "modelProvider"
+    | "modelSelectionLocked"
+    | "pluginOwnerId"
+    | "providerOverride"
   >;
   resolvedHarness?: string;
   fallbackProvider?: string;
   classifyCliProvider?: CliProviderClassifier;
-}): string {
+};
+
+export function resolveAgentRuntimeLabel(args: AgentRuntimeLabelArgs): string {
   const acpAgentRaw = normalizeOptionalString(args.sessionEntry?.acp?.agent);
   const acpAgent = acpAgentRaw ? sanitizeTerminalText(acpAgentRaw) : undefined;
   // ACP sessions own their displayed runtime because the backend can differ
@@ -41,21 +54,36 @@ export function resolveAgentRuntimeLabel(args: {
 
   const runtimeRaw = normalizeOptionalString(args.resolvedHarness);
   const runtime = normalizeOptionalLowercaseString(runtimeRaw);
+  let label: string;
   if (runtime && runtime !== "auto" && runtime !== "default") {
-    return AGENT_RUNTIME_LABELS[runtime] ?? sanitizeTerminalText(runtimeRaw ?? runtime);
+    label = AGENT_RUNTIME_LABELS[runtime] ?? sanitizeTerminalText(runtimeRaw ?? runtime);
+  } else {
+    const providerRaw =
+      normalizeOptionalString(args.sessionEntry?.modelProvider) ??
+      normalizeOptionalString(args.sessionEntry?.providerOverride) ??
+      normalizeOptionalString(args.fallbackProvider);
+    const provider = providerRaw ? sanitizeTerminalText(providerRaw) : undefined;
+    const providerRuntime = normalizeOptionalLowercaseString(providerRaw);
+    if (
+      provider &&
+      (args.classifyCliProvider?.(provider) ?? isCliProvider(provider, args.config))
+    ) {
+      label = AGENT_RUNTIME_LABELS[providerRuntime ?? ""] ?? `${provider} (cli)`;
+    } else {
+      label = expectDefined(AGENT_RUNTIME_LABELS.openclaw, "OpenClaw runtime label");
+    }
   }
 
-  const providerRaw =
-    normalizeOptionalString(args.sessionEntry?.modelProvider) ??
-    normalizeOptionalString(args.sessionEntry?.providerOverride) ??
-    normalizeOptionalString(args.fallbackProvider);
-  const provider = providerRaw ? sanitizeTerminalText(providerRaw) : undefined;
-  if (provider && (args.classifyCliProvider?.(provider) ?? isCliProvider(provider, args.config))) {
-    return (
-      AGENT_RUNTIME_LABELS[normalizeOptionalLowercaseString(providerRaw) ?? ""] ??
-      `${provider} (cli)`
-    );
+  const recordedRuntime = normalizeOptionalAgentRuntimeId(args.sessionEntry?.agentHarnessId);
+  // Unlocked harness ids describe transcript history; locked ids describe an active pin.
+  const recordedLabel = recordedRuntime
+    ? (AGENT_RUNTIME_LABELS[recordedRuntime] ?? sanitizeTerminalText(recordedRuntime))
+    : undefined;
+  if (!recordedRuntime || isDefaultAgentRuntimeId(recordedRuntime) || recordedLabel === label) {
+    return label;
   }
-
-  return expectDefined(AGENT_RUNTIME_LABELS.openclaw, "OpenClaw runtime label");
+  const relationship = resolveSessionPinnedHarnessId(args.sessionEntry)
+    ? "session pin"
+    : "previous runtime";
+  return `${label} (${relationship}: ${recordedLabel})`;
 }

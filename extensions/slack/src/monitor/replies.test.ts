@@ -34,6 +34,7 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
 let deliverReplies: typeof import("./replies.js").deliverReplies;
 let createSlackReplyDeliveryPlan: typeof import("./replies.js").createSlackReplyDeliveryPlan;
 let resolveSlackThreadTs: typeof import("./replies.js").resolveSlackThreadTs;
+import { prepareSlackReply } from "../reply-blocks.js";
 import { deliverSlackSlashReplies, sanitizeSlackMonitorReplyPayload } from "./replies.js";
 
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
@@ -69,7 +70,7 @@ describe("sanitizeSlackMonitorReplyPayload", () => {
 });
 
 function baseParams(overrides?: Record<string, unknown>) {
-  return {
+  const params = {
     cfg: SLACK_TEST_CFG,
     replies: [{ text: "hello" }],
     target: "C123",
@@ -79,6 +80,7 @@ function baseParams(overrides?: Record<string, unknown>) {
     replyToMode: "off" as const,
     ...overrides,
   };
+  return { ...params, replies: params.replies.map(prepareSlackReply) };
 }
 
 function largePortableTablePresentation() {
@@ -258,36 +260,37 @@ describe("deliverReplies identity passthrough", () => {
     };
     const enterpriseCfg = { channels: { slack: {} } };
 
-    const result = await deliverReplies(
-      baseParams({
-        cfg: enterpriseCfg,
-        accountId: "work",
-        identity,
-        metadata,
-        eventScope,
-        mediaMaxBytes: 1024,
-        replyThreadTs: "thread-ts",
-        replies: [
-          {
-            text: "Revenue summary",
-            mediaUrl: "https://example.com/report.png",
-            presentation: {
-              blocks: [
-                {
-                  type: "chart",
-                  chartType: "pie",
-                  title: "Revenue mix",
-                  segments: [
-                    { label: "Product", value: 60 },
-                    { label: "Services", value: 40 },
-                  ],
-                },
-              ],
-            },
+    const params = baseParams({
+      cfg: enterpriseCfg,
+      accountId: "work",
+      identity,
+      metadata,
+      eventScope,
+      mediaMaxBytes: 1024,
+      replyThreadTs: "thread-ts",
+      replies: [
+        {
+          text: "Revenue summary",
+          mediaUrl: "https://example.com/report.png",
+          presentation: {
+            blocks: [
+              {
+                type: "chart",
+                chartType: "pie",
+                title: "Revenue mix",
+                segments: [
+                  { label: "Product", value: 60 },
+                  { label: "Services", value: 40 },
+                ],
+              },
+            ],
           },
-        ],
-      }),
-    );
+        },
+      ],
+    });
+    // Preview materialization must not consume the media caption or add it to the chart message.
+    params.replies[0]?.resolvePreview();
+    const result = await deliverReplies(params);
 
     expect(sendMock).toHaveBeenCalledTimes(2);
     expect(sendMock).toHaveBeenNthCalledWith(1, "C123", "Revenue summary", {
@@ -595,6 +598,29 @@ describe("deliverSlackSlashReplies chunking", () => {
       blocks,
       mrkdwn: false,
       response_type: "in_channel",
+    });
+  });
+
+  it("delivers a valid field-rich section in one slash response", async () => {
+    const respond = vi.fn(async () => undefined);
+    const fields = ["Alpha", "Beta", "Gamma"].map((label) => ({
+      type: "plain_text",
+      text: label.padEnd(1_500, "."),
+    }));
+    const blocks = [{ type: "section", fields }];
+
+    await deliverSlackSlashReplies({
+      replies: [{ channelData: { slack: { blocks } } }],
+      respond,
+      ephemeral: true,
+      textLimit: 8000,
+    });
+
+    expect(respond).toHaveBeenCalledExactlyOnceWith({
+      blocks,
+      text: fields.map((field) => field.text).join("\n"),
+      mrkdwn: false,
+      response_type: "ephemeral",
     });
   });
 
@@ -1482,7 +1508,7 @@ describe("deliverReplies message_sent hook", () => {
         await deliverReplies(
           baseParams({
             replies: [payload],
-            eventScope: { teamId: "T123", client: { chat: { postMessage } } },
+            eventScope: { teamId: "T123", client: {}, writeClient: { chat: { postMessage } } },
           }),
         ),
       onError,

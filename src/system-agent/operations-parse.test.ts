@@ -4,22 +4,27 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import { isPersistentSystemAgentOperation, parseSystemAgentOperation } from "./operations.js";
 import {
-  installSystemAgentPluginMetadataTestSnapshot,
+  isPersistentSystemAgentOperation,
+  parseSystemAgentOperation as parseSystemAgentOperationImpl,
+} from "./operations.js";
+import {
+  createSystemAgentPluginMetadataTestSnapshot,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
 
 let pluginMetadata: SystemAgentPluginMetadataTestSnapshot | undefined;
 
+const parseSystemAgentOperation: typeof parseSystemAgentOperationImpl = (...args) =>
+  pluginMetadata!.run(() => parseSystemAgentOperationImpl(...args));
+
 beforeAll(() => {
   const config = {};
   setRuntimeConfigSnapshot(config, config);
-  pluginMetadata = installSystemAgentPluginMetadataTestSnapshot(config);
+  pluginMetadata = createSystemAgentPluginMetadataTestSnapshot(config);
 });
 
 afterAll(() => {
-  pluginMetadata?.restore();
   clearRuntimeConfigSnapshot();
 });
 

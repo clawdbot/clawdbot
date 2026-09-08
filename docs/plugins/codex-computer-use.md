@@ -277,7 +277,7 @@ reconciliation so OpenClaw does not override that selection.
 ## Remote marketplaces
 
 Remote marketplace support was introduced in Codex 0.146.1 and remains
-available in OpenClaw's pinned Codex 0.152.1. OpenClaw passes the opaque remote
+available in OpenClaw's pinned Codex 0.153.4. OpenClaw passes the opaque remote
 plugin ID returned by Codex to `plugin/read` and `plugin/install`; a
 human-readable plugin name is not a valid substitute.
 
@@ -359,7 +359,7 @@ tools when available, and the specific message for the failing setup step.
 This Codex-owned Computer Use path runs on macOS, where the MCP server may need
 local OS permissions before it can inspect or control apps. (For cross-platform
 desktop control on Windows and Linux node hosts, see the
-[cua-computer fulfiller](/nodes/computer-use#windows-and-linux-experimental%2C-direct-sdk).)
+[cua-computer fulfiller](/nodes/computer-use#windows-and-linux-experimental-direct-sdk).)
 If OpenClaw says Computer Use is installed but the MCP server is unavailable,
 verify the Codex-side Computer Use setup first:
 

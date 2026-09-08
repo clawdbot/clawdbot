@@ -85,6 +85,60 @@ const fixtures: ParityFixture[] = [
     },
   },
   {
+    name: "reasoning summary text and part completion preserve delta order",
+    events: [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: { id: "rs_summary", type: "reasoning", summary: [], content: [] },
+      },
+      {
+        type: "response.reasoning_summary_part.added",
+        output_index: 0,
+        item_id: "rs_summary",
+        summary_index: 0,
+        part: { type: "summary_text", text: "" },
+      },
+      {
+        type: "response.reasoning_summary_text.delta",
+        output_index: 0,
+        item_id: "rs_summary",
+        summary_index: 0,
+        delta: "summary",
+      },
+      {
+        type: "response.reasoning_summary_part.done",
+        output_index: 0,
+        item_id: "rs_summary",
+        summary_index: 0,
+        part: { type: "summary_text", text: "summary" },
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          id: "rs_summary",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "summary" }],
+          content: [],
+        },
+      },
+      completed("resp_summary"),
+    ],
+    canonical: {
+      events: [
+        { type: "thinking_start", contentIndex: 0 },
+        { type: "thinking_delta", contentIndex: 0, delta: "summary" },
+        { type: "thinking_delta", contentIndex: 0, delta: "\n\n" },
+        { type: "thinking_end", contentIndex: 0, content: "summary" },
+      ],
+      content: [{ type: "thinking", thinking: "summary", encrypted: false }],
+      responseId: "resp_summary",
+      stopReason: "stop",
+      error: null,
+    },
+  },
+  {
     name: "stream close without terminal response",
     events: [
       {
@@ -614,6 +668,67 @@ const fixtures: ParityFixture[] = [
         { type: "text", text: "I cannot help with that." },
       ],
       responseId: "resp_reasoning_terminal_refusal",
+      stopReason: "stop",
+      error: null,
+    },
+  },
+  {
+    name: "streamed refusal uses the text delta lifecycle",
+    events: [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: {
+          id: "msg_refusal",
+          type: "message",
+          role: "assistant",
+          status: "in_progress",
+          content: [],
+        },
+      },
+      {
+        type: "response.content_part.added",
+        output_index: 0,
+        item_id: "msg_refusal",
+        content_index: 0,
+        part: { type: "refusal", refusal: "" },
+      },
+      {
+        type: "response.refusal.delta",
+        output_index: 0,
+        item_id: "msg_refusal",
+        content_index: 0,
+        delta: "I cannot",
+      },
+      {
+        type: "response.refusal.delta",
+        output_index: 0,
+        item_id: "msg_refusal",
+        content_index: 0,
+        delta: " help.",
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          id: "msg_refusal",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "refusal", refusal: "I cannot help." }],
+        },
+      },
+      completed("resp_refusal"),
+    ],
+    canonical: {
+      events: [
+        { type: "text_start", contentIndex: 0 },
+        { type: "text_delta", contentIndex: 0, delta: "I cannot" },
+        { type: "text_delta", contentIndex: 0, delta: " help." },
+        { type: "text_end", contentIndex: 0, content: "I cannot help." },
+      ],
+      content: [{ type: "text", text: "I cannot help." }],
+      responseId: "resp_refusal",
       stopReason: "stop",
       error: null,
     },

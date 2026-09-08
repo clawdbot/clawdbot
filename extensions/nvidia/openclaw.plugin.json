@@ -1,6 +1,5 @@
 {
   "id": "nvidia",
-  "icon": "https://cdn.simpleicons.org/nvidia",
   "activation": {
     "onStartup": false
   },
@@ -21,6 +20,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "nvidia": "nvidia"
+    },
     "providers": {
       "nvidia": {
         "baseUrl": "https://integrate.api.nvidia.com/v1",

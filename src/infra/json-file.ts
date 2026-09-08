@@ -21,13 +21,23 @@ function resolveJsonSymlinkTarget(pathname: string): string | undefined {
   return path.resolve(path.dirname(pathname), fs.readlinkSync(pathname));
 }
 
-function resolveJsonSaveTarget(pathname: string): string {
-  const target = resolveJsonSymlinkTarget(pathname);
-  if (!target) {
-    return pathname;
+export function resolveJsonSaveTarget(pathname: string): string {
+  let currentPath = pathname;
+  const visited = new Set<string>();
+  while (fs.lstatSync(currentPath, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    const normalizedPath = path.resolve(currentPath);
+    if (visited.has(normalizedPath)) {
+      throw Object.assign(new Error(`Too many symlink levels while resolving ${pathname}`), {
+        code: "ELOOP",
+      });
+    }
+    visited.add(normalizedPath);
+    currentPath = path.resolve(path.dirname(currentPath), fs.readlinkSync(currentPath));
   }
-  fs.statSync(path.dirname(target));
-  return target;
+  if (visited.size > 0) {
+    fs.statSync(path.dirname(currentPath));
+  }
+  return currentPath;
 }
 
 export function writeJsonTarget(pathname: string, data: unknown): void {

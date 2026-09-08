@@ -99,14 +99,14 @@ async function readSystemdManagerCommand(
   const unavailable = () => new Error("Effective systemd service command could not be inspected.");
   const timeoutMs =
     opts?.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : SYSTEMD_MANAGER_QUERY_TIMEOUT_MS;
-  const deadlineAt = Date.now() + timeoutMs;
+  const deadlineAt = performance.now() + timeoutMs;
   let remainingCalls = 3;
   // All manager D-Bus calls share one deadline so wedged reads reach local fallback promptly.
   const query = async (args: string[], signatures: string[]): Promise<unknown[] | null> => {
     const result = await execBusctlUser(
       env,
       ["--json=short", ...args],
-      Math.max(1, Math.floor((deadlineAt - Date.now()) / remainingCalls--)),
+      Math.max(1, Math.floor((deadlineAt - performance.now()) / remainingCalls--)),
     );
     if (result.code !== 0) {
       if (
@@ -252,7 +252,7 @@ async function readSystemdDropInOverrides(
     const content = await fs.readFile(pathname, "utf8");
     let inService = false;
     // Loaded drop-ins own directives even when their current values equal the managed base.
-    for (const rawLine of content.replace(/\\\r?\n\s*/g, " ").split(/\r?\n/)) {
+    for (const rawLine of splitSystemdLogicalLines(content)) {
       const line = rawLine.trim();
       if (!line || line.startsWith("#") || line.startsWith(";")) {
         continue;

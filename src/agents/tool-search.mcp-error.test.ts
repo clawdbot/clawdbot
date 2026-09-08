@@ -8,9 +8,10 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import { runAgentLoop, type AgentEvent, type AgentMessage } from "../plugin-sdk/agent-core.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
-import { runAgentLoop, type AgentEvent, type AgentMessage } from "./runtime/index.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 import { isToolResultError } from "./tool-result-error.js";
 import {
   applyToolSearchCatalog,
@@ -34,14 +35,7 @@ const model: Model = {
   maxTokens: 1000,
 };
 
-const testUsage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const testUsage = createZeroUsageFixture();
 
 function makeMcpRuntime(result: CallToolResult): SessionMcpRuntime {
   const tool = {
@@ -142,15 +136,16 @@ describe("Tool Search MCP failures", () => {
       status: "failed",
     });
     const wrappedDetails = wrappedResult.details as {
-      tool: unknown;
+      tool: { id: string; name: string; source: string };
       result: unknown;
       status: unknown;
     };
+    const { id, name, source } = wrappedDetails.tool;
     expect(wrappedResult.content).toEqual([
       {
         type: "text",
         text: expect.stringContaining(
-          JSON.stringify({ tool: wrappedDetails.tool, result: wrappedDetails.result }, null, 2),
+          JSON.stringify({ tool: { id, name, source }, result: wrappedDetails.result }, null, 2),
         ),
       },
     ]);

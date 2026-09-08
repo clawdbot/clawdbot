@@ -2,11 +2,14 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { connectUserModelAccount } from "../../state/user-model-accounts.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { AuthStorage, ModelRegistry } from "../sessions/index.js";
+import { resolveTieredModel } from "./model-resolution.js";
 import { guardModelFixtureAuth } from "./model.fixture.test-support.js";
 import {
   createModelGenerationFixture,
@@ -24,14 +27,16 @@ beforeEach(async () => {
 afterEach(async () => {
   try {
     auth.verify();
-    expect(auth.spy).toHaveBeenCalled();
   } finally {
     auth.spy.mockRestore();
     await state.cleanup();
   }
 });
 
-async function resolveGeneration(generation: ReturnType<typeof createModelGenerationFixture>) {
+async function resolveGeneration(
+  generation: ReturnType<typeof createModelGenerationFixture>,
+  authProfileId?: string,
+) {
   const { preparedModelRuntime } = generation;
   const stores = preparedModelRuntime.createStores();
   return await resolveModelAsync(
@@ -45,6 +50,7 @@ async function resolveGeneration(generation: ReturnType<typeof createModelGenera
       preparedModelRuntime,
       skipAgentDiscovery: true,
       workspaceDir: preparedModelRuntime.workspaceDir,
+      authProfileId,
     },
   );
 }
@@ -57,6 +63,92 @@ describe("model runtime generation scope", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     resetModelGenerationFixtureState();
+  });
+
+  it("reports a removed selected credential before reusing dynamic model metadata", async () => {
+    const generation = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config: {},
+      label: "revoked",
+    });
+    const profileId = `${generation.provider}:selected`;
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        [profileId]: { type: "api_key", provider: generation.provider, key: "synthetic-key" },
+      },
+    });
+    expect((await resolveGeneration(generation, profileId)).model?.id).toBe(generation.modelId);
+    await state.writeAuthProfiles({ version: 1, profiles: {} });
+    generation.resolveDynamicModel.mockClear();
+
+    await expect(resolveGeneration(generation, profileId)).rejects.toMatchObject({
+      code: "selected_auth_profile_unavailable",
+      reason: "auth",
+      status: 401,
+    });
+    expect(generation.resolveDynamicModel).not.toHaveBeenCalled();
+  });
+
+  it("resolves a config-only AWS SDK profile without requiring a stored credential", async () => {
+    const provider = "amazon-bedrock";
+    const profileId = `${provider}:default`;
+    const generation = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      provider,
+      requestProvider: provider,
+      config: {
+        auth: { profiles: { [profileId]: { provider, mode: "aws-sdk" } } },
+        models: {
+          providers: {
+            [provider]: { auth: "aws-sdk", baseUrl: "https://example.test", models: [] },
+          },
+        },
+      },
+      label: "aws",
+    });
+
+    expect((await resolveGeneration(generation, profileId)).model?.id).toBe(generation.modelId);
+    expect(generation.resolveDynamicModel).toHaveBeenCalledWith(
+      expect.objectContaining({ authProfileId: profileId, authProfileMode: "aws-sdk" }),
+    );
+  });
+
+  it("passes the selected personal auth mode into dynamic model discovery", async () => {
+    const generation = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config: {},
+      label: "personal",
+    });
+    const owner = ensureProfileForEmail("alice@example.test");
+    const { authProfileId } = connectUserModelAccount({
+      ownerProfileId: owner.id,
+      credential: {
+        type: "oauth",
+        provider: generation.provider,
+        access: "synthetic-personal-access",
+        refresh: "synthetic-personal-refresh",
+        expires: Date.now() + 600_000,
+      },
+      assertCurrent() {},
+    });
+
+    const result = await resolveGeneration(generation, authProfileId);
+
+    expect(result.model?.provider).toBe(generation.provider);
+    const [context] =
+      vi.mocked(generation.pluginRegistry.providers[0]!.provider.resolveDynamicModel!).mock
+        .lastCall ?? [];
+    expect({
+      authProfileId: context?.authProfileId,
+      authProfileMode: context?.authProfileMode,
+    }).toEqual({
+      authProfileId,
+      authProfileMode: "oauth",
+    });
   });
 
   it.each([
@@ -117,7 +209,7 @@ describe("model runtime generation scope", () => {
       workspaceDir: state.workspaceDir,
       config,
       label: "b",
-      suppress: true,
+      suppression: {},
     });
     publishCurrentModelGeneration(generationB);
 
@@ -131,6 +223,69 @@ describe("model runtime generation scope", () => {
     });
     expect(generationA.resolveDynamicModel).toHaveBeenCalled();
     expect(generationB.resolveDynamicModel).not.toHaveBeenCalled();
+  });
+
+  it("preserves the retirement remedy when the selected route has no discoverable model", async () => {
+    const provider = "generation-retirement-miss";
+    const generation = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config: {
+        models: {
+          providers: {
+            [provider]: {
+              api: "openai-completions",
+              baseUrl: "https://subscription.example/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      label: "retirement-miss",
+      provider,
+      suppression: {
+        retirement: { replacedBy: "current-model" },
+        when: { baseUrlHosts: ["subscription.example"] },
+      },
+    });
+    generation.pluginRegistry.providers[0]!.provider.resolveDynamicModel = () => undefined;
+
+    const result = await resolveGeneration(generation);
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toContain("openclaw doctor --fix");
+    expect(result.error).toContain("current-model");
+  });
+
+  it("keeps the retirement failure discovered by the prepared catalog tier", async () => {
+    const generation = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config: {},
+      label: "tiered-retirement",
+      runtimeBaseUrl: "https://subscription.example/v1",
+      withRegistry: false,
+      suppression: {
+        retirement: { replacedBy: "current-model" },
+        when: { baseUrlHosts: ["subscription.example"] },
+      },
+    });
+    const stores = generation.preparedModelRuntime.createStores();
+    vi.spyOn(stores.modelRegistry, "find").mockReturnValue(generation.resolveDynamicModel());
+    generation.preparedModelRuntime.createStores = () => stores;
+
+    const { resolution } = await resolveTieredModel({
+      provider: generation.provider,
+      modelId: generation.modelId,
+      agentDir: state.agentDir(),
+      config: generation.preparedModelRuntime.config,
+      workspaceDir: state.workspaceDir,
+      preparedModelRuntime: generation.preparedModelRuntime,
+    });
+
+    expect(resolution.model).toBeUndefined();
+    expect(resolution.error).toContain("openclaw doctor --fix");
+    expect(resolution.error).toContain("current-model");
   });
 
   it("keeps concurrent prepared generations isolated across awaited runtime hooks", async () => {

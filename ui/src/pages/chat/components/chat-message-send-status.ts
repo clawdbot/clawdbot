@@ -31,36 +31,40 @@ export function renderChatSendStatus(
         failure.state === "unconfirmed" ? "chat.queue.deliveryUnconfirmed" : "chat.queue.notSent",
       )}</span
     >
-    ${retry
-      ? html`
-          <span aria-hidden="true">·</span>
-          <button
-            class="chat-send-status__action chat-send-status__retry"
-            type="button"
-            aria-label=${action?.label ?? t("chat.queue.retryQueuedMessage")}
-            @click=${() => retry(failure.id)}
-          >
-            ${action?.label ?? t("chat.queue.retry")}
-          </button>
-        `
-      : nothing}
-    ${discard
-      ? html`
-          <span aria-hidden="true">·</span>
-          <button
-            class="chat-send-status__action chat-send-status__discard"
-            type="button"
-            title=${t("chat.queue.discardPendingMessage")}
-            @click=${(event: MouseEvent) => {
-              // Chromium may retarget click 2 to the next row after removal.
-              if (event.detail <= 1) {
-                discard(failure.id);
-              }
-            }}
-          >
-            ${t("chat.queue.discard")}
-          </button>
-        `
-      : nothing}
+    ${
+      retry
+        ? html`
+            <span aria-hidden="true">·</span>
+            <button
+              class="chat-send-status__action chat-send-status__retry"
+              type="button"
+              aria-label=${action?.label ?? t("chat.queue.retryQueuedMessage")}
+              @click=${() => retry(failure.id)}
+            >
+              ${action?.label ?? t("chat.queue.retry")}
+            </button>
+          `
+        : nothing
+    }
+    ${
+      discard
+        ? html`
+            <span aria-hidden="true">·</span>
+            <button
+              class="chat-send-status__action chat-send-status__discard"
+              type="button"
+              title=${t("chat.queue.discardPendingMessage")}
+              @click=${(event: MouseEvent) => {
+                // Chromium may retarget click 2 to the next row after removal.
+                if (event.detail <= 1) {
+                  discard(failure.id);
+                }
+              }}
+            >
+              ${t("chat.queue.discard")}
+            </button>
+          `
+        : nothing
+    }
   </span>`;
 }

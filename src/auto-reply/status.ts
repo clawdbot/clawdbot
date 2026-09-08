@@ -9,7 +9,7 @@ export {
   buildHelpMessage,
 } from "./command-status-builders.js";
 export { formatContextUsageShort } from "../status/status-message.js";
-export { formatTokenCount } from "../utils/usage-format.js";
+export { formatTokenCount } from "../utils/token-format.js";
 
 type ToolsMessageItem = {
   id: string;

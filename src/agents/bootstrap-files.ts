@@ -303,22 +303,25 @@ type BootstrapFileResolutionParams = {
   readOnlyState?: boolean;
 };
 
+// Diagnostics project declared files without executing registered hook handlers.
+type BootstrapHookApplication = "none" | "registered" | { projected: WorkspaceBootstrapFile[] };
+
 /** Prepare the same bounded workspace facts without invoking run-owned bootstrap hooks. */
 export async function resolveBootstrapFilesForPreparation(
   params: BootstrapFileResolutionParams,
 ): Promise<WorkspaceBootstrapFile[]> {
-  return resolveBootstrapFiles({ ...params, readOnlyState: true }, false);
+  return resolveBootstrapFiles({ ...params, readOnlyState: true }, "none");
 }
 
 export async function resolveBootstrapFilesForRun(
   params: BootstrapFileResolutionParams,
 ): Promise<WorkspaceBootstrapFile[]> {
-  return resolveBootstrapFiles(params, true);
+  return resolveBootstrapFiles(params, "registered");
 }
 
 async function resolveBootstrapFiles(
   params: BootstrapFileResolutionParams,
-  applyHooks: boolean,
+  hooks: BootstrapHookApplication,
 ): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
   const session = {
@@ -369,16 +372,18 @@ async function resolveBootstrapFiles(
     runKind: params.runKind,
   });
 
-  const updated = applyHooks
-    ? await applyBootstrapHookOverrides({
-        files: bootstrapFiles,
-        workspaceDir: params.workspaceDir,
-        config: params.config,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        agentId: params.agentId,
-      })
-    : bootstrapFiles;
+  const hooked =
+    hooks === "registered"
+      ? await applyBootstrapHookOverrides({
+          files: bootstrapFiles,
+          workspaceDir: params.workspaceDir,
+          config: params.config,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          agentId: params.agentId,
+        })
+      : bootstrapFiles;
+  const updated = typeof hooks === "object" ? [...hooked, ...hooks.projected] : hooked;
   const filteredUpdated = filterCompletedWorkspaceBootstrapFile(
     filterBootstrapFilesAfterHooks({
       files: updated,
@@ -408,6 +413,19 @@ export async function resolveBootstrapContextForRun(params: {
   contextFiles: EmbeddedContextFile[];
 }> {
   const bootstrapFiles = await resolveBootstrapFilesForRun(params);
+  const contextFiles = buildBootstrapContextForFiles(bootstrapFiles, params);
+  return { bootstrapFiles, contextFiles };
+}
+
+/** Applies declared additions through the normal bootstrap filters and budgets. */
+export async function resolveBootstrapContextWithProjectedHookFiles(
+  params: Pick<BootstrapFileResolutionParams, "workspaceDir" | "config" | "agentId">,
+  projected: WorkspaceBootstrapFile[],
+): ReturnType<typeof resolveBootstrapContextForRun> {
+  const bootstrapFiles = await resolveBootstrapFiles(
+    { ...params, readOnlyState: true },
+    { projected },
+  );
   const contextFiles = buildBootstrapContextForFiles(bootstrapFiles, params);
   return { bootstrapFiles, contextFiles };
 }

@@ -19,6 +19,7 @@ import {
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
@@ -97,9 +98,6 @@ type MigratedBindingRow =
     };
 
 async function collectSessionSurfaces(params: MigrationEnvironment): Promise<SessionSurface[]> {
-  // Doctor enumeration cold-loads this closure; session-store-runtime pulls the
-  // session-accessor/kysely graph, so it stays behind lazy imports in async bodies.
-  const { resolveStorePath } = await import("openclaw/plugin-sdk/session-store-runtime");
   const surfaces = new Map<string, SessionSurface>();
   const stateRoot = await canonicalPathFromExistingAncestor(params.stateDir);
   const add = async (
@@ -318,7 +316,6 @@ async function collectBindingOwners(
   surfaces: SessionSurface[],
   params: MigrationEnvironment,
 ): Promise<BindingOwnerCollection> {
-  const { resolveStorePath } = await import("openclaw/plugin-sdk/session-store-runtime");
   const sourcePaths = new Set(
     await Promise.all(
       sources.map((source) => canonicalPathFromExistingAncestor(source.transcriptPath)),

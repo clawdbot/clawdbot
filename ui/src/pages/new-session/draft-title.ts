@@ -143,6 +143,7 @@ export class NewSessionTitleController implements ReactiveController {
       submission.visibility === "incognito" ||
       submission.pendingPlacement.sessionKey ||
       !place.agentId ||
+      !place.modelControl.accountSelectionReady() ||
       !canCallGatewayMethod(snapshot, "sessions.title.prepare", "operator.write") ||
       !snapshot?.client
     ) {
@@ -153,7 +154,7 @@ export class NewSessionTitleController implements ReactiveController {
       ownerKey: routeKey(data),
       agentId: place.agentId,
       message: submission.message.trim(),
-      model: place.modelControl.selected,
+      model: place.modelControl.modelForSubmission(),
     };
     // A failed navigation/retry may leave this page mounted after creation. The
     // submitted draft cannot start more inference; only a new draft can do so.

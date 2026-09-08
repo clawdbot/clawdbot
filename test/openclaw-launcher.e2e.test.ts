@@ -194,7 +194,7 @@ describe("openclaw launcher", () => {
       } else {
         expect(result.status, version).toBe(1);
         expect(result.stderr, version).toContain(
-          `openclaw: Node.js >=22.22.3 <23, >=24.15.0 <25, or >=25.9.0 is required (current: v${version}).`,
+          `openclaw: Node.js >=24.16.0 <25, or >=26.1.0 is required (current: v${version}).`,
         );
       }
     }
@@ -225,7 +225,7 @@ describe("openclaw launcher", () => {
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain(
-      "openclaw: Node.js >=22.22.3 <23, >=24.15.0 <25, or >=25.9.0 is required (current: v20.0.0).",
+      "openclaw: Node.js >=24.16.0 <25, or >=26.1.0 is required (current: v20.0.0).",
     );
     expect(result.stderr).toContain("nvm install 26");
     expect(result.stderr).not.toContain("TypeError");

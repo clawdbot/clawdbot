@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { ensureAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { startOAuthLoopbackCallbackServer } from "../infra/oauth-loopback-callback.js";
 import { escapeHtml } from "../shared/html-escape.js";

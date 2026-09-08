@@ -1,5 +1,6 @@
 // Gateway node pairing auto-approval policy.
 // Allows first-time node pairing from configured CIDRs while rejecting upgrades/browser paths.
+import type { DevicePairingPendingRequest } from "../infra/device-pairing.types.js";
 import { isTrustedProxyAddress } from "./net.js";
 import type { NodePairingAutoApproveClientIpSource } from "./node-pairing-auto-approve.types.js";
 
@@ -8,6 +9,18 @@ type NodePairingAutoApproveReason =
   | "role-upgrade"
   | "scope-upgrade"
   | "metadata-upgrade";
+
+/** Remote auto-approval may grant only the fresh, capability-free node request it proved. */
+export function isScopelessNodePairingRequest(
+  request: Pick<DevicePairingPendingRequest, "role" | "roles" | "scopes" | "isRepair">,
+): boolean {
+  return (
+    request.isRepair !== true &&
+    (request.scopes ?? []).length === 0 &&
+    (request.role === undefined || request.role === "node") &&
+    (request.roles ?? []).every((role) => role === "node")
+  );
+}
 
 /** Classifies how the gateway learned the client IP for node auto-approval. */
 export function resolveNodePairingClientIpSource(params: {

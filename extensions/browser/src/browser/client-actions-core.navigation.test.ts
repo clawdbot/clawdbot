@@ -68,11 +68,14 @@ describe("browser navigation client actions", () => {
     },
   );
 
-  it("preserves the existing navigation watchdog when no timeout is requested", async () => {
+  it("keeps the default navigation timeout inside its transport watchdog", async () => {
     await browserNavigate(undefined, { url: "https://example.com" });
 
     const request = lastNavigationRequest();
-    expect(request.options.timeoutMs).toBe(20_000);
-    expect(JSON.parse(request.options.body ?? "{}")).toEqual({ url: "https://example.com" });
+    expect(request.options.timeoutMs).toBe(25_000);
+    expect(JSON.parse(request.options.body ?? "{}")).toEqual({
+      url: "https://example.com",
+      timeoutMs: 20_000,
+    });
   });
 });

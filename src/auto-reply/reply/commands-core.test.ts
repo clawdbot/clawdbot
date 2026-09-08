@@ -220,8 +220,8 @@ describe("emitResetCommandHooks", () => {
 
 // Tests command send policy behavior for visible replies and message-tool routing.
 
-const loadCommandHandlersMock = vi.hoisted(
-  (): ReturnType<typeof vi.fn<() => CommandHandler[]>> => vi.fn<() => CommandHandler[]>(() => []),
+const loadCommandHandlersMock = vi.hoisted((): ReturnType<typeof vi.fn<() => CommandHandler[]>> =>
+  vi.fn<() => CommandHandler[]>(() => []),
 );
 
 vi.mock("./commands-handlers.runtime.js", () => ({

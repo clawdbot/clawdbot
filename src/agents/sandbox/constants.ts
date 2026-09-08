@@ -26,6 +26,7 @@ export const DEFAULT_TOOL_ALLOW = [
   "exec",
   "process",
   "read",
+  "ls",
   "write",
   "edit",
   "apply_patch",

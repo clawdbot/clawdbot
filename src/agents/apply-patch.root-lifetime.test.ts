@@ -67,11 +67,12 @@ it("awaits one patch-owned root before completing a host no-op envelope", async 
       ]),
     ).resolves.toBe("root awaited");
     initialization.resolve(root);
-    await expect(execution).resolves.toMatchObject({
+    const result = await execution;
+    expect(result).toMatchObject({
       content: [{ type: "text", text: "No changes made to note.txt." }],
       details: { summary: { added: [], modified: [], deleted: [] } },
-      terminate: true,
     });
+    expect(result.terminate).toBeUndefined();
     expect(rootCalls).toBe(1);
     await expect(fs.readFile(filePath, "utf8")).resolves.toBe("unchanged\n");
   } finally {

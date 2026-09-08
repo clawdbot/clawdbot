@@ -213,6 +213,34 @@ suite.define(() => {
         expect(droppedInput.data).toContain("/tmp/openclaw-terminal-upload/dropped.png");
         expect(droppedInput.data).not.toMatch(/[\r\n]/);
 
+        await gateway.setMethodResponse("terminal.upload", { path: stagedPath, size: 4 });
+        await gateway.deferNext("terminal.upload", { name: "blocked.zip" });
+        await page.locator("input.tp-file-input").setInputFiles([
+          { name: "sample file.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF") },
+          { name: "blocked.zip", mimeType: "application/zip", buffer: Buffer.from("zip") },
+        ]);
+        await page.getByText("Uploading 2 of 2").waitFor();
+        await expect
+          .poll(async () => (await gateway.getRequests("terminal.upload")).length)
+          .toBe(6);
+        await gateway.rejectDeferred("terminal.upload", {
+          code: "UNAVAILABLE",
+          message: "Terminal upload staging is full. Move or remove staged files, then retry.",
+        });
+        const insertUploaded = page.getByRole("button", { name: "Insert uploaded paths" });
+        await insertUploaded.waitFor({ state: "visible" });
+        expect((await gateway.getRequests("terminal.input")).length).toBe(2);
+        await insertUploaded.click();
+        await expect.poll(async () => (await gateway.getRequests("terminal.input")).length).toBe(3);
+        const recoveredInput = (await gateway.getRequests("terminal.input")).at(-1)?.params as {
+          data?: string;
+        };
+        expect(recoveredInput.data).toContain("'/tmp/openclaw-terminal-upload/sample file.pdf'");
+        expect(recoveredInput.data).not.toContain("blocked.zip");
+        expect(recoveredInput.data).not.toMatch(/[\r\n]/);
+        expect((await gateway.getRequests("terminal.upload")).length).toBe(6);
+        await expect.poll(async () => await page.locator(".tp-upload-card").count()).toBe(0);
+
         await gateway.deferNext("terminal.upload");
         await page.locator("input.tp-file-input").setInputFiles({
           name: "cancelled.zip",
@@ -223,7 +251,7 @@ suite.define(() => {
           .poll(async () => (await gateway.getRequests("terminal.upload")).length, {
             timeout: 10_000,
           })
-          .toBe(5);
+          .toBe(7);
         await page.getByText("Uploading 1 of 1").waitFor();
         await page.getByRole("button", { name: "Cancel" }).click();
         await expect.poll(async () => await page.locator(".tp-upload-card").count()).toBe(0);
@@ -232,7 +260,7 @@ suite.define(() => {
           size: 3,
         });
         await page.waitForTimeout(100);
-        expect((await gateway.getRequests("terminal.input")).length).toBe(2);
+        expect((await gateway.getRequests("terminal.input")).length).toBe(3);
       },
     );
   });

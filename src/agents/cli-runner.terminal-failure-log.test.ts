@@ -5,7 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-event-listener-presence.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
+import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import { runCliAgent } from "./cli-runner.js";
 
@@ -62,8 +62,7 @@ describe("CLI terminal failure logging", () => {
     expect(hasInternalDiagnosticEventListeners()).toBe(false);
 
     await expect(
-      runCliAgent({
-        admittedRunContext: createTestAdmittedRunContext(runId),
+      wrapRunWithTestPreparedAdmission(runCliAgent)({
         sessionId: "session-test",
         sessionKey: "agent:main:private-session",
         sessionFile,

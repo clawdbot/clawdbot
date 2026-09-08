@@ -40,6 +40,7 @@ type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type PreparedModelsConfigContext = Readonly<{
   cfg: OpenClawConfig;
   discoveryAuthConfig: OpenClawConfig;
+  discoveryAuthEnv?: NodeJS.ProcessEnv;
   sourceConfigForSecrets: OpenClawConfig;
   agentDir: string;
   env: NodeJS.ProcessEnv;
@@ -62,6 +63,7 @@ type ResolveImplicitProvidersForModelsJson = (params: {
   authStore?: AuthProfileStore;
   config: OpenClawConfig;
   discoveryAuthConfig?: OpenClawConfig;
+  discoveryAuthEnv?: NodeJS.ProcessEnv;
   sourceConfigForSecrets?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   workspaceDir?: string;
@@ -181,6 +183,7 @@ async function resolveProvidersForModelsJsonWithDeps(
     ...(params.authStore ? { authStore: params.authStore } : {}),
     config: cfg,
     discoveryAuthConfig: context.discoveryAuthConfig,
+    discoveryAuthEnv: context.discoveryAuthEnv,
     sourceConfigForSecrets: context.sourceConfigForSecrets,
     env,
     ...(context.workspaceDir ? { workspaceDir: context.workspaceDir } : {}),

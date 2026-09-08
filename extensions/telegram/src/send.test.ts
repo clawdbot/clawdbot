@@ -1813,20 +1813,6 @@ describe("sendMessageTelegram", () => {
     expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
-  it("sends medium markdown text as one HTML message", async () => {
-    botApi.sendMessage.mockResolvedValue({ message_id: 53, chat: { id: "123" } });
-    const markdown = `# Long\n\n${"**section** with _style_ and `code`\n".repeat(800)}`;
-
-    await sendMessageTelegram("123", markdown, {
-      cfg: TELEGRAM_TEST_CFG,
-      token: "tok",
-    });
-
-    expect(botApi.sendMessage.mock.calls.length).toBeGreaterThan(1);
-    expect(sendMessageTexts(botApi.sendMessage).join("")).toContain("section");
-    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
-  });
-
   it("chunks markdown above the Telegram text-message limit", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 54, chat: { id: "123" } });
     const markdown = `# Long\n\n${"**section** with _style_ and `code`\n".repeat(3000)}`;
@@ -1842,6 +1828,7 @@ describe("sendMessageTelegram", () => {
     expect(joinedChunks).toContain("Long");
     expect(joinedChunks).toContain("section");
     expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
   it("indexes every successful text chunk and marks only the last one final", async () => {
@@ -2354,6 +2341,373 @@ describe("sendMessageTelegram", () => {
       }),
     ).rejects.toThrow(/returned no message_id/i);
   });
+
+  it.each([
+    { count: 1, albums: [], singles: 1 },
+    { count: 2, albums: [2], singles: 0 },
+    { count: 10, albums: [10], singles: 0 },
+    { count: 11, albums: [10], singles: 1 },
+    { count: 21, albums: [10, 10], singles: 1 },
+  ])(
+    "sends $count photos in bounded albums and records every message",
+    async ({ count, albums, singles }) => {
+      const mediaUrls = Array.from(
+        { length: count },
+        (_, index) => "https://example.com/photo-" + index + ".jpg",
+      );
+      for (const url of mediaUrls) {
+        mockLoadedMedia({ contentType: "image/jpeg", fileName: url.split("/").at(-1) });
+      }
+      let nextId = 100;
+      const sendMediaGroup = vi
+        .fn()
+        .mockImplementation(async (_chat, media) =>
+          media.map(() => ({ message_id: nextId++, chat: { id: 123 } })),
+        );
+      const sendPhoto = vi
+        .fn()
+        .mockImplementation(async () => ({ message_id: nextId++, chat: { id: 123 } }));
+      const onDeliveryResult = vi.fn();
+      const result = await sendMessageTelegram("123", "**Album caption**", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        mediaUrls,
+        api: makeTelegramApiTestMock({ sendMediaGroup, sendPhoto }),
+        onDeliveryResult,
+      });
+      expect(sendMediaGroup.mock.calls.map((call) => call[1].length)).toEqual(albums);
+      expect(sendPhoto).toHaveBeenCalledTimes(singles);
+      expect(onDeliveryResult.mock.calls.map((call) => call[0].messageId)).toEqual(
+        mediaUrls.map((_, index) => String(100 + index)),
+      );
+      if (count > 1) {
+        expect(result.receipt?.platformMessageIds).toEqual(
+          mediaUrls.map((_, index) => String(100 + index)),
+        );
+        expect(result.receipt?.parts.map((part) => part.index)).toEqual(
+          mediaUrls.map((_, index) => index),
+        );
+        const firstAlbum = sendMediaGroup.mock.calls[0]![1];
+        expect(firstAlbum[0]).toMatchObject({
+          type: "photo",
+          caption: "<b>Album caption</b>",
+          parse_mode: "HTML",
+        });
+        expect(
+          firstAlbum.slice(1).every((item: { caption?: string }) => item.caption === undefined),
+        ).toBe(true);
+      }
+    },
+  );
+
+  it("keeps album topics, silence, and first-mode native reply on the first batch only", async () => {
+    const mediaUrls = Array.from(
+      { length: 11 },
+      (_, index) => "https://example.com/" + index + ".jpg",
+    );
+    mediaUrls.forEach(() => mockLoadedMedia({ contentType: "image/jpeg" }));
+    const sendMediaGroup = vi.fn().mockResolvedValue(
+      Array.from({ length: 10 }, (_, index) => ({
+        message_id: 100 + index,
+        chat: { id: -100123 },
+        message_thread_id: 12,
+      })),
+    );
+    const sendPhoto = vi
+      .fn()
+      .mockResolvedValue({ message_id: 110, chat: { id: -100123 }, message_thread_id: 12 });
+    const result = await sendMessageTelegram("-100123", "caption", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      mediaUrls,
+      messageThreadId: 12,
+      replyToMessageId: 90,
+      quoteText: "quoted text",
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+      silent: true,
+      api: makeTelegramApiTestMock({ sendMediaGroup, sendPhoto }),
+    });
+    expect(sendMediaGroup.mock.calls[0]![2]).toMatchObject({
+      message_thread_id: 12,
+      disable_notification: true,
+      reply_parameters: { message_id: 90, quote: "quoted text" },
+    });
+    expect(sendPhoto.mock.calls[0]![2]).toMatchObject({
+      message_thread_id: 12,
+      disable_notification: true,
+    });
+    expect(sendPhoto.mock.calls[0]![2].reply_parameters).toBeUndefined();
+    expect(sendPhoto.mock.calls[0]![2].reply_to_message_id).toBeUndefined();
+    expect(result.receipt?.parts.at(-1)?.replyToId).toBeUndefined();
+  });
+
+  it.each([
+    "active",
+    "aborted after album",
+    "aborted during dispatch",
+    "owner lost during dispatch",
+  ])("sends the next album batch only while authority remains %s", async (state) => {
+    const mediaUrls = Array.from({ length: 11 }, (_, index) => `https://example.com/${index}.jpg`);
+    mediaUrls.forEach(() => mockLoadedMedia({ contentType: "image/jpeg" }));
+    const ids = Array.from({ length: 10 }, (_, index) => String(100 + index));
+    const sendMediaGroup = vi
+      .fn()
+      .mockResolvedValue(ids.map((id) => ({ message_id: Number(id), chat: { id: 123 } })));
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 110, chat: { id: 123 } });
+    const controller = new AbortController();
+    let ownsSend = true;
+    let delivered = 0;
+    const onDeliveryResult = vi.fn(() => {
+      delivered += 1;
+      if (delivered === 10 && state === "aborted after album") {
+        controller.abort();
+      }
+    });
+    const sending = sendMessageTelegram("123", "caption", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      mediaUrls,
+      signal: controller.signal,
+      api: makeTelegramApiTestMock({ sendMediaGroup, sendPhoto }),
+      onDeliveryResult,
+      onPlatformSendDispatch: async () => {
+        await Promise.resolve();
+        if (delivered === 10 && state === "aborted during dispatch") {
+          controller.abort();
+        }
+        if (delivered === 10 && state === "owner lost during dispatch") {
+          ownsSend = false;
+        }
+      },
+      assertPlatformSendAuthorized: () => {
+        if (!ownsSend) {
+          throw new Error("Send owner lost authority");
+        }
+      },
+    });
+    if (state === "active") {
+      expect(await sending).toMatchObject({ receipt: { platformMessageIds: [...ids, "110"] } });
+      expect(sendPhoto).toHaveBeenCalledTimes(1);
+      expect(onDeliveryResult).toHaveBeenCalledTimes(11);
+    } else {
+      await expect(sending).rejects.toMatchObject({
+        deliveryResult: { messageIds: ids, receipt: { platformMessageIds: ids } },
+      });
+      expect(sendPhoto).not.toHaveBeenCalled();
+      expect(onDeliveryResult).toHaveBeenCalledTimes(10);
+    }
+    expect(sendMediaGroup).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["observer", "later load", "later send"])(
+    "retains all album IDs after a %s failure",
+    async (failure) => {
+      const mediaUrls = Array.from(
+        { length: 11 },
+        (_, index) => "https://example.com/" + index + ".jpg",
+      );
+      mediaUrls.slice(0, 10).forEach(() => mockLoadedMedia({ contentType: "image/jpeg" }));
+      if (failure === "later load") {
+        loadWebMedia.mockRejectedValueOnce(new Error("later load failed"));
+      } else {
+        mockLoadedMedia({ contentType: "image/jpeg" });
+      }
+      const ids = Array.from({ length: 10 }, (_, index) => String(100 + index));
+      const sendMediaGroup = vi.fn().mockResolvedValue(
+        ids.map((id) => ({
+          message_id: Number(id),
+          chat: { id: -100123 },
+          message_thread_id: 12,
+        })),
+      );
+      const sendPhoto = vi.fn().mockRejectedValue(new Error("later send failed"));
+      const onDeliveryResult =
+        failure === "observer" ? vi.fn().mockRejectedValue(new Error("observer failed")) : vi.fn();
+      await expect(
+        sendMessageTelegram("-100123", "caption", {
+          cfg: TELEGRAM_TEST_CFG,
+          token: "tok",
+          mediaUrls,
+          messageThreadId: 12,
+          retry: { attempts: 1 },
+          api: makeTelegramApiTestMock({ sendMediaGroup, sendPhoto }),
+          onDeliveryResult,
+        }),
+      ).rejects.toMatchObject({
+        deliveryResult: {
+          messageIds: ids,
+          receipt: {
+            platformMessageIds: ids,
+            threadId: "12",
+            parts: ids.map((platformMessageId) => ({ platformMessageId, threadId: "12" })),
+          },
+        },
+      });
+      expect(sendMediaGroup).toHaveBeenCalledTimes(1);
+      if (failure === "observer") {
+        expect(sendPhoto).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("preserves buttons on the first photo and leaves subsequent photos unadorned", async () => {
+    mockLoadedMedia({ contentType: "image/jpeg" });
+    mockLoadedMedia({ contentType: "image/jpeg" });
+    const sendMediaGroup = vi.fn();
+    const sendPhoto = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 100, chat: { id: 123 } })
+      .mockResolvedValueOnce({ message_id: 101, chat: { id: 123 } });
+    const buttons = [[{ text: "Continue", callback_data: "continue" }]];
+    const result = await sendMessageTelegram("123", "caption", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      mediaUrls: ["https://example.com/a.jpg", "https://example.com/b.jpg"],
+      buttons,
+      api: makeTelegramApiTestMock({ sendMediaGroup, sendPhoto }),
+    });
+    expect(sendMediaGroup).not.toHaveBeenCalled();
+    expect(sendPhoto.mock.calls[0]![2].reply_markup).toEqual({ inline_keyboard: buttons });
+    expect(sendPhoto.mock.calls[1]![2].reply_markup).toBeUndefined();
+    expect(result).toMatchObject({
+      messageId: "100",
+      meta: { telegramHasInlineKeyboard: true },
+      receipt: { platformMessageIds: ["100", "101"] },
+    });
+  });
+
+  it.each([false, true])(
+    "preserves mixed-media order with forceDocument=%s",
+    async (forceDocument) => {
+      const mediaUrls = ["a.jpg", "b.jpg", "file.pdf", "c.jpg", "d.jpg"];
+      mediaUrls.forEach((fileName) =>
+        mockLoadedMedia({
+          fileName,
+          contentType: fileName.endsWith("pdf") ? "application/pdf" : "image/jpeg",
+        }),
+      );
+      const delivered: string[] = [];
+      let messageId = 100;
+      const sendMediaGroup = vi.fn().mockImplementation(async (_chat, media) => {
+        delivered.push(
+          ...media.map((item: { media: { filename: string } }) => item.media.filename),
+        );
+        return media.map(() => ({ message_id: messageId++, chat: { id: 123 } }));
+      });
+      const sendDocument = vi.fn().mockImplementation(async (_chat, file) => {
+        delivered.push(file.filename);
+        return { message_id: messageId++, chat: { id: 123 } };
+      });
+      await sendMessageTelegram("123", "caption", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        mediaUrls,
+        forceDocument,
+        api: makeTelegramApiTestMock({ sendMediaGroup, sendDocument }),
+      });
+      expect(delivered).toEqual(mediaUrls);
+      expect(sendMediaGroup).toHaveBeenCalledTimes(forceDocument ? 0 : 2);
+      expect(sendDocument).toHaveBeenCalledTimes(forceDocument ? 5 : 1);
+    },
+  );
+
+  it.each([true, false])(
+    "falls back from albums only for definite photo-limit rejection: %s",
+    async (photoLimit) => {
+      mockLoadedMedia({ contentType: "image/jpeg" });
+      mockLoadedMedia({ contentType: "image/jpeg" });
+      const error = new Error(
+        photoLimit ? "400: Bad Request: PHOTO_INVALID_DIMENSIONS" : "network disconnected",
+      );
+      const sendMediaGroup = vi.fn().mockRejectedValue(error);
+      const sendPhoto = vi
+        .fn()
+        .mockRejectedValueOnce(error)
+        .mockResolvedValueOnce({ message_id: 101, chat: { id: 123 } });
+      const sendDocument = vi.fn().mockResolvedValue({ message_id: 100, chat: { id: 123 } });
+      const sending = sendMessageTelegram("123", "caption", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        mediaUrls: ["https://example.com/a.jpg", "https://example.com/b.jpg"],
+        retry: { attempts: 1 },
+        api: makeTelegramApiTestMock({ sendMediaGroup, sendPhoto, sendDocument }),
+      });
+      if (photoLimit) {
+        expect(await sending).toMatchObject({ receipt: { platformMessageIds: ["100", "101"] } });
+        expect(sendPhoto).toHaveBeenCalledTimes(2);
+        expect(sendDocument.mock.calls[0]![2]).toMatchObject({ caption: "caption" });
+      } else {
+        await expect(sending).rejects.toThrow("network disconnected");
+        expect(sendPhoto).not.toHaveBeenCalled();
+        expect(sendDocument).not.toHaveBeenCalled();
+      }
+      expect(sendMediaGroup).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([false, true])(
+    "delivers an oversized caption after all photos with album rejection=%s",
+    async (albumRejected) => {
+      const storePath = `/tmp/openclaw-telegram-album-projection-${process.pid}-${Date.now()}.json`;
+      const cursor = createTelegramPromptContextProjectionCursor({
+        transcriptMessageId: "album-reply",
+      });
+      mockLoadedMedia({ contentType: "image/jpeg" });
+      mockLoadedMedia({ contentType: "image/jpeg" });
+      const messages = [
+        { message_id: 100, chat: { id: 123 } },
+        { message_id: 101, chat: { id: 123 } },
+      ];
+      const sendMediaGroup = albumRejected
+        ? vi.fn().mockRejectedValue(new Error("400: Bad Request: PHOTO_INVALID_DIMENSIONS"))
+        : vi.fn().mockResolvedValue(messages);
+      const sendPhoto = vi
+        .fn()
+        .mockResolvedValueOnce(messages[0])
+        .mockResolvedValueOnce(messages[1]);
+      const sendMessage = vi.fn().mockResolvedValue({ message_id: 102, chat: { id: 123 } });
+      const result = await sendMessageTelegram("123", "x".repeat(1100), {
+        cfg: { session: { store: storePath } },
+        token: "tok",
+        mediaUrls: ["https://example.com/a.jpg", "https://example.com/b.jpg"],
+        api: makeTelegramApiTestMock({ sendMediaGroup, sendPhoto, sendMessage }),
+        replyToMessageId: 90,
+        replyToIdSource: "implicit",
+        replyToMode: "first",
+        promptContextProjectionPlan: { cursor, finalPart: true },
+      });
+      expect(
+        sendMediaGroup.mock.calls[0]![1].every(
+          (item: { caption?: string }) => item.caption === undefined,
+        ),
+      ).toBe(true);
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage.mock.calls[0]![2].reply_to_message_id).toBeUndefined();
+      if (albumRejected) {
+        expect(sendPhoto).toHaveBeenCalledTimes(2);
+        expect(sendPhoto.mock.invocationCallOrder[1]).toBeLessThan(
+          sendMessage.mock.invocationCallOrder[0]!,
+        );
+      } else {
+        expect(sendPhoto).not.toHaveBeenCalled();
+      }
+      expect(result.receipt?.platformMessageIds).toEqual(["100", "101", "102"]);
+      expect(result.receipt?.parts.map((part) => part.kind)).toEqual(["media", "media", "text"]);
+      const cache = createTelegramMessageCache({
+        scope: resolveTelegramMessageCacheScope(storePath),
+      });
+      for (const [index, messageId] of ["100", "101", "102"].entries()) {
+        expect(
+          (await cache.get({ accountId: "default", chatId: "123", messageId }))
+            ?.promptContextProjectionMarker,
+        ).toEqual({
+          kind: "valid",
+          projection: { ...cursor.source, partIndex: index, finalPart: index === 2 },
+        });
+      }
+    },
+  );
 
   it("fails when Telegram media send returns no message_id", async () => {
     mockLoadedMedia({ contentType: "image/png", fileName: "photo.png" });

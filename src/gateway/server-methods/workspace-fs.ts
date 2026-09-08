@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { readFileWindowFully } from "../../infra/file-read.js";
 import { root as fsSafeRoot, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
+import { isPathInside } from "../../infra/path-guards.js";
 
 export type WorkspaceRoot = Awaited<ReturnType<typeof fsSafeRoot>>;
 type WorkspacePathStat = Awaited<ReturnType<WorkspaceRoot["stat"]>>;
@@ -145,6 +146,7 @@ export async function updateWorkspaceFile(
   browserPath: string,
   content: string,
   expectedHash: string,
+  assertCurrent?: () => void,
 ): Promise<WorkspaceFileUpdateResult> {
   const workspaceRoot = await openWorkspaceRoot(rootDir);
   if (!workspaceRoot) {
@@ -172,6 +174,7 @@ export async function updateWorkspaceFile(
     if (currentHash !== expectedHash) {
       return { status: "conflict", currentHash };
     }
+    assertCurrent?.();
     await workspaceRoot.write(browserPath, content, {
       encoding: "utf8",
       renameIdentity: "strict",
@@ -229,14 +232,8 @@ export function resolveWorkspacePath(
   if (!root) {
     return undefined;
   }
-  const resolved = path.isAbsolute(filePath)
-    ? path.resolve(filePath)
-    : path.resolve(root, filePath);
-  const relative = path.relative(root, resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    return undefined;
-  }
-  return resolved;
+  const resolved = path.resolve(root, filePath);
+  return isPathInside(root, resolved) ? resolved : undefined;
 }
 
 export function workspaceStatKind(

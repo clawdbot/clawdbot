@@ -47,6 +47,35 @@ describe("collectChannelStatusIssues", () => {
     expect(collectTelegramIssues).not.toHaveBeenCalled();
   });
 
+  it("uses Gateway-owned diagnostics without loading local plugins or duplicating issues", () => {
+    const statusIssues: ChannelStatusIssue[] = [
+      {
+        channel: "guildchat",
+        accountId: "work",
+        kind: "config",
+        message: "Channel configuration reload is deferred while active work finishes.",
+      },
+    ];
+    expect(collectChannelStatusIssues({ statusIssues })).toEqual(statusIssues);
+    expect(collectChannelStatusIssues({ statusIssues: [] })).toEqual([]);
+    expect(mocks.listChannelPlugins).not.toHaveBeenCalled();
+  });
+
+  it("does not let malformed remote diagnostics hide a stopped account", () => {
+    mocks.listChannelPlugins.mockReturnValue([createPlugin("discord")]);
+    const issues = collectChannelStatusIssues({
+      statusIssues: [null],
+      channelAccounts: { discord: [{ accountId: "default", running: false }] },
+    });
+    expect(issues).toEqual([
+      expect.objectContaining({
+        channel: "discord",
+        kind: "runtime",
+        message: expect.stringContaining("not running"),
+      }),
+    ]);
+  });
+
   it("skips plugins without collectors and concatenates collector output in plugin order", () => {
     const collectTelegramIssues = vi.fn((): ChannelStatusIssue[] => [
       {

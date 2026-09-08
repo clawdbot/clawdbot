@@ -228,6 +228,7 @@ export async function tryReuseCodexLiveThread(
       // healthy. Both subscription and host authority must survive policy awaits.
       retainedThread.assertCurrent();
       params.params.hostCapabilities.assertActive();
+      params.assertCurrent?.();
     } catch (cause) {
       throw new AgentHarnessPreflightError(
         "Codex warm thread ownership changed before this turn could run. No turn was sent; reconnect before continuing, or start a new conversation if the original thread was closed.",

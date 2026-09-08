@@ -10,7 +10,7 @@ import {
   parseUpgradeSurvivorScenarios,
 } from "./lib/upgrade-survivor-policy.mjs";
 
-const FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA = "openclaw.full-release-candidate-request/v1";
+const FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA = "openclaw.full-release-candidate-request/v2";
 const FULL_RELEASE_CANDIDATE_MANIFEST_SCHEMA = "openclaw.full-release-candidate/v2";
 const FULL_RELEASE_CANDIDATE_BINDING_SCHEMA = "openclaw.full-release-candidate-binding/v2";
 const FULL_RELEASE_CANDIDATE_ARTIFACT_PREFIX = "full-release-candidate-v2-";
@@ -149,6 +149,7 @@ export function buildFullReleaseCandidateRequest(input) {
     upgradeSurvivorScenarios: effectiveScenarios.toSorted(compareAscii),
     allowFrozenTargetScenarioOmissions: input.allowFrozenTargetScenarioOmissions,
     allowUnreleasedChangelog: input.allowUnreleasedChangelog,
+    packagePublished: input.packagePublished,
     sharedImagePolicy: input.sharedImagePolicy,
     contractVersions: {
       package: 1,
@@ -165,6 +166,7 @@ export function validateFullReleaseCandidateRequest(value) {
       "allowFrozenTargetScenarioOmissions",
       "allowUnreleasedChangelog",
       "contractVersions",
+      "packagePublished",
       "releaseProfile",
       "releaseSoak",
       "repository",
@@ -243,6 +245,10 @@ export function validateFullReleaseCandidateRequest(value) {
     toolingSha: sha(value.toolingSha, "full release candidate request toolingSha"),
     releaseProfile,
     releaseSoak: boolean(value.releaseSoak, "full release candidate request releaseSoak"),
+    packagePublished: boolean(
+      value.packagePublished,
+      "full release candidate request packagePublished",
+    ),
     upgradeSurvivorBaselines: baselines,
     upgradeSurvivorScenarios: scenarios,
     allowFrozenTargetScenarioOmissions: boolean(

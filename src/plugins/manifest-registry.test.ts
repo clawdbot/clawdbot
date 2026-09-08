@@ -74,7 +74,7 @@ function createPluginCandidate(params: {
   sourceName?: string;
   origin: "bundled" | "global" | "workspace" | "config";
   format?: "openclaw" | "bundle";
-  bundleFormat?: "codex" | "claude" | "cursor";
+  bundleFormat?: "agent" | "codex" | "claude" | "cursor";
   packageName?: string;
   packageVersion?: string;
   packageManifest?: OpenClawPackageManifest;
@@ -315,6 +315,7 @@ function loadRegistryForMinHostVersionCase(params: {
   env?: NodeJS.ProcessEnv;
 }) {
   return loadPluginManifestRegistryCore({
+    installRecords: {},
     ...(params.env ? { env: params.env } : {}),
     candidates: [
       createPluginCandidate({
@@ -341,6 +342,7 @@ function loadRegistryForPluginApiCase(params: {
   idHint?: string;
 }) {
   return loadPluginManifestRegistryCore({
+    installRecords: {},
     ...(params.env ? { env: params.env } : {}),
     candidates: [
       createPluginCandidate({
@@ -592,7 +594,7 @@ describe("loadPluginManifestRegistry", () => {
     expectRegistryDiagnosticContains(registry, "plugin manifest not found");
   });
 
-  it("preserves optional manifest icon URLs on registry records", () => {
+  it("ignores legacy manifest icon URLs", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
       id: "icon-demo",
@@ -609,7 +611,52 @@ describe("loadPluginManifestRegistry", () => {
       }),
     ]);
 
-    expect(registry.plugins[0]?.icon).toBe("https://cdn.simpleicons.org/simpleicons");
+    expect(registry.plugins[0]).not.toHaveProperty("icon");
+  });
+
+  it("discovers the portable package icon without manifest indirection", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "icon-demo",
+      name: "Icon Demo",
+      configSchema: { type: "object" },
+    });
+    writeTextFile(dir, "assets/icon.png", "portable icon");
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "icon-demo",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.iconPath).toBe(path.join(dir, "assets/icon.png"));
+  });
+
+  it("discovers the same portable icon convention for Agent Plugins bundles", () => {
+    const dir = makeTempDir();
+    setupBundleFixture({
+      bundleDir: dir,
+      manifestRelativePath: "plugin.json",
+      manifest: {
+        $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+        name: "Portable Icon Bundle",
+      },
+      textFiles: { "assets/icon.png": "portable icon" },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "portable-icon-bundle",
+        rootDir: dir,
+        origin: "global",
+        format: "bundle",
+        bundleFormat: "agent",
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.iconPath).toBe(path.join(dir, "assets/icon.png"));
   });
 
   it("preserves manifest catalog metadata on registry records", () => {
@@ -1399,6 +1446,7 @@ describe("loadPluginManifestRegistry", () => {
           assistantPriority: 10,
           assistantVisibility: "visible",
           appGuidedSecret: true,
+          personalAccount: true,
           appGuidedActionLabel: "Connect account",
           appGuidedDiscovery: true,
         },
@@ -1468,6 +1516,7 @@ describe("loadPluginManifestRegistry", () => {
         assistantPriority: 10,
         assistantVisibility: "visible",
         appGuidedSecret: true,
+        personalAccount: true,
         appGuidedActionLabel: "Connect account",
         appGuidedDiscovery: true,
       },
@@ -2975,6 +3024,7 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(dir, { id: "codex", configSchema: { type: "object" } });
 
     const registry = loadPluginManifestRegistryCore({
+      installRecords: {},
       candidates: [
         createPluginCandidate({
           idHint: "codex",

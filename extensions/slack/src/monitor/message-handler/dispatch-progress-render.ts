@@ -1,22 +1,48 @@
-import type {
-  ChannelProgressDraftCompositorLine,
-  ChannelProgressDraftCompositorSnapshot,
-  ChannelProgressDraftLine,
+import {
+  buildChannelProgressDraftLine,
+  type ChannelProgressDraftCompositorLine,
+  type ChannelProgressDraftCompositorSnapshot,
+  type ChannelProgressDraftLine,
 } from "openclaw/plugin-sdk/channel-outbound";
 
 export function resolveStructuredProgressLines(
   lines: readonly ChannelProgressDraftCompositorLine[],
 ): ChannelProgressDraftLine[] {
-  // Summary compositors carry authored text and attention as structured lines.
-  return lines.filter((line): line is ChannelProgressDraftLine => typeof line !== "string");
+  return lines.map((line) => {
+    if (typeof line !== "string") {
+      return line;
+    }
+    const reasoning = line.startsWith("🧠 ");
+    const text = line
+      .replace(/^(?:🧠|💬)\s+/u, "")
+      .replace(/^_(.*)_$/su, "$1")
+      .trim();
+    return {
+      // Reasoning snapshots replace one rolling row; text-based ids would orphan it each delta.
+      ...(reasoning ? { id: "reasoning" } : {}),
+      kind: "item",
+      text,
+      label: reasoning ? "Reasoning" : "Update",
+      prefix: false,
+    };
+  });
 }
 
 export function resolveNativeProgressLines(
   snapshot: ChannelProgressDraftCompositorSnapshot,
 ): ChannelProgressDraftLine[] {
-  return resolveStructuredProgressLines(snapshot.lines).filter(
+  const lines = resolveStructuredProgressLines(snapshot.lines).filter(
     (line) => line.id !== "reasoning" && line.id?.startsWith("commentary:") !== true,
   );
+  if (snapshot.plan?.length || !snapshot.planExplanation) {
+    return lines;
+  }
+  const explanationLine = buildChannelProgressDraftLine({
+    event: "plan",
+    phase: "update",
+    explanation: snapshot.planExplanation,
+  });
+  return explanationLine ? [...lines, explanationLine] : lines;
 }
 
 // The card title already displays the status headline and plan explanation and

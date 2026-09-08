@@ -134,7 +134,7 @@ describe("config write coordinator", () => {
     expect(runtimeConfig.state.configFormDirty).toBe(false);
     expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
     expect(runtimeConfig.state.configNeedsApply).toBe(true);
-    // The post-save reload rebased the clean draft onto the new hash.
+    // The acknowledgement rebased the clean draft onto the new hash.
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-2");
     runtimeConfig.dispose();
   });
@@ -309,9 +309,9 @@ describe("config write coordinator", () => {
     runtimeConfig.dispose();
   });
 
-  it("skips the teardown flush when the settled flight acked without a hash", async () => {
+  it("skips the teardown flush when the pending save fails", async () => {
     vi.useFakeTimers();
-    const { request, submissions, firstSet } = createDeferredSetServerMock({ legacyAck: true });
+    const { request, submissions, firstSet } = createDeferredSetServerMock();
     const { runtimeConfig } = createConfigCapabilityHarness(
       request as GatewayBrowserClient["request"],
     );
@@ -325,7 +325,7 @@ describe("config write coordinator", () => {
     // final flush; failing closed beats clobbering a foreign write.
     runtimeConfig.patchForm(["count"], 3);
     runtimeConfig.dispose();
-    firstSet.resolve({});
+    firstSet.reject(new Error("write unavailable"));
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
     expect(submissions).toHaveLength(1);
   });
@@ -429,7 +429,7 @@ describe("config write coordinator", () => {
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(drained).toBe(false);
-    patchGate.resolve({});
+    patchGate.resolve({ config: { count: 5 }, hash: "hash-2" });
     await vi.advanceTimersByTimeAsync(0);
     await drainPromise;
     await expect(patchPromise).resolves.toBe(true);
@@ -1015,7 +1015,7 @@ describe("config write coordinator", () => {
       if (method === "config.set" || method === "config.patch") {
         order.push(method);
         hashCounter += 1;
-        return Promise.resolve({ hash: `hash-${hashCounter}` });
+        return Promise.resolve({ config: { count: 2, other: true }, hash: `hash-${hashCounter}` });
       }
       return Promise.resolve({});
     });

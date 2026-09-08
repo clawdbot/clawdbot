@@ -3,11 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
-import { tryAcquireExclusiveSqliteCoordinator } from "./node-sqlite.js";
 import {
   ensurePrivateSqliteCoordinatorDirectory,
   runWithSqliteCoordinator,
   SqliteCoordinatorError,
+  tryAcquireExclusiveSqliteCoordinator,
 } from "./sqlite-coordinator.js";
 
 const heldCoordinators = new Map<
@@ -31,7 +31,7 @@ export class StateDatabaseCoordinatorContentionError extends SqliteCoordinatorEr
   }
 }
 
-class StateSchemaMutationConflictError extends SqliteCoordinatorError {
+export class StateSchemaMutationConflictError extends SqliteCoordinatorError {
   constructor(databasePath: string, cause: unknown) {
     super(
       `OpenClaw refused shared state schema mutation at ${databasePath} because another Gateway owns that state directory. Stop that Gateway or perform the update through its managed restart path, then retry.`,

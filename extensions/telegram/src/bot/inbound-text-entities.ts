@@ -61,8 +61,8 @@ function longestBacktickRun(text: string): number {
 
 function markdownInlineCodeDelimiters(content: string): [string, string] {
   const delimiter = "`".repeat(longestBacktickRun(content) + 1);
-  // Padding keeps literal edge backticks separate from the Markdown delimiters.
-  const padding = /^[ `]|[ `]$/u.test(content) ? " " : "";
+  // CommonMark normalizes line breaks to spaces and never strips all-space code.
+  const padding = /^[ \r\n`]|[ \r\n`]$/u.test(content) && /[^ \r\n]/u.test(content) ? " " : "";
   return [`${delimiter}${padding}`, `${padding}${delimiter}`];
 }
 

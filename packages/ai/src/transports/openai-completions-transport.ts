@@ -36,6 +36,7 @@ import {
   type MutableAssistantOutput,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
+import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import {
   createWritableTransportEventStream,
   failTransportStream,
@@ -229,9 +230,15 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
             statusText: response.statusText,
           });
         };
-        const client = createOpenAICompletionsClient(model, context, apiKey, options?.headers, {
-          fetch: doneDetectingFetch,
-        });
+        const client = createOpenAICompletionsClient(
+          model,
+          context,
+          apiKey,
+          resolveOpencodeSessionHeaders(model, options),
+          {
+            fetch: doneDetectingFetch,
+          },
+        );
         let params = buildOpenAICompletionsParams(
           model as OpenAIModeModel,
           context,

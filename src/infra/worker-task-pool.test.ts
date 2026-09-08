@@ -1,17 +1,31 @@
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile } from "node:child_process";
-import { channel } from "node:diagnostics_channel";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { Worker } from "node:worker_threads";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Worker } from "node:worker_threads";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 import type { PoolFixtureInput, PoolFixtureResult } from "./worker-task-pool.test-support.js";
 
 const workerUrl = new URL("./worker-task-pool.test-support.ts", import.meta.url);
 const pools: WorkerTaskPool<PoolFixtureInput, PoolFixtureResult>[] = [];
-const workers: Worker[] = [];
-const workerChannel = channel("worker_threads");
-const trackWorker = (message: unknown) => workers.push((message as { worker: Worker }).worker);
+const workers = vi.hoisted(() => [] as Worker[]);
+
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:worker_threads")>();
+  return {
+    ...actual,
+    Worker: class extends actual.Worker {
+      constructor(...args: ConstructorParameters<typeof actual.Worker>) {
+        super(...args);
+        // Observe real workers even on runtimes without worker diagnostics events.
+        workers.push(this);
+      }
+    },
+  };
+});
 
 function createPool(
   options: ConstructorParameters<typeof WorkerTaskPool<PoolFixtureInput, PoolFixtureResult>>[0] = {
@@ -26,16 +40,98 @@ function createPool(
   return pool;
 }
 
-beforeEach(() => workerChannel.subscribe(trackWorker));
 afterEach(async () => {
   await Promise.all(pools.splice(0).map((pool) => pool.close()));
-  workerChannel.unsubscribe(trackWorker);
   for (const worker of workers.splice(0)) {
     expect(worker.threadId).toBe(-1);
   }
 });
 
 describe("worker task pool", () => {
+  it.each(["abort", "close"] as const)(
+    "keeps host cancellation callbacks in the admitted caller context on %s",
+    async (ending) => {
+      const context = new AsyncLocalStorage<string>();
+      const pool = createPool();
+      const entered = createDeferredCore();
+      const abort = new AbortController();
+      const observed: Array<string | undefined> = [];
+      const run = context.run("owner", () =>
+        pool.run(
+          { label: "cancel", exchanges: 1 },
+          {
+            timeoutMs: 10000,
+            signal: abort.signal,
+            onRequest: async (_value, { signal }) => {
+              entered.resolve();
+              return await new Promise((_, reject) => {
+                signal.addEventListener(
+                  "abort",
+                  () => {
+                    observed.push(context.getStore());
+                    reject(new Error("closed"));
+                  },
+                  { once: true },
+                );
+              });
+            },
+          },
+        ),
+      );
+      const result = Promise.allSettled([run]);
+      await entered.promise;
+      await context.run("unrelated caller", async () => {
+        if (ending === "abort") {
+          abort.abort();
+        } else {
+          await pool.close();
+        }
+      });
+      expect((await result)[0]?.status).toBe("rejected");
+      expect(observed).toEqual(["owner"]);
+    },
+  );
+
+  it("keeps each queued and reused task's caller context through preparation and host exchanges", async () => {
+    const context = new AsyncLocalStorage<string>();
+    const pool = createPool();
+    const observed: Array<{ owner: string; stage: string; actual: string | undefined }> = [];
+    const submit = (owner: string) =>
+      context.run(owner, () =>
+        pool.run(
+          () => {
+            observed.push({ owner, stage: "prepare", actual: context.getStore() });
+            return { label: owner, exchanges: 2 };
+          },
+          {
+            timeoutMs: 10000,
+            onInputConsumed: () => {
+              observed.push({ owner, stage: "initial receipt", actual: context.getStore() });
+            },
+            onRequest: async () => {
+              observed.push({ owner, stage: "request", actual: context.getStore() });
+              await Promise.resolve();
+              return {
+                input: null,
+                timeoutMs: 10000,
+                onConsumed: () => {
+                  observed.push({ owner, stage: "reply receipt", actual: context.getStore() });
+                },
+              };
+            },
+          },
+        ),
+      );
+    const [first, queued] = await Promise.all([submit("first"), submit("queued")]);
+    const reused = await submit("reused");
+    expect(first.threadId).toBe(queued.threadId);
+    expect(reused.threadId).toBe(first.threadId);
+    expect(observed).toHaveLength(18);
+    for (const item of observed) {
+      expect(item.actual, item.stage + ":" + item.owner).toBe(item.owner);
+    }
+  });
+
   it("bounds parallel execution and reuses warm workers for queued requests", async () => {
     const pool = createPool({ workerUrl, maxWorkers: 2 });
     const counters = new SharedArrayBuffer(8);
@@ -65,6 +161,53 @@ describe("worker task pool", () => {
       await Promise.allSettled([completion]);
     }
   });
+
+  it.each(["complete", "abort", "close"] as const)(
+    "keeps tasks without a deadline pending until %s",
+    async (ending) => {
+      const pool = createPool();
+      const counters = new SharedArrayBuffer(8);
+      const view = new Int32Array(counters);
+      const controller = new AbortController();
+      const reason = new Error(`explicit ${ending}`);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const active = pool.run(
+        { label: "active", counters, wait: true },
+        ending === "abort" ? { signal: controller.signal } : {},
+      );
+      const queued = pool.run({ label: "queued" }, {});
+      const settled = Promise.allSettled([active, queued]);
+      try {
+        // Omission must not install the pool's historical 60-second default timer.
+        await vi.advanceTimersByTimeAsync(60_001);
+        if (ending === "abort") {
+          controller.abort(reason);
+        } else if (ending === "close") {
+          await pool.close(reason);
+        } else {
+          Atomics.store(view, 1, 1);
+          Atomics.notify(view, 1);
+        }
+        const outcomes = await settled;
+        expect(outcomes[0]).toEqual(
+          ending === "complete"
+            ? { status: "fulfilled", value: expect.objectContaining({ label: "active" }) }
+            : { status: "rejected", reason },
+        );
+        expect(outcomes[1]).toEqual(
+          ending === "close"
+            ? { status: "rejected", reason }
+            : { status: "fulfilled", value: expect.objectContaining({ label: "queued" }) },
+        );
+      } finally {
+        Atomics.store(view, 1, 1);
+        Atomics.notify(view, 1);
+        await pool.close();
+        await settled;
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("expires queued work and never launches cancelled asynchronous preparation", async () => {
     const pool = createPool();
@@ -179,6 +322,23 @@ describe("worker task pool", () => {
     expect(next.threadId).not.toBe(result.threadId);
   });
 
+  it("arms idle retirement on the clock the pool was created under", async () => {
+    const pool = createPool({ workerUrl, idleTimeoutMs: 20 });
+    await pool.run({ label: "warm" }, { timeoutMs: 10_000 });
+    // Process-wide pools finish work on worker messages, which can arrive inside an
+    // unrelated test's fake-timer window; that clock must not receive the idle timer.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await pool.run({ label: "under a fake clock" }, {});
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+    const worker = workers.at(-1);
+    assert.ok(worker);
+    await expect.poll(() => worker.threadId).toBe(-1);
+  });
+
   it("lets a headless process exit while warm workers are idle", async () => {
     const moduleUrl = new URL("./worker-task-pool.ts", import.meta.url);
     const { stdout } = await promisify(execFile)(
@@ -196,4 +356,25 @@ describe("worker task pool", () => {
     );
     expect(stdout.trim()).toBe("finished");
   }, 20_000);
+
+  it.each([
+    {
+      name: "releases parent inputs while their worker copies are still executing",
+      entrypoint: new URL("./worker-task-pool.retention.test-support.ts", import.meta.url),
+    },
+    {
+      name: "releases delivered replies while their worker remains warm",
+      entrypoint: new URL("./worker-task-pool.reply-retention.test-support.ts", import.meta.url),
+    },
+  ])(
+    "$name",
+    async ({ entrypoint }) => {
+      await promisify(execFile)(
+        process.execPath,
+        ["--expose-gc", "--import", "tsx", fileURLToPath(entrypoint)],
+        { timeout: 20_000 },
+      );
+    },
+    25_000,
+  );
 });

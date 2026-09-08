@@ -398,6 +398,16 @@ describe("coalesceAgentRunFrames", () => {
       outcome: { kind: "completed", actionOwner: { key: "final-image" } },
     },
     {
+      name: "omitted-image-only final",
+      parts: [
+        group("assistant", "final-omitted-image", "run-1", {
+          stopReason: "stop",
+          content: [{ type: "image", omitted: true, bytes: 12 * 1024 }],
+        }),
+      ],
+      outcome: { kind: "completed", actionOwner: { key: "final-omitted-image" } },
+    },
+    {
       name: "empty final",
       parts: [group("assistant", "empty", "run-1", { stopReason: "stop", content: [] })],
       outcome: { kind: "completed", actionOwner: null },

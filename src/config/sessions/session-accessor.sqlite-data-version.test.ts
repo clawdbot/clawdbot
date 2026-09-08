@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
+import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-collection.js";
 import { configureSqliteConnectionPragmas } from "../../infra/sqlite-wal.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -11,8 +12,11 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
+  appendTranscriptEventSync,
   appendTranscriptMessage,
+  cleanupPluginHostSessionStore,
   listSessionEntriesCore,
+  listSessionTranscriptInstances,
   loadSessionEntry,
   openSessionEntryReadView,
   upsertSessionEntryCore,
@@ -22,6 +26,7 @@ import {
   readSessionEntryCount,
   iterateSessionEntryKeys,
 } from "./session-accessor.sqlite-entry-store.js";
+import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 
 const parseSessionEntryCalls = vi.hoisted(() => vi.fn());
@@ -118,7 +123,140 @@ function createSessionScope(label: string) {
   };
 }
 
+describe("SQLite retained session window references", () => {
+  it("reads retained candidate windows freshly and honors owner exclusions", () => {
+    const scope = createSessionScope("reference-window-candidates");
+    const database = openOpenClawAgentDatabase(scope);
+    database.db
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)",
+      )
+      .run(scope.sessionKey, "current", JSON.stringify({ sessionId: "current", updatedAt: 1 }));
+    readReferencedSessionIds(database);
+    const ids = Array.from({ length: 1201 }, (_, index) => `history-${index}`);
+    runOpenClawAgentWriteTransaction((current) => {
+      current.db
+        .prepare("UPDATE session_nodes SET archived_at = 1 WHERE session_key = ?")
+        .run(scope.sessionKey);
+      const insert = current.db.prepare(
+        "INSERT INTO session_windows (session_id, session_key, created_at, updated_at) VALUES (?, ?, 1, 1)",
+      );
+      for (const id of ids) {
+        insert.run(id, scope.sessionKey);
+      }
+      expect(readReferencedSessionIds(current, undefined, ids.slice(1))).toEqual(
+        new Set(ids.slice(1)),
+      );
+      expect(readReferencedSessionIds(current, new Set([scope.sessionKey]), ids)).toEqual(
+        new Set(),
+      );
+    }, scope);
+    expect(readReferencedSessionIds(database)).toEqual(new Set(["current", ...ids]));
+    database.db
+      .prepare("UPDATE session_nodes SET archived_at = NULL WHERE session_key = ?")
+      .run(scope.sessionKey);
+    expect(readReferencedSessionIds(database, undefined, ids)).toEqual(new Set());
+  });
+});
+
 describe("SQLite session entry cache", () => {
+  it.each(["plugin-owned-state", "promoted-slots"] as const)(
+    "scans plugin cleanup metadata without decoding saved prompts (%s)",
+    async (mode) => {
+      const scope = createSessionScope("plugin-cleanup");
+      const siblingScope = { ...scope, sessionKey: "agent:main:plugin-cleanup-sibling" };
+      const skillsSnapshot = { prompt: "unneeded cleanup prompt".repeat(4096), skills: [] };
+      const systemPromptReport = {
+        source: "run" as const,
+        generatedAt: 1,
+        systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
+        injectedWorkspaceFiles: [],
+        skills: { promptChars: 0, entries: [] },
+        tools: { listChars: 0, schemaChars: 0, entries: [] },
+      };
+      const entry = {
+        sessionId: "plugin-cleanup",
+        updatedAt: 1,
+        skillsSnapshot,
+        systemPromptReport,
+        pluginExtensions: { fixture: { state: { active: true } } },
+        pluginExtensionSlotKeys: { fixture: { state: "fixtureState" } },
+        fixtureState: { active: true },
+      };
+      await upsertSessionEntryCore(scope, entry);
+      await upsertSessionEntryCore(siblingScope, { ...entry, sessionId: "plugin-cleanup-sibling" });
+      const siblingBefore = loadSessionEntry(siblingScope);
+      expect(siblingBefore).toBeDefined();
+      const database = openOpenClawAgentDatabase(scope);
+
+      parseSessionEntryCalls.mockClear();
+      expect(
+        await cleanupPluginHostSessionStore({
+          agentId: scope.agentId,
+          storePath: database.path,
+          sessionKey: scope.sessionKey,
+          pluginId: "fixture",
+          sessionEntrySlotKeys: new Set(["fixtureState"]),
+          mode,
+        }),
+      ).toBe(1);
+      expect(parseSessionEntryCalls).toHaveBeenCalled();
+      expect(
+        parseSessionEntryCalls.mock.calls.every(([json]) => Buffer.byteLength(json) < 1024),
+      ).toBe(true);
+      const cleaned = loadSessionEntry(scope);
+      expect(cleaned?.skillsSnapshot).toEqual(skillsSnapshot);
+      expect(cleaned?.systemPromptReport).toEqual(systemPromptReport);
+      expect(cleaned).not.toHaveProperty("fixtureState");
+      expect(cleaned?.pluginExtensions).toEqual(
+        mode === "promoted-slots" ? entry.pluginExtensions : undefined,
+      );
+      expect(loadSessionEntry(siblingScope)).toEqual(siblingBefore);
+    },
+  );
+
+  it("omits saved prompts from usage inventory while preserving full transcript reads", async () => {
+    const scope = createSessionScope("usage-inventory");
+    const sessionId = "usage-inventory";
+    const skillsSnapshot = { prompt: "unused usage snapshot α🦞".repeat(4096), skills: [] };
+    const worktree = { id: "usage-worktree", branch: "main", repoRoot: "/repo" };
+    await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1, skillsSnapshot, worktree });
+    const event = { type: "session", id: sessionId };
+    expect(appendTranscriptEventSync({ ...scope, sessionId }, event).ok).toBe(true);
+    const database = openOpenClawAgentDatabase(scope);
+    const inventoryParams = { storePath: database.path, sessionsDir: path.dirname(database.path) };
+
+    parseSessionEntryCalls.mockClear();
+    const inventory = await listUsageCountedTranscriptStats(scope.agentId, inventoryParams);
+    expect(inventory).toEqual([
+      expect.objectContaining({
+        sessionId,
+        kind: "sqlite",
+        size: Buffer.byteLength(JSON.stringify(event)),
+        eventCount: 1,
+        maxSeq: 0,
+      }),
+    ]);
+    expect(parseSessionEntryCalls).toHaveBeenCalledOnce();
+    expect(
+      parseSessionEntryCalls.mock.calls.every(([json]) => Buffer.byteLength(json) < 1024),
+    ).toBe(true);
+    expect(await listUsageCountedTranscriptStats(scope.agentId, inventoryParams)).toEqual(
+      inventory,
+    );
+
+    const fullScope = { agentId: scope.agentId, env: scope.env };
+    for (const options of [{}, { sessionId }]) {
+      const full = listSessionTranscriptInstances(fullScope, options)[0];
+      const listed = listSessionTranscriptInstances(scope, options)[0];
+      expect(full?.entry.skillsSnapshot).toEqual(skillsSnapshot);
+      expect(listed).toEqual({ ...full, entry: { ...full?.entry, skillsSnapshot: undefined } });
+      expect(listed?.entry.worktree).not.toBe(full?.entry.worktree);
+      listed!.entry.worktree!.branch = "changed by reader";
+      expect(listSessionTranscriptInstances(scope, options)[0]?.entry.worktree).toEqual(worktree);
+    }
+  });
+
   it.each([
     ["malformed", "{", false],
     ["JSON5", '{sessionId:"raw",updatedAt:1}', false],
@@ -137,6 +275,8 @@ describe("SQLite session entry cache", () => {
   ])("preserves list parsing for %s rows", (_name, entryJson, readable) => {
     const scope = createSessionScope("raw-list-projection");
     const database = openOpenClawAgentDatabase(scope);
+    // Raw runtime writes follow canonical admission; this case isolates subsequent JSON decoding.
+    listSessionEntriesCore(scope);
     database.db
       .prepare(
         "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
@@ -256,6 +396,7 @@ describe("SQLite session entry cache", () => {
     const primary = openOpenClawAgentDatabase(scope);
     const first = listSessionEntriesCore({ ...scope, clone: false });
     const alternate = new DatabaseSync(primary.path, { readOnly: true });
+    const parse = vi.spyOn(JSON, "parse");
 
     try {
       parseSessionEntryCalls.mockClear();
@@ -265,7 +406,9 @@ describe("SQLite session entry cache", () => {
       );
       expect(alternateSnapshot.entries.get(scope.sessionKey)?.label).toBe("connection-identity");
       const alternateEntry = alternateSnapshot.entries.get(scope.sessionKey);
-      expect(parseSessionEntryCalls).toHaveBeenCalledOnce();
+      expect(
+        parse.mock.calls.filter(([json]) => json.includes('"sessionId":"connection-identity"')),
+      ).toHaveLength(1);
 
       parseSessionEntryCalls.mockClear();
       const second = listSessionEntriesCore({ ...scope, clone: false });
@@ -281,7 +424,11 @@ describe("SQLite session entry cache", () => {
 
       expect(alternateAgain.entries.get(scope.sessionKey)).toBe(alternateEntry);
       expect(parseSessionEntryCalls).not.toHaveBeenCalled();
+      expect(
+        parse.mock.calls.filter(([json]) => json.includes('"sessionId":"connection-identity"')),
+      ).toHaveLength(1);
     } finally {
+      parse.mockRestore();
       clearNodeSqliteKyselyCacheForDatabase(alternate);
       alternate.close();
     }

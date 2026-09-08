@@ -83,8 +83,8 @@ describe("channelsRemoveCommand", () => {
     configMocks.writeConfigFile.mockClear();
     configMocks.replaceConfigFile
       .mockReset()
-      .mockImplementation(async (params: { nextConfig: unknown }) => {
-        await configMocks.writeConfigFile(params.nextConfig);
+      .mockImplementation(async (params: { sourceConfig: unknown }) => {
+        await configMocks.writeConfigFile(params.sourceConfig);
       });
     runtime.log.mockClear();
     runtime.error.mockClear();
@@ -248,6 +248,45 @@ describe("channelsRemoveCommand", () => {
     });
     expect(defaultAccountId).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith('Deleted external-chat account "default".');
+  });
+
+  it.each([
+    { account: "", label: "empty" },
+    { account: "   ", label: "whitespace" },
+  ])("rejects a $label --account before deleting or writing config", async ({ account }) => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
+        channels: {
+          "external-chat": {
+            enabled: true,
+            token: "token-1",
+          },
+        },
+      }),
+    );
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createExternalChatCatalogEntry(),
+    ]);
+    const scopedPlugin = createExternalChatDeletePlugin();
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([
+        {
+          pluginId: "@vendor/external-chat-plugin",
+          plugin: scopedPlugin,
+          source: "test",
+        },
+      ]),
+    );
+
+    await expect(
+      channelsRemoveCommand({ channel: "external-chat", account, delete: true }, runtime, {
+        hasFlags: true,
+      }),
+    ).rejects.toThrow("--account must not be blank");
+
+    expect(scopedPlugin.config.deleteAccount).not.toHaveBeenCalled();
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 
   it("stops an active gateway channel runtime before deleting a runtime-backed account", async () => {

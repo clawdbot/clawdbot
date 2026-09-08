@@ -2,6 +2,7 @@
 import type { ChildProcess, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 
 const signalProcessTreeMock = vi.hoisted(() => vi.fn());
 
@@ -9,7 +10,10 @@ vi.mock("./kill-tree.js", () => ({
   signalProcessTree: signalProcessTreeMock,
 }));
 
-import { runRespawnChildWithSignalBridge } from "./respawn-child-runner.js";
+import {
+  type RespawnChildRuntime,
+  runRespawnChildWithSignalBridge,
+} from "./respawn-child-runner.js";
 
 function createChild(pid?: number): { child: ChildProcess; kill: ReturnType<typeof vi.fn> } {
   const kill = vi.fn(() => true);
@@ -38,7 +42,7 @@ describe("runRespawnChildWithSignalBridge", () => {
       runtime: {
         spawn: spawnChild as unknown as typeof spawn,
         attachChildProcessBridge: vi.fn(),
-        exit: vi.fn() as unknown as (code?: number) => never,
+        exit: vi.fn<RespawnChildRuntime["exit"]>(),
       },
       onError: vi.fn(),
     });
@@ -55,7 +59,7 @@ describe("runRespawnChildWithSignalBridge", () => {
     { signal: "SIGTERM" as const, laterSignal: "SIGINT" as const, exitCode: 143 },
   ])("exits $exitCode when the child exits by forwarded $signal", (testCase) => {
     const { child } = createChild(2345);
-    const exit = vi.fn();
+    const exit = vi.fn<RespawnChildRuntime["exit"]>();
     let onSignal: ((signal: NodeJS.Signals) => void) | undefined;
 
     runRespawnChildWithSignalBridge({
@@ -68,7 +72,7 @@ describe("runRespawnChildWithSignalBridge", () => {
           onSignal = options?.onSignal;
           return { detach: vi.fn() };
         }),
-        exit: exit as unknown as (code?: number) => never,
+        exit,
       },
       onError: vi.fn(),
     });
@@ -84,7 +88,7 @@ describe("runRespawnChildWithSignalBridge", () => {
     vi.useFakeTimers();
     const { child, kill } = createChild(2468);
     const spawnChild = vi.fn(() => child);
-    const exit = vi.fn();
+    const exit = vi.fn<RespawnChildRuntime["exit"]>();
     let onSignal: ((signal: NodeJS.Signals) => void) | undefined;
 
     try {
@@ -100,7 +104,7 @@ describe("runRespawnChildWithSignalBridge", () => {
             onSignal = options?.onSignal;
             return { detach: vi.fn() };
           }),
-          exit: exit as unknown as (code?: number) => never,
+          exit,
         },
         onError: vi.fn(),
       });
@@ -139,7 +143,7 @@ describe("runRespawnChildWithSignalBridge", () => {
     vi.useFakeTimers();
     const { child, kill } = createChild(3579);
     const spawnChild = vi.fn(() => child);
-    const exit = vi.fn();
+    const exit = vi.fn<RespawnChildRuntime["exit"]>();
     let onSignal: ((signal: NodeJS.Signals) => void) | undefined;
 
     try {
@@ -155,7 +159,7 @@ describe("runRespawnChildWithSignalBridge", () => {
             onSignal = options?.onSignal;
             return { detach: vi.fn() };
           }),
-          exit: exit as unknown as (code?: number) => never,
+          exit,
         },
         onError: vi.fn(),
       });
@@ -190,7 +194,7 @@ describe("runRespawnChildWithSignalBridge", () => {
       runtime: {
         spawn: spawnChild as unknown as typeof spawn,
         attachChildProcessBridge: vi.fn(),
-        exit: vi.fn() as unknown as (code?: number) => never,
+        exit: vi.fn<RespawnChildRuntime["exit"]>(),
       },
       onError: vi.fn(),
     });
@@ -209,7 +213,7 @@ describe("runRespawnChildWithSignalBridge", () => {
   it("settles a spawn error when the child has no pid", () => {
     const { child } = createChild();
     const onError = vi.fn();
-    const exit = vi.fn();
+    const exit = vi.fn<RespawnChildRuntime["exit"]>();
 
     runRespawnChildWithSignalBridge({
       command: "missing-command",
@@ -218,7 +222,7 @@ describe("runRespawnChildWithSignalBridge", () => {
       runtime: {
         spawn: vi.fn(() => child) as unknown as typeof spawn,
         attachChildProcessBridge: vi.fn(),
-        exit: exit as unknown as (code?: number) => never,
+        exit,
       },
       onError,
     });
@@ -230,11 +234,70 @@ describe("runRespawnChildWithSignalBridge", () => {
     expect(exit).toHaveBeenCalledWith(1);
   });
 
+  it.each(["resolve", "reject"] as const)(
+    "waits for asynchronous spawn diagnostics to %s before exiting",
+    async (settlement) => {
+      const { child } = createChild();
+      const reporting = createDeferredCore();
+      const onError = vi.fn(() => reporting.promise);
+      const exit = vi.fn<RespawnChildRuntime["exit"]>();
+      runRespawnChildWithSignalBridge({
+        command: "missing-command",
+        args: [],
+        env: {},
+        runtime: {
+          spawn: vi.fn(() => child) as unknown as typeof spawn,
+          attachChildProcessBridge: vi.fn(),
+          exit,
+        },
+        onError,
+      });
+
+      const error = new Error("spawn failed");
+      try {
+        child.emit("error", error);
+        expect(onError).toHaveBeenCalledExactlyOnceWith(error);
+        expect(exit).not.toHaveBeenCalled();
+      } finally {
+        if (settlement === "resolve") {
+          reporting.resolve();
+        } else {
+          reporting.reject(new Error("formatter unavailable"));
+        }
+        await reporting.promise.catch(() => undefined);
+      }
+      await vi.waitFor(() => expect(exit).toHaveBeenCalledExactlyOnceWith(1));
+    },
+  );
+
+  it("preserves synchronous spawn exceptions without starting diagnostics", () => {
+    const error = new Error("invalid spawn options");
+    const onError = vi.fn();
+    const exit = vi.fn<RespawnChildRuntime["exit"]>();
+    expect(() =>
+      runRespawnChildWithSignalBridge({
+        command: "node",
+        args: [],
+        env: {},
+        runtime: {
+          spawn: vi.fn(() => {
+            throw error;
+          }) as unknown as typeof spawn,
+          attachChildProcessBridge: vi.fn(),
+          exit,
+        },
+        onError,
+      }),
+    ).toThrow(error);
+    expect(onError).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+  });
+
   it("keeps escalation active across repeated operational errors", () => {
     vi.useFakeTimers();
     const { child, kill } = createChild(5678);
     const onError = vi.fn();
-    const exit = vi.fn();
+    const exit = vi.fn<RespawnChildRuntime["exit"]>();
     let onSignal: ((signal: NodeJS.Signals) => void) | undefined;
 
     try {
@@ -248,7 +311,7 @@ describe("runRespawnChildWithSignalBridge", () => {
             onSignal = options?.onSignal;
             return { detach: vi.fn() };
           }),
-          exit: exit as unknown as (code?: number) => never,
+          exit,
         },
         onError,
       });

@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { cleanupSessionLifecycleArtifacts } from "openclaw/plugin-sdk/session-store-runtime";
 
-export const DREAMING_SESSION_KEY_PREFIX = "dreaming-narrative-";
+const DREAMING_SESSION_KEY_PREFIX = "dreaming-narrative-";
 export const DREAMING_ORPHAN_MIN_AGE_MS = 300_000;
 const DREAMING_TRANSCRIPT_RUN_MARKER = '"runId":"dreaming-narrative-';
 

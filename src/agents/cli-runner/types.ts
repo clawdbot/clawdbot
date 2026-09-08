@@ -29,6 +29,7 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import type { CronScheduledToolCallerOrigin } from "../../cron/scheduled-tool-policy.js";
 import type { ExecMode } from "../../infra/exec-approvals.js";
 import type { ImageContent } from "../../llm/types.js";
+import type { DiagnosticEmbeddedRunOwner } from "../../logging/diagnostic-run-activity.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type {
@@ -63,8 +64,10 @@ import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import type { FastModeAutoProgressState } from "../fast-mode.js";
 import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
+import type { PreparedQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import type { AgentHarnessIsolatedCompletionParamsV2 } from "../harness/types.js";
 import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
+import type { RootedExecutionRequest } from "../rooted-run-params.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { SessionManager } from "../sessions/index.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
@@ -86,6 +89,8 @@ type CliSessionRetryParams = {
 export type RunCliAgentParams = {
   admittedRunContext?: AdmittedRunContext;
   preparedRunAdmission?: PreparedAgentRunAdmission;
+  /** Core lifecycle owner; never forwarded to the plugin execution context. */
+  diagnosticOwner?: DiagnosticEmbeddedRunOwner;
   /** Caller-owned in-memory transcript for ephemeral helper runs. */
   sessionManager?: SessionManager;
   sessionId: string;
@@ -99,6 +104,10 @@ export type RunCliAgentParams = {
   trigger?: EmbeddedRunTrigger;
   sessionFile: string;
   workspaceDir: string;
+  /** Host-owned task root; preparation must mediate all tools through its filesystem policy. */
+  rootedExecution?: RootedExecutionRequest;
+  /** Instruction workspace, separate from a host-owned task's file-tool root. */
+  bootstrapWorkspaceDir?: string;
   /** Trusted model/auth owner directory. Defaults to the session agent directory. */
   agentDir?: string;
   /** Task working directory for CLI execution. Defaults to workspaceDir. */
@@ -233,6 +242,8 @@ export type RunCliAgentParams = {
   messageProvider?: string;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
+  /** Trusted run-local capability to author pinned widgets without inline presentation. */
+  pinnedWidgetAuthoring?: boolean;
   currentChannelId?: string;
   chatId?: string;
   channelContext?: PluginHookChannelContext;
@@ -277,6 +288,8 @@ export type RunCliAgentParams = {
   };
   disableTools?: boolean;
   abortSignal?: AbortSignal;
+  /** Caller-owned authority for credential use; cancellation alone is not authorization. */
+  assertCurrent?: () => void;
   onPartialReply?: (payload: PartialReplyPayload) => boolean | void | Promise<boolean | void>;
   onBlockReply?: (payload: BlockReplyPayload, context?: BlockReplyContext) => void | Promise<void>;
   onExecutionStarted?: () => void;
@@ -316,6 +329,10 @@ type CliPreparedBackend = {
   backend: CliBackendConfig;
   beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
+  /** Exact process cleanup retained across attempt copies and natural registry removal. */
+  closeLiveSession?: (
+    reason: import("../../plugins/cli-backend.types.js").CliBackendLiveSessionCloseReason,
+  ) => Promise<void>;
   /** Transfer process-owned native skill artifacts without claiming turn-scoped MCP/auth state. */
   claimLiveSessionResources?: () => (() => Promise<void>) | undefined;
   /** Private child-only credential transport; never serialized into env or public plugin state. */
@@ -330,6 +347,7 @@ type CliPreparedBackend = {
     revokeProcessToken: () => void;
     activate: (captureKey: string) => void;
     deactivate: (captureKey: string) => void;
+    captureNativeTools?: (tools: unknown) => void;
   };
   mcpConfigHash?: string;
   mcpResumeHash?: string;
@@ -353,6 +371,8 @@ export type CliSessionBindingFacts = {
 /** Fully prepared execution context consumed by the CLI runner executor. */
 export type PreparedCliRunContext = {
   params: RunCliAgentParams & { admittedRunContext: AdmittedRunContext };
+  /** Core-only original caller policy, bound to each native request's exact lifetime. */
+  bindQuestionAnswerAuthority?: (assertActive: () => void) => PreparedQuestionAnswerAuthority;
   effectiveAuthProfileId?: string;
   /** Selected profile snapshot used only for terminal health settlement. */
   authProfileStore?: AuthProfileStore;
@@ -382,6 +402,8 @@ export type PreparedCliRunContext = {
   /** Host-held, policy-selected personal Workshop tool for the paired-node adapter. */
   nodeSkillWorkshop?: import("../tools/common.js").AnyAgentTool;
   openClawHistoryPrompt?: string;
+  /** Live owner of the transcript account-coverage checkpoint, independent of native continuity. */
+  cliHistoryWriter?: import("../../config/sessions/cli-history-boundary.js").CliHistoryWriter;
   authEpoch?: string;
   /** Strict owner fingerprint captured for live inference verification only. */
   authBindingFingerprint?: string;

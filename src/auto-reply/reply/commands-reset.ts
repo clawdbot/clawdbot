@@ -103,6 +103,7 @@ export async function maybeHandleResetCommand(
               lastInteractionAt: now,
             };
           },
+          { consumePendingReset: true },
         );
       }
     }
@@ -163,12 +164,15 @@ export async function maybeHandleResetCommand(
       }
       return {
         shouldContinue: false,
-        reply: { text: "✅ ACP session reset in place." },
+        reply: { text: "✅ ACP session reset in place.", isStatusNotice: true },
       };
     }
     return {
       shouldContinue: false,
-      reply: { text: "⚠️ ACP session reset failed. Check /acp status and try again." },
+      reply: {
+        text: "⚠️ ACP session reset failed. Check /acp status and try again.",
+        isStatusNotice: true,
+      },
     };
   }
 
@@ -197,6 +201,7 @@ export async function maybeHandleResetCommand(
         : {
             reply: {
               text: commandAction === "reset" ? "✅ Session reset." : "✅ New session started.",
+              isStatusNotice: true,
             },
           }),
     };

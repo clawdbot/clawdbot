@@ -9,6 +9,7 @@ import {
 } from "../../infra/fs-safe.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { activeWorkspaceHashContext, workspaceStatIdentity } from "./workspace-hash-memo.js";
 import {
   MAX_WORKSPACE_INVENTORY_ENTRIES,
@@ -50,21 +51,27 @@ export function isPortableRootContainedSymlink(
 
 export async function readWorkspaceFileSnapshotWithLimit(
   expectedPath: string,
-  maxBytes: number,
+  maxBytes: number | ((openedSize: number) => number),
   root?: string,
+  signal?: AbortSignal,
 ): Promise<WorkspaceFileSnapshot> {
+  signal?.throwIfAborted();
   const handle = await fs.open(
     expectedPath,
     constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
   );
   try {
+    signal?.throwIfAborted();
     const { memo: hashMemo, metrics, owner = "gateway" } = activeWorkspaceHashContext() ?? {};
     const before = await handle.stat({ bigint: true });
     const realPath = await resolveOpenedFileRealPathForHandle(handle, expectedPath);
     if (!before.isFile() || (root && !isPathInside(root, realPath))) {
       throw new Error("Gateway workspace file changed while it was being read");
     }
-    if (before.size > BigInt(maxBytes)) {
+    // Reserve from the opened descriptor: path metadata can race replacement,
+    // and concurrent memo hits must consume the same aggregate byte budget.
+    const byteLimit = typeof maxBytes === "number" ? maxBytes : maxBytes(Number(before.size));
+    if (before.size > BigInt(byteLimit)) {
       return { type: "unsupported" };
     }
     const identity = workspaceStatIdentity(owner, before);
@@ -80,12 +87,16 @@ export async function readWorkspaceFileSnapshotWithLimit(
       const buffer = Buffer.allocUnsafe(64 * 1024);
       size = 0;
       for (;;) {
+        signal?.throwIfAborted();
         const { bytesRead } = await handle.read(buffer, 0, buffer.length, size);
         if (bytesRead === 0) {
           break;
         }
         size += bytesRead;
-        if (size > maxBytes) {
+        if (size > byteLimit) {
+          if (typeof maxBytes !== "number") {
+            throw new Error("Gateway workspace file changed while it was being read");
+          }
           return { type: "unsupported" };
         }
         hash.update(buffer.subarray(0, bytesRead));
@@ -97,6 +108,7 @@ export async function readWorkspaceFileSnapshotWithLimit(
       }
     }
     const after = await handle.stat({ bigint: true });
+    signal?.throwIfAborted();
     if (after.size !== BigInt(size) || workspaceStatIdentity(owner, after) !== identity) {
       throw new Error("Gateway workspace file changed while it was being read");
     }
@@ -127,11 +139,14 @@ export async function readActualWorkspaceManifestImpl(params: {
   let manifestPathBytes = 0;
   let traversedEntries = 0;
   let traversedPathBytes = 0;
-  const addEntry = (entry: (typeof rawEntries)[number], bytes = 0): void => {
+  const addBytes = (bytes: number): void => {
     totalBytes += bytes;
     if (totalBytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
       throw new Error("Gateway workspace manifest exceeds its eligible byte limit");
     }
+  };
+  const addEntry = (entry: (typeof rawEntries)[number], bytes = 0): void => {
+    addBytes(bytes);
     manifestPathBytes += Buffer.byteLength(entry.path);
     if (manifestPathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
       throw new Error("Gateway workspace manifest paths exceed their byte limit");
@@ -141,7 +156,9 @@ export async function readActualWorkspaceManifestImpl(params: {
       throw new Error("Gateway workspace manifest has too many entries");
     }
   };
+  const scanController = new AbortController();
   const checkTraversal = (relative: string): void => {
+    scanController.signal.throwIfAborted();
     traversedEntries += 1;
     traversedPathBytes += Buffer.byteLength(relative);
     if (traversedEntries > MAX_WORKSPACE_INVENTORY_ENTRIES) {
@@ -151,23 +168,47 @@ export async function readActualWorkspaceManifestImpl(params: {
       throw new Error("Gateway workspace manifest paths exceed their byte limit");
     }
   };
+  const filePaths: string[] = [];
+  const runScans = async (
+    start: number,
+    end: number,
+    scan: (index: number) => Promise<void>,
+  ): Promise<void> => {
+    let next = start;
+    const result = await runTasksWithConcurrency({
+      // Keep the queued graph bounded too: each worker claims an index before
+      // awaiting I/O, rather than retaining one task per inventory entry.
+      tasks: Array.from({ length: Math.min(4, end - start) }, () => async () => {
+        while (next < end && !scanController.signal.aborted) {
+          await scan(next++);
+        }
+      }),
+      limit: 4,
+      errorMode: "stop",
+      onTaskError: (error) => scanController.abort(error),
+    });
+    if (result.hasError) {
+      throw result.firstError;
+    }
+  };
   const addFile = async (relative: string): Promise<void> => {
     const snapshot = await readWorkspaceFileSnapshotWithLimit(
       localPath(root, relative),
-      MAX_WORKSPACE_INVENTORY_TOTAL_BYTES - totalBytes,
+      (size) => {
+        addBytes(size);
+        return size;
+      },
       root,
+      scanController.signal,
     );
     if (snapshot.type === "file") {
-      addEntry(
-        {
-          path: relative,
-          type: "file",
-          mode: snapshot.mode,
-          size: snapshot.size,
-          sha256: snapshot.sha256,
-        },
-        snapshot.size,
-      );
+      addEntry({
+        path: relative,
+        type: "file",
+        mode: snapshot.mode,
+        size: snapshot.size,
+        sha256: snapshot.sha256,
+      });
       return;
     }
     throw new Error("Gateway workspace manifest exceeds its eligible byte limit");
@@ -227,7 +268,7 @@ export async function readActualWorkspaceManifestImpl(params: {
       return "absent";
     }
     if (stats.isFile()) {
-      await addFile(relative);
+      filePaths.push(relative);
       return "included";
     }
     return "absent";
@@ -278,7 +319,7 @@ export async function readActualWorkspaceManifestImpl(params: {
         );
       } else if (stats.isFile()) {
         hasNonDerivedEntry = true;
-        await addFile(relative);
+        filePaths.push(relative);
       } else {
         hasNonDerivedEntry = true;
         // Special local nodes cannot be represented in a cloud manifest. They
@@ -302,17 +343,30 @@ export async function readActualWorkspaceManifestImpl(params: {
       .toSorted(
         (left, right) => right.depth - left.depth || left.relative.localeCompare(right.relative),
       );
-    for (const { relative } of paths) {
-      const state = await addIncludedPath(relative, includedNodes, derivedOnlyDirectories);
-      if (state === "included") {
-        includedNodes.add(relative);
-      } else if (state === "derived-only") {
-        derivedOnlyDirectories.add(relative);
+    // Siblings are independent, but parent classification needs every deeper
+    // membership result. Join each depth before admitting the next one.
+    for (let start = 0; start < paths.length;) {
+      let end = start + 1;
+      while (end < paths.length && paths[end]!.depth === paths[start]!.depth) {
+        end++;
       }
+      await runScans(start, end, async (index) => {
+        const { relative } = paths[index]!;
+        const state = await addIncludedPath(relative, includedNodes, derivedOnlyDirectories);
+        if (state === "included") {
+          includedNodes.add(relative);
+        } else if (state === "derived-only") {
+          derivedOnlyDirectories.add(relative);
+        }
+      });
+      start = end;
     }
   } else {
     await walk("");
   }
+  // No file readers overlap metadata selection; failures stop new admission
+  // and join all opened handles before any manifest can be returned.
+  await runScans(0, filePaths.length, (index) => addFile(filePaths[index]!));
   const directories = rawEntries
     .filter((entry) => entry.type === "directory")
     .toSorted((left, right) => left.path.localeCompare(right.path));

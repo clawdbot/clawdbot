@@ -31,7 +31,7 @@ import {
   prepareModelRuntimeSnapshot,
   PreparedModelRuntimeOwnerNotPublishedError,
   preparedModelRuntimeConfigsMatch,
-  refreshStalePreparedModelRuntimeCatalog,
+  refreshPreparedModelRuntimeCatalog,
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
@@ -53,7 +53,7 @@ export type LoadPreparedModelCatalogParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   providerDiscoveryProviderIds?: readonly string[];
-  /** Refreshes auth-stale inventory; true also rebuilds a fresh full catalog on writable reads. */
+  /** Initializes cold or auth-stale inventory; true also refreshes a full catalog on writable reads. */
   refreshFullCatalog?: boolean | "stale";
   /** Scoped read-only loads may run live discovery for the scoped providers only. */
   scopedLiveProviderDiscovery?: boolean;
@@ -75,13 +75,15 @@ async function materializeRequestedModelCatalog(
   if (!snapshot.loadFullModelCatalog) {
     return snapshot;
   }
-  // Inventory reads repair auth-stale content without making turn-path reads start discovery.
-  const staleCatalog =
+  // Inventory demand initializes discovery; prepared-only and turn-path reads stay passive.
+  const inventoryCatalog =
     refreshFullCatalog === "stale" || refreshFullCatalog === true
-      ? await refreshStalePreparedModelRuntimeCatalog(snapshot)
+      ? await refreshPreparedModelRuntimeCatalog(snapshot, {
+          refresh: refreshFullCatalog === true && readOnly !== true,
+        })
       : undefined;
   const modelCatalog =
-    staleCatalog ??
+    inventoryCatalog ??
     (readOnly === true
       ? snapshot.readFullModelCatalog?.()
       : await snapshot.loadFullModelCatalog({ refresh: refreshFullCatalog === true }));
@@ -231,7 +233,7 @@ export function getAvailablePreparedModelCatalogSnapshot(
 async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
   params: LoadPreparedModelCatalogParams,
   configPolicy: PreparedModelCatalogConfigPolicy,
-): Promise<PreparedModelRuntimeSnapshot> {
+): Promise<{ snapshot: PreparedModelRuntimeSnapshot; release?: () => void }> {
   const { activationExact, activationFull, exact, full } = resolveInputs(params);
   if (params.readOnly) {
     const fullCandidates =
@@ -243,7 +245,7 @@ async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
         if (!acceptsPreparedSnapshotConfig(prepared, candidate, configPolicy)) {
           throw new PreparedModelCatalogConfigReplacedError(candidate.agentDir);
         }
-        return prepared;
+        return { snapshot: prepared };
       } catch (error) {
         if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
           throw error;
@@ -251,19 +253,16 @@ async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
       }
     }
     const lease = await acquireReadOnlyPreparedModelRuntime(activationExact);
-    try {
-      if (!acceptsPreparedSnapshotConfig(lease.snapshot, activationExact, configPolicy)) {
-        throw new PreparedModelCatalogConfigReplacedError(activationExact.agentDir);
-      }
-      return lease.snapshot;
-    } finally {
+    if (!acceptsPreparedSnapshotConfig(lease.snapshot, activationExact, configPolicy)) {
       lease.release();
+      throw new PreparedModelCatalogConfigReplacedError(activationExact.agentDir);
     }
+    return lease;
   }
   try {
     const preparedExact = await prepareModelRuntimeSnapshot(exact);
     if (acceptsPreparedSnapshotConfig(preparedExact, exact, configPolicy)) {
-      return preparedExact;
+      return { snapshot: preparedExact };
     }
   } catch (error) {
     if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
@@ -274,7 +273,7 @@ async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
   // publication belongs exclusively to startup/reload or agent-run admission.
   const activated = await activateStandalonePreparedModelRuntime(activationExact);
   if (activated && acceptsPreparedSnapshotConfig(activated, activationExact, configPolicy)) {
-    return activated;
+    return { snapshot: activated };
   }
   if (activated) {
     throw new PreparedModelRuntimeOwnerNotPublishedError(
@@ -284,36 +283,42 @@ async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
   // Gateway pre-run selection can name a spawned workspace before embedded-run admission.
   // Lease a complete exact generation so provider catalog hooks remain visible for this read.
   const lease = await acquireAgentRunPreparedModelRuntime(activationFull);
-  try {
-    if (!acceptsPreparedSnapshotConfig(lease.snapshot, activationFull, configPolicy)) {
-      throw new PreparedModelRuntimeOwnerNotPublishedError(
-        `prepared model catalog owner was not published for the requested config (${activationFull.agentDir})`,
-      );
-    }
-    return lease.snapshot;
-  } finally {
+  if (!acceptsPreparedSnapshotConfig(lease.snapshot, activationFull, configPolicy)) {
     lease.release();
+    throw new PreparedModelRuntimeOwnerNotPublishedError(
+      `prepared model catalog owner was not published for the requested config (${activationFull.agentDir})`,
+    );
   }
+  return lease;
 }
 
-async function loadPreparedModelCatalogOwnerSnapshotWithPolicy(
+async function withPreparedModelCatalogOwnerPolicy<T>(
   params: LoadPreparedModelCatalogParams,
   configPolicy: PreparedModelCatalogConfigPolicy,
-): Promise<PreparedModelRuntimeSnapshot> {
+  read: (snapshot: PreparedModelRuntimeSnapshot) => T | Promise<T>,
+): Promise<T> {
   const publishedReadOnlyOwner = params.readOnly
     ? getPreparedModelCatalogOwnerSnapshot(params)
     : undefined;
-  const snapshot = await resolvePreparedModelCatalogOwnerSnapshotWithPolicy(params, configPolicy);
-  // A fallback read-only lease retires before this projection. Only a published owner can safely
-  // expose its generation cache; the leased snapshot already contains its exact prepared facts.
-  if (params.readOnly && !publishedReadOnlyOwner) {
-    return snapshot;
-  }
-  return await materializeRequestedModelCatalog(
-    snapshot,
-    params.readOnly,
-    params.refreshFullCatalog,
+  const { snapshot, release } = await resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
+    params,
+    configPolicy,
   );
+  try {
+    // Only published owners expose generation caches; temporary reads use their prepared facts.
+    const owner =
+      params.readOnly && !publishedReadOnlyOwner
+        ? snapshot
+        : await materializeRequestedModelCatalog(
+            snapshot,
+            params.readOnly,
+            params.refreshFullCatalog,
+          );
+    // Projection must finish before a temporary lease retires its liveness predicate.
+    return await read(owner);
+  } finally {
+    release?.();
+  }
 }
 
 async function loadScopedReadOnlyModelCatalog(
@@ -428,18 +433,26 @@ export async function loadProviderScopedThinkingCatalog(params: {
   );
 }
 
+/** Keeps the exact catalog owner alive through an asynchronous read. */
+export async function withPreparedModelCatalogOwner<T>(
+  params: LoadPreparedModelCatalogParams,
+  read: (snapshot: PreparedModelRuntimeSnapshot) => T | Promise<T>,
+): Promise<T> {
+  return await withPreparedModelCatalogOwnerPolicy(params, "exact", read);
+}
+
 /** Resolves the lifecycle owner for an exact caller-supplied config. */
 export async function loadPreparedModelCatalogOwnerSnapshot(
   params: LoadPreparedModelCatalogParams = {},
 ): Promise<PreparedModelRuntimeSnapshot> {
-  return await loadPreparedModelCatalogOwnerSnapshotWithPolicy(params, "exact");
+  return await withPreparedModelCatalogOwnerPolicy(params, "exact", (snapshot) => snapshot);
 }
 
 /** Resolves the currently published owner when Gateway config changes during the read. */
 export async function loadPublishedPreparedModelCatalogOwnerSnapshot(
   params: LoadPreparedModelCatalogParams = {},
 ): Promise<PreparedModelRuntimeSnapshot> {
-  return await loadPreparedModelCatalogOwnerSnapshotWithPolicy(params, "published");
+  return await withPreparedModelCatalogOwnerPolicy(params, "published", (snapshot) => snapshot);
 }
 
 /** Resolves a complete published owner for long-lived runtime consumers. */

@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const installedPackageTreePolicySource = `
@@ -48,4 +50,30 @@ export function configWithInstalledPackageTreeBlockPolicy(exec: {
       },
     },
   };
+}
+
+export async function installProjectDependencies(
+  projectRoot: string,
+  dependencies: Record<string, string>,
+): Promise<void> {
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(
+    path.join(projectRoot, "package.json"),
+    `${JSON.stringify({ private: true, dependencies }, null, 2)}\n`,
+    "utf8",
+  );
+  await promisify(execFile)(
+    "npm",
+    [
+      "install",
+      "--omit=dev",
+      "--omit=peer",
+      "--legacy-peer-deps",
+      "--loglevel=error",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+    ],
+    { cwd: projectRoot },
+  );
 }

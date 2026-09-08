@@ -157,6 +157,7 @@ export function preparePerformanceFixture(root: string, options: PerformanceFixt
     GITHUB_SHA: target,
     GITHUB_WORKFLOW: "OpenClaw Performance",
     GITHUB_REPOSITORY: "fixture/performance",
+    GH_TOKEN: "fixture-performance-read-token",
     GITHUB_RUN_ID: "123",
     GITHUB_RUN_ATTEMPT: "1",
     ARTIFACT_ID: "42",

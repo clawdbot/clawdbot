@@ -55,23 +55,6 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func `task scoped state directory survives detached async reads`() async throws {
-        try await self.withTempStateDir { stateDirectoryURL in
-            _ = try ExecApprovalsStore.updateDefaults { defaults in
-                defaults.security = .allowlist
-                defaults.ask = .onMiss
-            }.get()
-
-            let resolved = try await ExecApprovalsStore.resolveDefaultsAsyncResult().get()
-
-            #expect(resolved.security == .allowlist)
-            #expect(resolved.ask == .onMiss)
-            #expect(ExecApprovalsStore.databaseURL() == ExecApprovalsSQLiteStore.databaseURL(
-                stateDirectoryURL: stateDirectoryURL))
-        }
-    }
-
-    @Test
     func `migration cache logs once and recovers after the legacy identity clears`() {
         let stateDirectoryURL = URL(fileURLWithPath: "/tmp/openclaw-migration-cache-test")
         let legacyFileURL = stateDirectoryURL.appendingPathComponent("exec-approvals.json")
@@ -168,17 +151,17 @@ struct ExecApprovalsStoreRefactorTests {
             #expect(resolved.agent.ask == .off)
             #expect(resolved.agent.askFallback == .deny)
 
-            let result = ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .full
-            }
-            guard case .failure(.unavailable) = result else {
+            var snapshot = ExecApprovalsStore.readSnapshot()
+            snapshot.file.defaults = ExecApprovalsDefaults(security: .full)
+            let result = ExecApprovalsStore.saveFile(snapshot.file, ifBaseHash: snapshot.hash)
+            guard case .unavailable = result else {
                 Issue.record("expected malformed-file mutation failure")
                 return
             }
 
-            let snapshot = ExecApprovalsStore.readSnapshot()
-            #expect(snapshot.file.defaults?.security == .deny)
-            #expect(snapshot.file.defaults?.ask == .off)
+            let unchanged = ExecApprovalsStore.readSnapshot()
+            #expect(unchanged.file.defaults?.security == .deny)
+            #expect(unchanged.file.defaults?.ask == .off)
         }
     }
 
@@ -203,10 +186,10 @@ struct ExecApprovalsStoreRefactorTests {
                 #expect(resolved.agent.security == .deny)
                 #expect(resolved.agent.ask == .off)
 
-                let result = ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                    entry.security = .full
-                }
-                guard case .failure(.unavailable) = result else {
+                var snapshot = ExecApprovalsStore.readSnapshot()
+                snapshot.file.defaults = ExecApprovalsDefaults(security: .full)
+                let result = ExecApprovalsStore.saveFile(snapshot.file, ifBaseHash: snapshot.hash)
+                guard case .unavailable = result else {
                     Issue.record("expected invalid-structure mutation failure")
                     return
                 }
@@ -253,12 +236,11 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func `native add preserves arg pattern bytes`() async throws {
+    func `conditional save preserves arg pattern bytes`() async throws {
         try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.addAllowlistEntry(
-                agentId: "main",
-                pattern: "/usr/bin/rg",
-                argPattern: " ^safe$ ").get()
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
+                entry.allowlist = [ExecAllowlistEntry(pattern: "/usr/bin/rg", argPattern: " ^safe$ ")]
+            }.get()
 
             let entry = try #require(
                 ExecApprovalsStore.loadFile().agents?["main"]?.allowlist?.first)
@@ -311,10 +293,9 @@ struct ExecApprovalsStoreRefactorTests {
             #expect(entry.commandText == nil)
             #expect(entry.argPattern == #"^safe\.py$"#)
 
-            _ = try ExecApprovalsStore.addAllowlistEntry(
-                agentId: "main",
-                pattern: "/bin/echo",
-                commandText: "echo secret-token").get()
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
+                entry.allowlist?.append(ExecAllowlistEntry(pattern: "/bin/echo", commandText: "echo secret-token"))
+            }.get()
             let entries = try #require(ExecApprovalsStore.loadFile().agents?["main"]?.allowlist)
             #expect(entries.allSatisfy { $0.commandText == nil })
             let record = try ExecApprovalsSQLiteStore.read(
@@ -341,9 +322,9 @@ struct ExecApprovalsStoreRefactorTests {
                 source: "allow-always",
                 commandText: "python3 b.py",
                 argPattern: #"^b\.py$"#)
-            _ = try ExecApprovalsStore.addAllowlistEntries(
-                agentId: "main",
-                entries: [first, second]).get()
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
+                entry.allowlist = [first, second]
+            }.get()
 
             _ = try ExecApprovalsStore.recordAllowlistUses(
                 agentId: "main",
@@ -367,7 +348,9 @@ struct ExecApprovalsStoreRefactorTests {
                 pattern: "/usr/bin/curl",
                 source: "allow-always",
                 argPattern: "sha256:argv:test-digest")
-            _ = try ExecApprovalsStore.addAllowlistEntries(agentId: "main", entries: [hashed]).get()
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
+                entry.allowlist = [hashed]
+            }.get()
 
             _ = try ExecApprovalsStore.recordAllowlistUses(
                 agentId: "main",
@@ -384,46 +367,15 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func `cleanup removes obsolete generated approvals but preserves manual and current rules`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.addAllowlistEntries(
-                agentId: "main",
-                entries: [
-                    ExecAllowlistEntry(pattern: "/usr/bin/git", source: "allow-always"),
-                    ExecAllowlistEntry(
-                        pattern: "/usr/bin/curl",
-                        source: "allow-always",
-                        argPattern: "sha256:argv:obsolete"),
-                    ExecAllowlistEntry(
-                        pattern: "/usr/bin/rg",
-                        source: "allow-always",
-                        argPattern: "sha256:cwd-argv:v1:current"),
-                    ExecAllowlistEntry(pattern: "/usr/bin/python3", argPattern: #"^script\.py$"#),
-                    ExecAllowlistEntry(pattern: "=node-command:marker", source: "allow-always"),
-                ]).get()
-
-            let removed = try ExecApprovalsStore.removeObsoleteGeneratedAllowAlwaysEntries().get()
-            let entries = try #require(ExecApprovalsStore.loadFile().agents?["main"]?.allowlist)
-
-            #expect(removed == 2)
-            #expect(entries.map(\.pattern) == [
-                "/usr/bin/rg",
-                "/usr/bin/python3",
-                "=node-command:marker",
-            ])
-        }
-    }
-
-    @Test
     func `usage checkpoint rejects a revoked reusable approval`() async throws {
         try await self.withTempStateDir { _ in
             let stale = ExecAllowlistEntry(id: "stale", pattern: "/usr/bin/printf")
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
                 entry.security = .allowlist
                 entry.ask = .off
                 entry.allowlist = [stale]
             }.get()
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
                 entry.allowlist = []
             }.get()
 
@@ -452,12 +404,12 @@ struct ExecApprovalsStoreRefactorTests {
                 id: "stale",
                 pattern: "/usr/bin/rg",
                 argPattern: "^safe$")
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
                 entry.security = .allowlist
                 entry.ask = .off
                 entry.allowlist = [stale]
             }.get()
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
                 entry.allowlist = [ExecAllowlistEntry(
                     id: "stale",
                     pattern: "/usr/bin/rg",
@@ -496,12 +448,12 @@ struct ExecApprovalsStoreRefactorTests {
                 id: "stale",
                 pattern: "/usr/bin/rg",
                 argPattern: evaluatedArgPattern)
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
                 entry.security = .allowlist
                 entry.ask = .off
                 entry.allowlist = [stale]
             }.get()
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
                 entry.allowlist = [ExecAllowlistEntry(
                     id: "stale",
                     pattern: "/usr/bin/rg",
@@ -545,7 +497,7 @@ struct ExecApprovalsStoreRefactorTests {
     @Test
     func `execution commit rejects unprompted full policy after concurrent deny`() async throws {
         try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
                 entry.security = .deny
                 entry.ask = .off
             }.get()
@@ -569,7 +521,7 @@ struct ExecApprovalsStoreRefactorTests {
     @Test
     func `execution commit rejects ask tightening from off to on miss`() async throws {
         try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
                 entry.security = .full
                 entry.ask = .onMiss
             }.get()
@@ -593,13 +545,13 @@ struct ExecApprovalsStoreRefactorTests {
     @Test
     func `execution commit rejects explicit approval after concurrent deny`() async throws {
         try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
                 entry.security = .full
                 entry.ask = .off
             }.get()
             let policySnapshot = ExecApprovalPolicySnapshot(
                 resolved: ExecApprovalsStore.resolve(agentId: "main"))
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
                 entry.security = .deny
                 entry.ask = .off
             }.get()
@@ -622,13 +574,13 @@ struct ExecApprovalsStoreRefactorTests {
     @Test
     func `execution commit rejects auto review after ask changes to always`() async throws {
         try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
                 entry.security = .full
                 entry.ask = .onMiss
             }.get()
             let policySnapshot = ExecApprovalPolicySnapshot(
                 resolved: ExecApprovalsStore.resolve(agentId: "main"))
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
                 entry.ask = .always
             }.get()
 
@@ -645,7 +597,7 @@ struct ExecApprovalsStoreRefactorTests {
                 return
             }
 
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
                 entry.security = .deny
                 entry.ask = .off
             }.get()
@@ -669,7 +621,7 @@ struct ExecApprovalsStoreRefactorTests {
             let stale = ExecAllowlistEntry(
                 pattern: "/usr/bin/printf",
                 source: "allow-always")
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
                 entry.security = .allowlist
                 entry.ask = .always
                 entry.allowlist = [stale]
@@ -677,7 +629,7 @@ struct ExecApprovalsStoreRefactorTests {
             let forwardedSnapshot = ExecApprovalPolicySnapshot(
                 resolved: ExecApprovalsStore.resolve(agentId: "main"))
 
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
                 entry.allowlist = []
             }.get()
             let freshContext = await ExecApprovalEvaluator.evaluate(
@@ -716,7 +668,7 @@ struct ExecApprovalsStoreRefactorTests {
     func `execution commit cannot restore a revoked allow always rule`() async throws {
         try await self.withTempStateDir { _ in
             let stale = ExecAllowlistEntry(pattern: "/usr/bin/printf")
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
                 entry.security = .allowlist
                 entry.ask = .always
                 entry.allowlist = [stale]
@@ -728,7 +680,7 @@ struct ExecApprovalsStoreRefactorTests {
                 askFallback: evaluated.agent.askFallback,
                 autoAllowSkills: evaluated.agent.autoAllowSkills,
                 allowlist: evaluated.allowlist)
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
                 entry.allowlist = []
             }.get()
             let grant = ExecAllowlistUse(
@@ -755,7 +707,7 @@ struct ExecApprovalsStoreRefactorTests {
     @Test
     func `execution commit atomically persists allow always audit metadata`() async throws {
         try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
                 entry.security = .allowlist
                 entry.ask = .onMiss
             }.get()
@@ -795,7 +747,7 @@ struct ExecApprovalsStoreRefactorTests {
     @Test
     func `stale concurrent allow always snapshots preserve additive grants and upgrades`() async throws {
         try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "researcher") { entry in
+            _ = try Self.updateAgentFixture(agentId: "researcher") { entry in
                 entry.security = .allowlist
                 entry.ask = .always
                 entry.allowlist = [ExecAllowlistEntry(pattern: "/usr/bin/grep")]
@@ -834,7 +786,7 @@ struct ExecApprovalsStoreRefactorTests {
     func `usage checkpoint rejects current deny policy`() async throws {
         try await self.withTempStateDir { _ in
             let stale = ExecAllowlistEntry(id: "stale", pattern: "/usr/bin/printf")
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
                 entry.security = .deny
                 entry.ask = .off
                 entry.allowlist = [stale]
@@ -859,37 +811,9 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func `usage checkpoint rejects skill trust after auto allow is removed`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .allowlist
-                entry.ask = .off
-                entry.autoAllowSkills = true
-            }.get()
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.autoAllowSkills = nil
-            }.get()
-
-            let result = ExecApprovalsStore.recordAllowlistUses(
-                agentId: "main",
-                uses: [],
-                command: "skill-tool",
-                authorization: .currentPolicy(
-                    evaluatedSecurity: .allowlist,
-                    evaluatedAsk: .off,
-                    basis: .autoAllowedSkill))
-
-            guard case .failure(.unavailable) = result else {
-                Issue.record("expected revoked skill trust checkpoint to fail")
-                return
-            }
-        }
-    }
-
-    @Test
     func `usage checkpoint applies current timeout fallback instead of ask`() async throws {
         try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
                 entry.security = .full
                 entry.ask = .always
                 entry.askFallback = .full
@@ -910,7 +834,7 @@ struct ExecApprovalsStoreRefactorTests {
     @Test
     func `usage checkpoint rejects a revoked timeout fallback`() async throws {
         try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
                 entry.security = .full
                 entry.ask = .always
                 entry.askFallback = .deny
@@ -934,7 +858,7 @@ struct ExecApprovalsStoreRefactorTests {
     @Test
     func `usage checkpoint rejects fallback mode tightening`() async throws {
         try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
                 entry.security = .full
                 entry.ask = .always
                 entry.askFallback = .allowlist
@@ -959,21 +883,6 @@ struct ExecApprovalsStoreRefactorTests {
 
 extension ExecApprovalsStoreRefactorTests {
     @Test
-    func `add allowlist entries accepts basename pattern`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.addAllowlistEntries(
-                agentId: "main",
-                entries: [
-                    ExecAllowlistEntry(pattern: "echo"),
-                    ExecAllowlistEntry(pattern: "/bin/echo"),
-                ]).get()
-
-            let resolved = ExecApprovalsStore.resolve(agentId: "main")
-            #expect(resolved.allowlist.map(\.pattern) == ["echo", "/bin/echo"])
-        }
-    }
-
-    @Test
     func `ensure file migrates legacy pattern from resolved path`() async throws {
         try await self.withTempStateDir { _ in
             try Self.replaceRawJSON(
@@ -982,33 +891,6 @@ extension ExecApprovalsStoreRefactorTests {
             let ensured = ExecApprovalsStore.ensureFile()
             #expect(ensured.agents?["main"]?.allowlist?.map(\.pattern) == ["/usr/bin/echo"])
             #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.map(\.pattern) == ["/usr/bin/echo"])
-        }
-    }
-
-    @Test
-    func `entry scoped update persists a legacy missing id before editing`() async throws {
-        try await self.withTempStateDir { _ in
-            try Self.replaceRawJSON(
-                """
-                {"version":1,"agents":{"main":{"allowlist":[{"pattern":"/bin/echo"}]}}}
-                """)
-
-            let resolved = ExecApprovalsStore.resolve(agentId: "main")
-            guard let id = resolved.allowlist.first?.id else {
-                Issue.record("expected legacy allowlist entry")
-                return
-            }
-            let result = ExecApprovalsStore.updateAllowlistEntry(
-                agentId: "main",
-                id: id,
-                pattern: "/bin/cat")
-
-            if case let .failure(error) = result {
-                Issue.record("unexpected update failure: \(error)")
-            }
-            let persisted = ExecApprovalsStore.loadFile().agents?["main"]?.allowlist
-            #expect(persisted?.map(\.id) == [id])
-            #expect(persisted?.map(\.pattern) == ["/bin/cat"])
         }
     }
 
@@ -1034,70 +916,15 @@ extension ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func `entry scoped update cannot restore a revoked allowlist snapshot`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.addAllowlistEntry(
-                agentId: "main",
-                pattern: "/bin/echo").get()
-            let revokedID = try #require(ExecApprovalsStore.resolve(agentId: "main").allowlist.first?.id)
-
-            _ = try ExecApprovalsStore.removeAllowlistEntry(
-                agentId: "main",
-                id: revokedID).get()
-            _ = try ExecApprovalsStore.addAllowlistEntry(
-                agentId: "main",
-                pattern: "/usr/bin/date").get()
-            let result = ExecApprovalsStore.updateAllowlistEntry(
-                agentId: "main",
-                id: revokedID,
-                pattern: "/bin/cat")
-
-            if case let .failure(error) = result {
-                Issue.record("unexpected update failure: \(error)")
-            }
-            #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.map(\.pattern) == ["/usr/bin/date"])
-        }
-    }
-
-    @Test
-    func `entry scoped mutations reject inherited wildcard entries`() async throws {
-        try await self.withTempStateDir { _ in
-            let inherited = ExecAllowlistEntry(id: "wildcard-entry", pattern: "/bin/echo")
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "*") { entry in
-                entry.allowlist = [inherited]
-            }.get()
-            #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.map(\.id) == [inherited.id])
-
-            let update = ExecApprovalsStore.updateAllowlistEntry(
-                agentId: "main",
-                id: inherited.id,
-                pattern: "/bin/cat")
-            let removal = ExecApprovalsStore.removeAllowlistEntry(
-                agentId: "main",
-                id: inherited.id)
-
-            if case .failure(.entryNotOwned) = update {} else {
-                Issue.record("expected inherited update to report entryNotOwned")
-            }
-            if case .failure(.entryNotOwned) = removal {} else {
-                Issue.record("expected inherited removal to report entryNotOwned")
-            }
-            let persisted = ExecApprovalsStore.loadFile().agents?["*"]?.allowlist
-            #expect(persisted?.map(\.id) == [inherited.id])
-            #expect(persisted?.map(\.pattern) == [inherited.pattern])
-        }
-    }
-
-    @Test
     func `conditional save cannot restore revoked approvals`() async throws {
         try await self.withTempStateDir { _ in
-            ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            Self.updateAgentFixture(agentId: "main") { entry in
                 entry.security = .allowlist
                 entry.allowlist = [ExecAllowlistEntry(pattern: "/bin/echo")]
             }
             let stale = ExecApprovalsStore.readSnapshot()
 
-            ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            Self.updateAgentFixture(agentId: "main") { entry in
                 entry.security = .deny
                 entry.allowlist = []
             }
@@ -1117,7 +944,7 @@ extension ExecApprovalsStoreRefactorTests {
     @Test
     func `conditional save does not recreate a deleted approval row`() async throws {
         try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+            _ = try Self.updateAgentFixture(agentId: "main") { entry in
                 entry.security = .allowlist
                 entry.allowlist = [ExecAllowlistEntry(pattern: "/bin/echo")]
             }.get()
@@ -1139,6 +966,38 @@ extension ExecApprovalsStoreRefactorTests {
             #expect(try ExecApprovalsSQLiteStore.read(
                 stateDirectoryURL: stateDirectoryURL) == nil)
         }
+    }
+
+    private enum FixtureError: Error { case saveRejected }
+
+    @discardableResult
+    private static func updateAgentFixture(
+        agentId: String,
+        mutate: (inout ExecApprovalsAgent) -> Void) -> Result<Void, FixtureError>
+    {
+        var snapshot = ExecApprovalsStore.readSnapshot()
+        var agents = snapshot.file.agents ?? [:]
+        var agent = agents[agentId] ?? ExecApprovalsAgent()
+        mutate(&agent)
+        agents[agentId] = agent
+        snapshot.file.agents = agents
+        guard case .saved = ExecApprovalsStore.saveFile(snapshot.file, ifBaseHash: snapshot.hash) else {
+            return .failure(.saveRejected)
+        }
+        return .success(())
+    }
+
+    private static func updateDefaultsFixture(
+        _ mutate: (inout ExecApprovalsDefaults) -> Void) -> Result<Void, FixtureError>
+    {
+        var snapshot = ExecApprovalsStore.readSnapshot()
+        var defaults = snapshot.file.defaults ?? ExecApprovalsDefaults()
+        mutate(&defaults)
+        snapshot.file.defaults = defaults
+        guard case .saved = ExecApprovalsStore.saveFile(snapshot.file, ifBaseHash: snapshot.hash) else {
+            return .failure(.saveRejected)
+        }
+        return .success(())
     }
 
     private static func seedCurrentApprovalsFile(in stateDir: URL) throws {

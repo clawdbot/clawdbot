@@ -9,7 +9,11 @@ import { SettingsManager } from "./settings-manager.js";
 import { FileSettingsStorage } from "./settings-storage.js";
 
 const fixtures = createFixtureLifetime();
-afterEach(() => fixtures.cleanup());
+afterEach(async () => {
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
+  await fixtures.cleanup();
+});
 
 describe("FileSettingsStorage", () => {
   it("preserves provider retry settings across an upgraded settings write", async () => {
@@ -35,6 +39,108 @@ describe("FileSettingsStorage", () => {
     const stored = JSON.parse(readFileSync(settingsPath, "utf8"));
     expect(stored.retry.provider).toEqual({ maxRetries: 7, timeoutMs: 1_000 });
   });
+
+  it("keeps the original settings when a write fails partway", () => {
+    const root = fixtures.createTempDir("openclaw-settings-partial-write-");
+    const agentDir = join(root, "agent");
+    const settingsPath = join(agentDir, "settings.json");
+    const original = JSON.stringify({ packages: ["npm:@openclaw/keep"] });
+    const replacement = JSON.stringify({ packages: ["npm:@openclaw/replacement"] });
+    mkdirSync(agentDir);
+    fs.writeFileSync(settingsPath, original);
+
+    const writeFileSync = fs.writeFileSync;
+    vi.spyOn(fs, "writeFileSync").mockImplementation((target, data, options) => {
+      if (data === replacement) {
+        writeFileSync(target, replacement.slice(0, replacement.length / 2), options as never);
+        throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+      }
+      return writeFileSync(target, data, options as never);
+    });
+    syncBuiltinESMExports();
+
+    expect(() =>
+      new FileSettingsStorage(root, agentDir).withLock("global", () => replacement),
+    ).toThrow("disk full");
+    expect(readFileSync(settingsPath, "utf8")).toBe(original);
+    expect(fs.readdirSync(agentDir).filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves existing settings and parent directory modes",
+    () => {
+      const root = fixtures.createTempDir("openclaw-settings-modes-");
+      const agentDir = join(root, "agent");
+      const settingsPath = join(agentDir, "settings.json");
+      mkdirSync(agentDir, { mode: 0o751 });
+      fs.writeFileSync(settingsPath, "{}", { mode: 0o640 });
+
+      new FileSettingsStorage(root, agentDir).withLock("global", () =>
+        JSON.stringify({ packages: ["npm:@openclaw/new"] }),
+      );
+
+      expect(fs.statSync(settingsPath).mode & 0o777).toBe(0o640);
+      expect(fs.statSync(agentDir).mode & 0o777).toBe(0o751);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")("uses the current umask when creating settings", () =>
+    fixtures.run(async () => {
+      const root = fixtures.createTempDir("openclaw-settings-umask-");
+      const agentDir = join(root, "agent");
+      const result = await runNodeScript(
+        [
+          "--import",
+          new URL("../../../scripts/tsx.mjs", import.meta.url).href,
+          "--input-type=module",
+          "--eval",
+          String.raw`
+              import { statSync } from "node:fs";
+              import { join } from "node:path";
+              const [moduleUrl, root, agentDir] = process.argv.slice(1);
+              const { FileSettingsStorage } = await import(moduleUrl);
+              process.umask(0o077);
+              new FileSettingsStorage(root, agentDir).withLock("global", () => "{}");
+              console.log(statSync(join(agentDir, "settings.json")).mode & 0o777);
+            `,
+          new URL("./settings-storage.ts", import.meta.url).href,
+          root,
+          agentDir,
+        ],
+        process.env,
+        10_000,
+        { requireProcessTreeExit: true },
+      );
+
+      expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
+      expect(result.stdout.trim()).toBe(String(0o600));
+    }),
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves a settings symlink chain under a symlinked parent",
+    () => {
+      const root = fixtures.createTempDir("openclaw-settings-symlinks-");
+      const realAgentDir = join(root, "real-agent");
+      const linkedAgentDir = join(root, "linked-agent");
+      const settingsPath = join(realAgentDir, "settings.json");
+      const intermediatePath = join(realAgentDir, "settings-target-link.json");
+      const targetPath = join(realAgentDir, "operator-settings.json");
+      const replacement = JSON.stringify({ packages: ["npm:@openclaw/new"] });
+      mkdirSync(realAgentDir);
+      fs.writeFileSync(targetPath, JSON.stringify({ packages: ["npm:@openclaw/old"] }));
+      fs.symlinkSync(targetPath, intermediatePath);
+      fs.symlinkSync(intermediatePath, settingsPath);
+      fs.symlinkSync(realAgentDir, linkedAgentDir);
+
+      new FileSettingsStorage(root, linkedAgentDir).withLock("global", () => replacement);
+
+      expect(fs.lstatSync(linkedAgentDir).isSymbolicLink()).toBe(true);
+      expect(fs.lstatSync(settingsPath).isSymbolicLink()).toBe(true);
+      expect(fs.lstatSync(intermediatePath).isSymbolicLink()).toBe(true);
+      expect(readFileSync(targetPath, "utf8")).toBe(replacement);
+    },
+  );
 
   it("loads missing settings without creating their directories", () => {
     const root = fixtures.createTempDir("openclaw-settings-read-");

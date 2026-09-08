@@ -47,22 +47,64 @@ class GatewaySummaryRuntimeTest {
   }
 
   @Test
+  fun summariesRemainUnknownUntilTheGatewayResponds() {
+    val runtime = createRuntime()
+    val summaries =
+      listOf(
+        runtime.channelsState.value,
+        runtime.skillsState.value,
+        runtime.dreamingState.value,
+        runtime.healthLogsState.value,
+        runtime.usageState.value,
+      )
+
+    summaries.forEach { assertNull("an unrequested summary is not a successful empty response", it.summary) }
+  }
+
+  @Test
+  fun aFailedFirstRefreshDoesNotInventAnEmptyChannelSnapshot() =
+    runBlocking<Unit> {
+      val runtime = createRuntime()
+      connect(runtime)
+      val requests = Channel<HeldSummaryRequest>(Channel.UNLIMITED)
+      runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+        check(method == "channels.status")
+        val response = CompletableDeferred<String>()
+        requests.send(HeldSummaryRequest(response, currentCoroutineContext().job))
+        response.await()
+      }
+
+      runtime.refreshChannels()
+      val failed = withTimeout(2_000) { requests.receive() }
+      failed.response.completeExceptionally(IllegalStateException("channels unavailable"))
+      withTimeout(2_000) { failed.job.join() }
+      assertNotNull(runtime.channelsState.value.errorText)
+      assertFalse(runtime.channelsState.value.refreshing)
+      assertNull("a failed load does not prove that no channels exist", runtime.channelsState.value.summary)
+
+      runtime.refreshChannels()
+      val successful = withTimeout(2_000) { requests.receive() }
+      successful.complete("""{"channels":{}}""")
+      assertNotNull("a successful empty response is still a loaded snapshot", runtime.channelsState.value.summary)
+      assertNull(runtime.channelsState.value.errorText)
+      requests.close()
+    }
+
+  @Test
   fun olderRefreshCompletionKeepsNewerRefreshLoading() =
     runBlocking {
       withOverlappingChannelRefreshes { runtime, older, newer ->
         older.complete(channelSummary("older"))
 
         assertTrue("the newer refresh still owns loading", runtime.channelsState.value.refreshing)
-        assertTrue(
-          runtime.channelsState.value.summary.channels
-            .isEmpty(),
-        )
+        assertNull(runtime.channelsState.value.summary)
         assertNull(runtime.channelsState.value.errorText)
 
         newer.complete(channelSummary("newer"))
         assertEquals(
           "newer",
-          runtime.channelsState.value.summary.channels
+          checkNotNull(runtime.channelsState.value.summary)
+            .channels
             .single()
             .id,
         )
@@ -79,7 +121,8 @@ class GatewaySummaryRuntimeTest {
 
         assertEquals(
           "newer",
-          runtime.channelsState.value.summary.channels
+          checkNotNull(runtime.channelsState.value.summary)
+            .channels
             .single()
             .id,
         )
@@ -99,7 +142,8 @@ class GatewaySummaryRuntimeTest {
         assertNull("the older failure no longer owns the displayed result", runtime.channelsState.value.errorText)
         assertEquals(
           "newer",
-          runtime.channelsState.value.summary.channels
+          checkNotNull(runtime.channelsState.value.summary)
+            .channels
             .single()
             .id,
         )
@@ -118,7 +162,8 @@ class GatewaySummaryRuntimeTest {
         newer.complete(channelSummary("newer"))
         assertEquals(
           "newer",
-          runtime.channelsState.value.summary.channels
+          checkNotNull(runtime.channelsState.value.summary)
+            .channels
             .single()
             .id,
         )
@@ -133,10 +178,7 @@ class GatewaySummaryRuntimeTest {
         newer.complete(channelSummary("newer"))
         older.complete(channelSummary("older"))
 
-        assertTrue(
-          runtime.channelsState.value.summary.channels
-            .isEmpty(),
-        )
+        assertNull(runtime.channelsState.value.summary)
         assertNull(runtime.channelsState.value.errorText)
         assertFalse(runtime.channelsState.value.refreshing)
       }
@@ -159,11 +201,12 @@ class GatewaySummaryRuntimeTest {
 
     runtime.refreshUsage()
     waitUntil {
-      runtime.usageState.value.summary.providers
-        .isNotEmpty()
+      runtime.usageState.value.summary
+        ?.providers
+        ?.isNotEmpty() == true
     }
     assertEquals(2, calls.get())
-    assertFalse(runtime.usageState.value.summary.refreshing)
+    assertFalse(checkNotNull(runtime.usageState.value.summary).refreshing)
   }
 
   @Test
@@ -181,11 +224,11 @@ class GatewaySummaryRuntimeTest {
     waitUntil { calls.get() == 4 }
     Thread.sleep(100)
     assertEquals(4, calls.get())
-    assertFalse(runtime.usageState.value.summary.refreshing)
+    assertFalse(checkNotNull(runtime.usageState.value.summary).refreshing)
     assertFalse(
       usageRefreshVisible(
         requestRefreshing = runtime.usageState.value.refreshing,
-        summaryRefreshing = runtime.usageState.value.summary.refreshing,
+        summaryRefreshing = checkNotNull(runtime.usageState.value.summary).refreshing,
       ),
     )
     // Clearing the marker without this would render "No usage data yet.",
@@ -215,11 +258,12 @@ class GatewaySummaryRuntimeTest {
     assertEquals(2, calls.get())
     assertEquals(
       "Claude",
-      runtime.usageState.value.summary.providers
+      checkNotNull(runtime.usageState.value.summary)
+        .providers
         .single()
         .displayName,
     )
-    assertFalse(runtime.usageState.value.summary.refreshing)
+    assertFalse(checkNotNull(runtime.usageState.value.summary).refreshing)
   }
 
   private fun createRuntime(): NodeRuntime {

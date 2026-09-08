@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import type { TranscriptDisplayPosition } from "../chat/transcript-display-position.js";
-import { readNestedToolActivity } from "./nested-tool-activity.js";
+import { readNestedToolActivity, type NestedToolActivity } from "./nested-tool-activity.js";
+
+export type TranscriptDisplayActivity = Pick<
+  NestedToolActivity["details"],
+  "afterEntryId" | "scopeId" | "startOrder"
+>;
 
 /** Keep source namespaces and rewrite generations separate without exposing storage paths. */
 export function createTranscriptDisplaySource(parts: readonly string[]): string {
@@ -13,12 +18,26 @@ export function createTranscriptDisplayPosition(
   message: unknown,
   entrySeq: (id: string) => number | undefined,
 ): TranscriptDisplayPosition {
+  return createTranscriptDisplayPositionFromActivity(
+    source,
+    rawSeq,
+    readNestedToolActivity(message)?.details,
+    entrySeq,
+  );
+}
+
+/** Archive indexes retain validated placement facts without retaining tool input/output. */
+export function createTranscriptDisplayPositionFromActivity(
+  source: string,
+  rawSeq: number,
+  activity: TranscriptDisplayActivity | undefined,
+  entrySeq: (id: string) => number | undefined,
+): TranscriptDisplayPosition {
   const position: TranscriptDisplayPosition = { source, rawSeq };
-  const activity = readNestedToolActivity(message);
   if (!activity) {
     return position;
   }
-  const { afterEntryId, scopeId, startOrder } = activity.details;
+  const { afterEntryId, scopeId, startOrder } = activity;
   const afterRawSeq = afterEntryId === null ? null : entrySeq(afterEntryId);
   // The dispatch cut is a physical fact, not the anchor's relocated display position.
   // Unresolved or rewritten anchors keep completion order rather than guessing a parent.

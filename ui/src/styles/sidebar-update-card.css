@@ -60,6 +60,12 @@ html.openclaw-native-macos
     border-color var(--duration-fast) ease;
 }
 
+@media (pointer: coarse) {
+  .sidebar-update-card--floating .sidebar-update-card__action {
+    min-height: 44px;
+  }
+}
+
 .sidebar-update-card__action:hover:not(:disabled):not([aria-disabled="true"]),
 .sidebar-update-card__action:focus-visible:not([aria-disabled="true"]) {
   border-color: color-mix(in srgb, var(--accent) 36%, var(--border));

@@ -23,6 +23,54 @@ describe("Doctor workspace persistence", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
+  it("persists legacy channel command owners once and reports each rewritten entry", async () => {
+    await withTempHome(async (home) => {
+      await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+        const preserved = [
+          "discord:100000000000000002",
+          "matrix:@owner:example.org",
+          "slack:team:T123:user:U456",
+          "unknown:user:123",
+          "discord:user:user:123",
+          "discord:user:",
+          "discord:user:*",
+          "123",
+          456,
+        ];
+        const canonical = ["discord:100000000000000001", "telegram:123", "slack:U123"];
+        const configPath = await writeOpenClawConfig(home, {
+          meta: { lastTouchedVersion: "2026.7.1-2" },
+          agents: { list: [{ id: "main" }] },
+          commands: {
+            ownerAllowFrom: [
+              "discord:user:100000000000000001",
+              "telegram:user:123",
+              "slack:user:U123",
+              ...preserved,
+            ],
+          },
+          gateway: { mode: "local" },
+          plugins: { enabled: false },
+        });
+        const ctx = await prepareDoctorContext(configPath);
+        for (const index of [0, 1, 2]) {
+          expect(ctx.configResult.pendingChangePanels?.join("\n")).toContain(
+            `commands.ownerAllowFrom[${index}]`,
+          );
+        }
+        await runInitialConfigWriteHealth(ctx);
+        expect(ctx.configWriteRefusal).toBeUndefined();
+        const saved = await readConfigFileSnapshot();
+        expect(saved.config.commands?.ownerAllowFrom).toEqual([...canonical, ...preserved]);
+        const bytes = await fs.readFile(configPath, "utf8");
+        const repeated = await prepareDoctorContext(configPath);
+        expect(repeated.configResult.shouldWriteConfig).toBe(false);
+        await runInitialConfigWriteHealth(repeated);
+        expect(await fs.readFile(configPath, "utf8")).toBe(bytes);
+      });
+    });
+  });
+
   it.each([
     ["entries", false],
     ["list", false],
@@ -174,7 +222,8 @@ describe("Doctor workspace persistence", () => {
             expect(saved.valid).toBe(true);
             expect(saved.config.agents?.ownership).toBe("explicit");
             expect(saved.config.agents?.entries?.main?.workspace).toBe(workspace);
-            expect(saved.config.agents?.defaults?.systemAgent).toBeUndefined();
+            expect(saved.config.agents?.defaults?.systemAgent).toEqual({ agentId: "main" });
+            expect(saved.config.agents?.defaults?.heartbeat).toEqual({ agentId: "main" });
             expect(saved.config.bindings).toBeUndefined();
             expect(resolveAgentWorkspaceDir(saved.config, "main")).toBe(workspace);
             for (const [name, content] of Object.entries(originals)) {
@@ -232,7 +281,7 @@ describe("Doctor workspace persistence", () => {
     },
   );
 
-  it("repairs a legacy candidate without writing when include ownership blocks migration", async () => {
+  it("refuses a legacy candidate that mixes an include-owned repair with root changes", async () => {
     await withTempHome(async (home) => {
       await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const configPath = await writeOpenClawConfig(home, {
@@ -255,8 +304,12 @@ describe("Doctor workspace persistence", () => {
         );
 
         const ctx = await prepareDoctorContext(configPath);
-        expect(ctx.configResult.shouldWriteConfig).toBe(false);
+        // The nested include owns the otel repair, but the legacy roster needs the
+        // root writer; one file cannot take both, so the writer refuses and
+        // Doctor records the refusal instead of flattening the include.
+        expect(ctx.configResult.shouldWriteConfig).toBe(true);
         await runInitialConfigWriteHealth(ctx);
+        expect(ctx.configWriteRefusal).toBe("include-ownership");
         expect(await fs.readFile(configPath, "utf-8")).toBe(original);
         expect(JSON.parse(await fs.readFile(includePath, "utf-8"))).toEqual({ protocol: "grpc" });
       });

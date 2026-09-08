@@ -15,32 +15,11 @@ import { sessionMatchesExpectedTranscriptTurn } from "../config/sessions/session
 import { getOwnedSessionTranscriptWriterFence } from "../config/sessions/transcript-write-context.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { getUserTurnTranscriptAdmissionOwner } from "./user-turn-transcript-admission.js";
 import type {
-  PersistedUserTurnMessage,
-  UserTurnTranscriptAdmissionReceipt,
   UserTurnTranscriptAnnotation,
   UserTurnTranscriptRecorder,
 } from "./user-turn-transcript.types.js";
-
-type AdmissionOwner = {
-  receipt: () => UserTurnTranscriptAdmissionReceipt | undefined;
-  message: () => PersistedUserTurnMessage | undefined;
-  blocked: () => boolean;
-  refresh: (
-    admission: UserTurnTranscriptAdmissionReceipt,
-    message: PersistedUserTurnMessage,
-  ) => void;
-};
-
-// Only the recorder factory registers an owner. A copied SDK recorder/receipt cannot bind a writer.
-const admissionOwners = new WeakMap<UserTurnTranscriptRecorder, AdmissionOwner>();
-
-export function registerUserTurnTranscriptAdmissionOwner(
-  recorder: UserTurnTranscriptRecorder,
-  owner: AdmissionOwner,
-): void {
-  admissionOwners.set(recorder, owner);
-}
 
 /** Core-only binding performed by the harness host before invoking plugin code. */
 export function bindUserTurnTranscriptAnnotation(params: {
@@ -54,7 +33,7 @@ export function bindUserTurnTranscriptAnnotation(params: {
   abortSignal?: AbortSignal;
   assertCurrent: () => void;
 }): ((annotation: UserTurnTranscriptAnnotation) => Promise<void>) | undefined {
-  const owner = admissionOwners.get(params.recorder);
+  const owner = getUserTurnTranscriptAdmissionOwner(params.recorder);
   const receipt = owner?.receipt();
   const message = owner?.message();
   if (!owner || !receipt || !message || owner.blocked() || message.display === false) {

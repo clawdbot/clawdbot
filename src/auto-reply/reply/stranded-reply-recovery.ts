@@ -90,6 +90,7 @@ function buildStrandedReplyRetryFollowupRun(
     // WeakSet-tracked, so a shared object would be double-owned and free cancel
     // while the retry still runs.
     turnAdoptionLifecycle: undefined,
+    replyOperationRunStates: undefined,
     run: {
       ...base.run,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

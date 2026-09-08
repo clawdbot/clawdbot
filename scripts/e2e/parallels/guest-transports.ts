@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { sleep } from "../../lib/sleep.mjs";
 import { run } from "./host-command.ts";
+import { runMacosHostCommand } from "./macos-exec.ts";
 import type { PhaseRunner } from "./phase-runner.ts";
 import { encodePowerShell, psSingleQuote } from "./powershell.ts";
 import type { CommandResult } from "./types.ts";
@@ -114,11 +115,15 @@ function appendCommandResult(phases: PhaseRunner, result: CommandResult): void {
   phases.append(result.stderr);
 }
 
-function cleanupPosixGuestScript(phases: PhaseRunner, transportArgs: string[]): void {
+function cleanupPosixGuestScript(
+  phases: PhaseRunner,
+  transportArgs: string[],
+  runCommand: typeof run = run,
+): void {
   try {
     appendCommandResult(
       phases,
-      run("prlctl", transportArgs, {
+      runCommand("prlctl", transportArgs, {
         check: false,
         quiet: true,
         timeoutMs: POSIX_GUEST_SCRIPT_CLEANUP_TIMEOUT_MS,
@@ -823,7 +828,7 @@ export class MacosGuest {
   }
 
   run(args: string[], options: PosixGuestOptions = {}): CommandResult {
-    const result = run("prlctl", this.transportArgs(args, options.env), {
+    const result = runMacosHostCommand("prlctl", this.transportArgs(args, options.env), {
       check: false,
       input: options.input,
       quiet: true,
@@ -844,7 +849,11 @@ export class MacosGuest {
       });
       return this.exec(["/bin/bash", scriptPath], { env });
     } finally {
-      cleanupPosixGuestScript(this.phases, this.transportArgs(["/bin/rm", "-f", scriptPath]));
+      cleanupPosixGuestScript(
+        this.phases,
+        this.transportArgs(["/bin/rm", "-f", scriptPath]),
+        runMacosHostCommand,
+      );
     }
   }
 
@@ -861,6 +870,7 @@ export class MacosGuest {
       label,
       script,
       timeoutMs: remainingTimeoutMs ?? timeoutMs ?? 30 * 60_000,
+      runCommand: runMacosHostCommand,
       transportArgs: (args) => this.transportArgs(args, env),
     });
   }

@@ -173,6 +173,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
     const terminalResolution = params.observeToolTerminal?.({
       toolCallId: params.call.callId,
       toolName: params.call.tool,
+      result: response,
       arguments:
         response.executedArguments ?? executionSnapshot?.executedArguments ?? params.call.arguments,
       ...(params.toolMeta ? { meta: params.toolMeta } : {}),
@@ -209,8 +210,9 @@ export async function handleDynamicToolCallWithTimeout(params: {
     try {
       params.onAgentToolResult?.(event);
     } catch (error) {
+      const message = formatToolExecutionErrorMessage(error, "Unknown error");
       embeddedAgentLog.warn(
-        `onAgentToolResult handler failed: tool=${params.call.tool} error=${String(error)}`,
+        `onAgentToolResult handler failed: tool=${params.call.tool} error=${message}`,
       );
     }
   };
@@ -507,14 +509,17 @@ export function resolveDynamicToolCallTimeoutMs(params: {
 }): number {
   const args = isJsonObject(params.call.arguments) ? params.call.arguments : undefined;
   if (
+    params.call.tool === "openclaw" ||
     params.call.tool === "ask_user" ||
     (params.call.tool === "secrets" && args?.action === "request")
   ) {
     try {
       // Human entry owns a validated wait longer than ordinary tool execution.
-      // Leave grace for registration, cancellation, and the structured no_answer result.
+      // OpenClaw delegation uses that default for its ten-minute approval plus
+      // staging/application; it has no model-authored timeout override.
+      const timeoutSeconds = params.call.tool === "openclaw" ? undefined : args?.timeoutSeconds;
       return (
-        normalizeQuestionTimeoutSeconds(args?.timeoutSeconds) * 1_000 +
+        normalizeQuestionTimeoutSeconds(timeoutSeconds) * 1_000 +
         CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS
       );
     } catch {

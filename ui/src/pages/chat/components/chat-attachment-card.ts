@@ -103,9 +103,9 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
   }`;
   return html`
     <div
-      class="chat-assistant-attachment-card__header ${compactPreview
-        ? "chat-assistant-attachment-card__header--preview"
-        : ""}"
+      class="chat-assistant-attachment-card__header ${
+        compactPreview ? "chat-assistant-attachment-card__header--preview" : ""
+      }"
     >
       <div class="chat-assistant-attachment-card__identity">
         ${renderAttachmentCardIcon({
@@ -114,55 +114,67 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
           visualMode: options.visualMode,
         })}
         <span
-          class="chat-assistant-attachment-card__details ${compactPreview
-            ? "chat-assistant-attachment-card__details--preview"
-            : ""}"
+          class="chat-assistant-attachment-card__details ${
+            compactPreview ? "chat-assistant-attachment-card__details--preview" : ""
+          }"
         >
           <span class="chat-assistant-attachment-card__title" title=${options.label}
             >${options.label}</span
           >
-          ${compactPreview
-            ? formattedSize
-              ? html`<span class="chat-assistant-attachment-card__separator" aria-hidden="true"
-                    >·</span
-                  ><span class="chat-assistant-attachment-card__meta">${formattedSize}</span>`
-              : null
-            : html`<span class="chat-assistant-attachment-card__meta">${metadata}</span>`}
+          ${
+            compactPreview
+              ? formattedSize
+                ? html`<span class="chat-assistant-attachment-card__separator" aria-hidden="true"
+                      >·</span
+                    ><span class="chat-assistant-attachment-card__meta">${formattedSize}</span>`
+                : null
+              : html`<span class="chat-assistant-attachment-card__meta">${metadata}</span>`
+          }
         </span>
       </div>
       <span class="chat-assistant-attachment-card__actions">
-        ${options.voiceNote && !compactPreview
-          ? html`<span class="chat-assistant-attachment-badge"
-              >${t("chat.messages.voiceNote")}</span
-            >`
-          : null}
-        ${options.downloadHref
-          ? html`<a
-              class=${downloadClass}
-              href=${options.downloadHref}
-              download=${options.label}
-              target="_blank"
-              rel="noreferrer"
-              aria-label=${downloadTitle}
-              title=${downloadTitle}
-              >${icons.download}</a
-            >`
-          : null}
-        ${hasOpenAction
-          ? html`<button
-              type="button"
-              class="chat-assistant-attachment-card__action ${compactPreview
-                ? "chat-assistant-attachment-card__expand--icon"
-                : "chat-assistant-attachment-card__action--labeled"} chat-assistant-attachment-card__expand"
-              aria-label=${expandLabel}
-              title=${expandLabel}
-              @click=${options.onExpand}
-            >
-              ${compactPreview
-                ? icons.chevronsUpDown
-                : html`<span>${t("chat.attachments.open")}</span>`}
-            </button>`
-          : null}
+        ${
+          options.voiceNote && !compactPreview
+            ? html`<span class="chat-assistant-attachment-badge"
+                >${t("chat.messages.voiceNote")}</span
+              >`
+            : null
+        }
+        ${
+          options.downloadHref
+            ? html`<a
+                class=${downloadClass}
+                href=${options.downloadHref}
+                download=${options.label}
+                target="_blank"
+                rel="noreferrer"
+                aria-label=${downloadTitle}
+                title=${downloadTitle}
+                >${icons.download}</a
+              >`
+            : null
+        }
+        ${
+          hasOpenAction
+            ? html`<button
+                type="button"
+                class="chat-assistant-attachment-card__action ${
+                  compactPreview
+                    ? "chat-assistant-attachment-card__expand--icon"
+                    : "chat-assistant-attachment-card__action--labeled"
+                } chat-assistant-attachment-card__expand"
+                aria-label=${expandLabel}
+                title=${expandLabel}
+                @click=${options.onExpand}
+              >
+                ${
+                  compactPreview
+                    ? icons.chevronsUpDown
+                    : html`<span>${t("chat.attachments.open")}</span>`
+                }
+              </button>`
+            : null
+        }
       </span>
     </div>
   `;

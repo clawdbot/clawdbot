@@ -22,7 +22,10 @@ import { getTaskById, listTaskRecordPage } from "../../tasks/runtime-internal.js
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { canAccessTaskRequesterSession } from "../task-session-access.js";
+import {
+  canAccessTaskRequesterSession,
+  prepareTaskSessionReadFilter,
+} from "../task-session-access.js";
 import { mapTaskSummary } from "./task-summary.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -183,6 +186,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
       agentId,
       sessionKey,
       sessionAgentId,
+      params.sortBy ?? null,
     ];
     const bindCursor = (...fields: number[]) => taskListFingerprint([fields, ...bindingFacts]);
     const cursorBinding =
@@ -191,11 +195,10 @@ export const tasksHandlers: GatewayRequestHandlers = {
       invalidTaskListCursor(respond);
       return;
     }
-    // The ledger pages by last activity so an old long-running task that just
-    // finished still surfaces first. Selection stays inside the registry so
-    // only the bounded wire page pays for defensive record cloning.
-    const canReadTask = (task: Readonly<TaskRecord>) =>
-      canAccessTaskRequesterSession({ cfg, client, task });
+    // Selection stays inside the registry so ordering applies before pagination
+    // and only the bounded wire page pays for defensive record cloning.
+    const prepareFilter = (tasks: readonly Readonly<TaskRecord>[]) =>
+      prepareTaskSessionReadFilter({ cfg, client }, tasks);
     const pageParams = {
       offset: cursor?.offset ?? 0,
       limit,
@@ -205,8 +208,11 @@ export const tasksHandlers: GatewayRequestHandlers = {
       sessionKey,
       sessionAgentId,
       cfg,
-      filter: canReadTask,
+      prepareFilter,
+      sortBy: params.sortBy,
     };
+    // Page scans yield to active task updates. Restart the complete selection
+    // and authorization attempt so transient registry churn never reaches clients.
     for (let attempt = 0; attempt < TASKS_LIST_MAX_ATTEMPTS; attempt += 1) {
       const accessRevision = readGatewayAccessRevision();
       if (cursor && cursor.accessRevision !== accessRevision) {
@@ -215,23 +221,20 @@ export const tasksHandlers: GatewayRequestHandlers = {
       }
       const pageResult = await listTaskRecordPage(pageParams);
       if (!pageResult.ok) {
+        // A cursor bound to an older revision can never succeed on retry, so it
+        // restarts the caller. Transient registry churn gets another attempt.
         if (pageResult.error === "cursor_stale") {
           invalidTaskListCursor(respond);
           return;
         }
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "task registry changed during tasks.list; retry"),
-        );
-        return;
+        continue;
       }
       const page = pageResult.value;
       // Sharing changes invalidate every access decision made before a yield.
       // Recheck selected rows in the final synchronous response turn as well.
       if (
         accessRevision !== readGatewayAccessRevision() ||
-        page.tasks.some((task) => !canReadTask(task))
+        !page.tasks.every(prepareFilter(page.tasks))
       ) {
         if (cursor) {
           invalidTaskListCursor(respond);
@@ -258,7 +261,11 @@ export const tasksHandlers: GatewayRequestHandlers = {
     respond(
       false,
       undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, "task access changed during tasks.list; retry"),
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        "Task activity did not stabilize. Wait a moment, then refresh Tasks.",
+        { retryable: true, retryAfterMs: 250 },
+      ),
     );
   },
   "tasks.get": ({ params, respond, context, client }) => {

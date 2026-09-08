@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   ChannelsStatusResultSchema,
   TalkSessionCancelOutputResultSchema,
+  WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
 } from "./schema/channels.js";
 
@@ -34,6 +35,23 @@ describe("WebLoginWaitParamsSchema", () => {
         currentQrDataUrl: "https://example.com/qr.png",
       }),
     ).toBe(false);
+  });
+
+  it("accepts an explicit channel and opaque login session key", () => {
+    expect(
+      validate.Check({
+        channel: "openclaw-weixin",
+        sessionKey: "2d3c49c2-5a88-4e90-9a36-264834875ecc",
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("WebLoginStartParamsSchema", () => {
+  const validate = Compile(WebLoginStartParamsSchema);
+
+  it("accepts an explicit QR-login channel", () => {
+    expect(validate.Check({ channel: "openclaw-weixin" })).toBe(true);
   });
 });
 
@@ -98,6 +116,15 @@ describe("ChannelsStatusResultSchema", () => {
         channelDefaultAccountId: { discord: "default" },
         partial: true,
         warnings: ["discord:default probe timed out after 1000ms"],
+        statusIssues: [
+          {
+            channel: "discord",
+            accountId: "default",
+            kind: "config",
+            message: "No guilds are allowed.",
+            fix: "Add an allowed guild.",
+          },
+        ],
         eventLoop: {
           degraded: true,
           degradedSinceMs: 61_000,

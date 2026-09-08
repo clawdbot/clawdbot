@@ -20,6 +20,7 @@ vi.mock("./attempt-subscription-cleanup.js", () => ({
   cleanupEmbeddedAttemptResources: hoisted.cleanupEmbeddedAttemptResources,
 }));
 
+import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { cleanupEmbeddedAttemptSessionPhase } from "./attempt-session-settle.js";
 
 const attempt = {
@@ -39,15 +40,8 @@ function createInput(overrides: Record<string, unknown> = {}) {
     describeFlushState: vi.fn(),
     flush: vi.fn(),
   };
-  const state = {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
-    timedOutByRunBudget: false,
-    promptError: null,
+  const state: { terminal: AgentRunAttemptTerminal; beforeAgentRunBlockedBy?: string } = {
+    terminal: { kind: "ok" },
   };
   return {
     attempt,
@@ -56,9 +50,8 @@ function createInput(overrides: Record<string, unknown> = {}) {
     buildAbortSettlePromise: () => null,
     trajectoryRecorder,
     trajectoryEndRecorded: false,
-    cleanupYieldAborted: false,
     emitDiagnosticRunCompleted,
-    readState: () => state,
+    state,
     ...overrides,
   };
 }
@@ -99,8 +92,7 @@ describe("cleanupEmbeddedAttemptSessionPhase", () => {
 
   it("keeps compaction timeout observations abort-like only for cleanup", async () => {
     const input = createInput();
-    const readState = input.readState;
-    input.readState = () => ({ ...readState(), timedOutDuringCompaction: true });
+    input.state.terminal = { kind: "timeout", phase: "compaction", source: "observation" };
 
     await cleanupEmbeddedAttemptSessionPhase(input as never);
 
@@ -111,19 +103,8 @@ describe("cleanupEmbeddedAttemptSessionPhase", () => {
   });
 
   it("emits the before-agent blocked status and owner", async () => {
-    const input = createInput({
-      readState: () => ({
-        aborted: false,
-        externalAbort: false,
-        timedOut: false,
-        idleTimedOut: false,
-        timedOutDuringCompaction: false,
-        timedOutDuringToolExecution: false,
-        timedOutByRunBudget: false,
-        promptError: null,
-        beforeAgentRunBlockedBy: "before_agent",
-      }),
-    });
+    const input = createInput();
+    input.state.beforeAgentRunBlockedBy = "before_agent";
 
     await cleanupEmbeddedAttemptSessionPhase(input as never);
 
@@ -133,21 +114,15 @@ describe("cleanupEmbeddedAttemptSessionPhase", () => {
   });
 
   it("re-reads abort state after trajectory flushing", async () => {
-    let aborted = false;
+    const input = createInput();
     hoisted.flushEmbeddedAttemptTrajectoryRecorder.mockImplementation(async () => {
-      aborted = true;
-    });
-    const input = createInput({
-      readState: () => ({
-        aborted,
-        externalAbort: aborted,
-        timedOut: aborted,
-        idleTimedOut: false,
-        timedOutDuringCompaction: false,
-        timedOutDuringToolExecution: false,
-        timedOutByRunBudget: false,
-        promptError: aborted ? new Error("request aborted") : null,
-      }),
+      input.state.terminal = {
+        kind: "timeout",
+        source: "external",
+        phase: "prompt",
+        aborted: true,
+        failure: { source: "prompt", error: new Error("request aborted") },
+      };
     });
 
     await cleanupEmbeddedAttemptSessionPhase(input as never);

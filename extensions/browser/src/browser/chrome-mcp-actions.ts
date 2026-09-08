@@ -359,13 +359,13 @@ export async function dragChromeMcpElement(
   }));
 }
 
-/** Upload a local file into a Chrome MCP file input by uid. */
+/** Upload local files into a Chrome MCP file input by uid. */
 export async function uploadChromeMcpFile(
-  params: ChromeMcpTargetOperation & { uid: string; filePath: string },
+  params: ChromeMcpTargetOperation & { uid: string; filePaths: string[] },
 ): Promise<void> {
   await callTargetTool(params, "upload_file", (session) => ({
     uid: resolveChromeMcpSnapshotRef(session, params.targetId, params.uid),
-    filePath: params.filePath,
+    filePaths: params.filePaths,
   }));
 }
 

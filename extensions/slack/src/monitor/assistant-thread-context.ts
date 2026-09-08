@@ -1,4 +1,5 @@
 // Slack plugin module owns Assistant thread context metadata and caching.
+import type { WebClient } from "@slack/web-api";
 import type { SlackEventScope } from "./event-scope.js";
 
 export type SlackAssistantThreadContext = {
@@ -34,7 +35,7 @@ export function buildSlackAssistantThreadMetadata(
   };
 }
 
-export function parseSlackAssistantThreadMetadata(value: unknown) {
+function parseSlackAssistantThreadMetadata(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
@@ -52,6 +53,32 @@ export function parseSlackAssistantThreadMetadata(value: unknown) {
     teamId: readNonBlankStringField(record, "team_id"),
     enterpriseId: readNonBlankStringField(record, "enterprise_id"),
   };
+}
+
+export async function readSlackAssistantThreadContext(params: {
+  client: WebClient;
+  channelId: string;
+  threadTs: string;
+  userId?: string;
+}): Promise<Omit<SlackAssistantThreadContext, "updatedAt"> | undefined> {
+  const response = await params.client.conversations.replies({
+    channel: params.channelId,
+    ts: params.threadTs,
+    include_all_metadata: true,
+    limit: 4,
+  });
+  for (const message of response.messages ?? []) {
+    const context = parseSlackAssistantThreadMetadata(message.metadata);
+    if (context) {
+      return {
+        assistantChannelId: params.channelId,
+        threadTs: params.threadTs,
+        userId: params.userId,
+        ...context,
+      };
+    }
+  }
+  return undefined;
 }
 
 export function createSlackAssistantThreadContextStore(params: { accountId: string }) {

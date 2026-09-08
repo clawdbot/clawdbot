@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   claimDeliveryQueueEntryPlatformSend,
@@ -15,6 +16,7 @@ import {
   countPendingDeliveryQueueEntries,
   deleteDeliveryQueueEntry,
   getDeliveryQueueEntryStatus,
+  getDeliveryQueueEntryOwners,
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
   moveDeliveryQueueEntryToFailed,
@@ -127,6 +129,38 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
 
     expect(countPendingDeliveryQueueEntries([QUEUE, "other-q"], stateDir)).toBe(1);
     expect(countPendingDeliveryQueueEntries([], stateDir)).toBe(0);
+  });
+
+  it("reads ownership without materializing unrelated queue payloads", () => {
+    const id = "large-pending-payload";
+    for (const status of ["pending", "failed"] as const) {
+      const entry = {
+        id,
+        enqueuedAt: Date.now(),
+        retryCount: 0,
+        payload: "x".repeat(16_384),
+        ...(status === "failed" ? { recoveryState: "settlement_pending" } : {}),
+      };
+      upsertDeliveryQueueEntry({ queueName: status, entry, status, stateDir });
+    }
+    const { db } = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+    const reads = trackSqliteStatementExecutions(db, ["owners"], (sql) =>
+      sql.startsWith("select ") && sql.includes('from "delivery_queue_entries"') ? "owners" : null,
+    );
+    try {
+      expect(getDeliveryQueueEntryOwners(["pending", "failed"], id, stateDir)).toEqual(
+        new Map([
+          ["failed", { status: "failed", settlementPending: true }],
+          ["pending", { status: "pending" }],
+        ]),
+      );
+      expect(reads.rowCounts.owners).toBe(2);
+      expect(reads.textBytes.owners).toBeLessThan(1024);
+    } finally {
+      reads.restore();
+    }
   });
 
   describe("updateDeliveryQueueEntry with corrupt row", () => {

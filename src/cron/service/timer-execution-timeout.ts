@@ -130,6 +130,7 @@ export type StartupCatchupExecution =
 export type ExecuteJobCoreOptions = {
   activeJobMarker?: CronActiveJobMarker;
   owningCronLaneTaskMarker?: CommandLaneTaskMarker;
+  onPayloadExecutionStarted?: () => void;
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
@@ -146,11 +147,7 @@ export type ExecuteJobCoreOptions = {
 
 /** Payloads that execute outside the main session own cancellable task-run state. */
 export function runsDetachedFromMainSession(job: CronJob): boolean {
-  return (
-    job.sessionTarget !== "main" ||
-    job.payload.kind === "script" ||
-    job.payload.kind === "skillCollectionReview"
-  );
+  return job.sessionTarget !== "main" || job.payload.kind === "script";
 }
 
 export function resolveMainSessionCronDeliveryContext(

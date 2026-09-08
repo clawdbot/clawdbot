@@ -52,9 +52,9 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
-import { resolveReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
+  resolveReplyOperationAgentTurn,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import {
@@ -64,7 +64,7 @@ import {
 } from "./reply-run-registry.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
-import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
 import { consumeReplyUsageState } from "./reply-usage-state.js";
 import { buildChannelSourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
@@ -449,10 +449,8 @@ function createMinimalRun(params?: {
     },
   } as unknown as FollowupRun;
   const activeOperation = replyRunRegistry.get(sessionKey);
-  if (activeOperation && params?.bindActiveAuthority !== false) {
-    activeOperation.bindToolAuthorityFingerprint(
-      resolveFollowupRunToolAuthorityFingerprint(followupRun),
-    );
+  if (activeOperation && params?.isActive && params.bindActiveAuthority !== false) {
+    activeOperation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
   }
 
   return {
@@ -625,22 +623,19 @@ describe("runReplyAgent active steering", () => {
       sessionId: "session",
       resetTriggered: false,
     });
-    active.bindToolAuthorityRoute(activeRoute);
-    active.bindToolAuthorityFingerprint(
-      resolveFollowupRunToolAuthorityFingerprint(
-        {
-          ...followupRun,
-          run: {
-            ...followupRun.run,
-            runtimePluginToolGrant: {
-              pluginId: "workboard",
-              toolNames: ["workboard_complete"],
-            },
+    active.bindToolAuthoritySnapshot(
+      prepareReplyToolAuthority({
+        ...followupRun,
+        run: {
+          ...followupRun.run,
+          runtimePluginToolGrant: {
+            pluginId: "workboard",
+            toolNames: ["workboard_complete"],
           },
         },
-        activeRoute,
-      ),
+      }),
     );
+    active.bindToolAuthorityRoute(activeRoute);
     active.setPhase("running");
 
     await expect(run()).resolves.toBeUndefined();
@@ -664,10 +659,8 @@ describe("runReplyAgent active steering", () => {
       sessionId: "session",
       resetTriggered: false,
     });
+    active.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
     active.bindToolAuthorityRoute(activeRoute);
-    active.bindToolAuthorityFingerprint(
-      resolveFollowupRunToolAuthorityFingerprint(followupRun, activeRoute),
-    );
     active.setPhase("running");
 
     await expect(run()).resolves.toBeUndefined();
@@ -689,7 +682,10 @@ describe("runReplyAgent active steering", () => {
       sessionId: "provided-session",
       resetTriggered: false,
     });
-    provided.bindToolAuthorityFingerprint("different-authority");
+    provided.bindToolAuthoritySnapshot({
+      fingerprint: () => "different-authority",
+      project: () => "different-authority",
+    });
     provided.setPhase("running");
     const { followupRun, run } = createMinimalRun({
       isActive: true,
@@ -3359,6 +3355,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("finalizes a hook-handled turn when source delivery is intentionally suppressed", async () => {
+    const receipt: ReplyOperationRunState = {};
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
@@ -3369,7 +3366,10 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
     state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
     const { followupRun, run, sourceTurnId } = createMinimalRun({
-      opts: { sourceReplyDeliveryMode: "message_tool_only" },
+      opts: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        [REPLY_OPERATION_RUN_STATE]: receipt,
+      },
       sessionCtx: {
         Provider: "discord",
         OriginatingChannel: "discord",
@@ -3392,6 +3392,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
 
     await expect(run()).resolves.toEqual(expect.objectContaining({ text: "private hook reply" }));
+    expect(resolveReplyOperationAgentTurn(receipt)).toBe("ok");
 
     expect(await readStoredMainSession(storePath)).toMatchObject({
       status: "done",
@@ -4239,6 +4240,57 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it.each([
+    {
+      name: "releases a queued followup after the pending tool delivery idle bound",
+      elapsedMs: 30_000,
+      owned: false,
+    },
+    {
+      name: "keeps a queued followup owned until pending tool delivery settles",
+      elapsedMs: 29_999,
+      owned: true,
+    },
+  ])("$name", async ({ elapsedMs, owned }) => {
+    vi.useFakeTimers();
+    const toolResultStarted = createDeferred();
+    const toolResultReleased = createDeferred();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      void params.onToolResult?.({ text: "pending tool result" });
+      return { payloads: [{ text: "followup complete" }], meta: {} };
+    });
+    const { followupRun, run } = createMinimalRun({
+      isActive: true,
+      isRunActive: () => false,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+      opts: {
+        forceToolResultProgress: true,
+        onToolResult: async () => {
+          toolResultStarted.resolve();
+          await toolResultReleased.promise;
+        },
+      },
+    });
+    let followup: Promise<void> | undefined;
+    try {
+      await run();
+      followup = requireScheduledFollowupRunner()(followupRun);
+      await toolResultStarted.promise;
+
+      await vi.advanceTimersByTimeAsync(elapsedMs);
+      expect(replyRunRegistry.get("main") !== undefined).toBe(owned);
+
+      toolResultReleased.resolve();
+      await followup;
+      expect(replyRunRegistry.get("main")).toBeUndefined();
+    } finally {
+      toolResultReleased.resolve();
+      await followup;
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
     { label: "empty output", payloads: [] },
     { label: "reasoning-only output", payloads: [{ text: "internal", isReasoning: true }] },
     { label: "commentary-only output", payloads: [{ text: "internal", isCommentary: true }] },
@@ -4345,16 +4397,15 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const onPendingContinuation = vi.fn();
     const { run } = createMinimalRun({ opts: { onPendingContinuation } });
 
-    await expect(run()).resolves.toMatchObject({
+    const result = await run();
+    expect(result).toMatchObject({
       text: "I’m continuing this work and will send the result when it is ready.",
       replyToId: "msg",
     });
     expect(onPendingContinuation).toHaveBeenCalledOnce();
-    expect(onPendingContinuation.mock.calls[0]?.[0]).toMatchObject({
-      statusPayload: {
-        text: "I’m continuing this work and will send the result when it is ready.",
-      },
-    });
+    expect(
+      getReplyPayloadMetadata(requireRecord(result, "continuation status"))?.continuationStatus,
+    ).toBe(true);
   });
 
   it("delivers an explicit yield acknowledgment after accepting a child spawn", async () => {
@@ -4374,6 +4425,70 @@ describe("runReplyAgent typing (heartbeat)", () => {
       replyToId: "msg",
     });
     expect(onPendingContinuation).toHaveBeenCalledOnce();
+  });
+
+  it("prefers a yield acknowledgment over an earlier generated tool warning", async () => {
+    const toolWarning = setReplyPayloadMetadata(
+      { text: "⚠️ Bash failed", isError: true },
+      { toolErrorWarning: { toolName: "bash" } },
+    );
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [toolWarning],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      },
+      acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:child" }],
+    });
+    const { run } = createMinimalRun();
+
+    await expect(run()).resolves.toMatchObject({
+      text: "Research started; results will follow.",
+      replyToId: "msg",
+    });
+  });
+
+  it("keeps a generated tool warning when the yield acknowledgment is not deliverable", async () => {
+    const toolWarning = setReplyPayloadMetadata(
+      { text: "⚠️ Bash failed", isError: true },
+      { toolErrorWarning: { toolName: "bash" } },
+    );
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [toolWarning],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      },
+    });
+    const { run } = createMinimalRun({ currentInboundEventKind: "room_event" });
+
+    await expect(run()).resolves.toMatchObject({
+      text: "⚠️ Bash failed",
+      isError: true,
+      replyToId: "msg",
+    });
+  });
+
+  it("keeps a generated tool warning when the yield acknowledgment normalizes to empty", async () => {
+    const toolWarning = setReplyPayloadMetadata(
+      { text: "⚠️ Bash failed", isError: true },
+      { toolErrorWarning: { toolName: "bash" } },
+    );
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [toolWarning],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "[[reply_to_current]]",
+      },
+      acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:child" }],
+    });
+    const { run } = createMinimalRun();
+
+    await expect(run()).resolves.toMatchObject({
+      text: "⚠️ Bash failed",
+      isError: true,
+      replyToId: "msg",
+    });
   });
 
   it("delivers an explicit yield acknowledgment in message-tool-only mode", async () => {
@@ -4818,6 +4933,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       streamed: false,
     },
   ])("surfaces a configured backend failure when fallback produces $label", async (testCase) => {
+    const onAgentRunTerminalOutcome = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       if (testCase.streamed) {
         await params.onBlockReply?.(testCase.payload);
@@ -4833,7 +4949,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     try {
       const { run } = createMinimalRun({
-        opts: testCase.opts,
+        opts: { ...testCase.opts, onAgentRunTerminalOutcome },
         blockStreamingEnabled: testCase.streamed,
         runOverrides: {
           provider: "lmstudio",
@@ -4852,6 +4968,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
       expect(payload?.text).toContain("Fallback used openai/gpt-5.5");
       expect(payload?.text).toContain("no visible reply");
+      expect(onAgentRunTerminalOutcome).toHaveBeenLastCalledWith("failed");
     } finally {
       fallbackSpy.mockRestore();
     }
@@ -5436,6 +5553,78 @@ describe("runReplyAgent typing (heartbeat)", () => {
     },
   );
 
+  it("clears native fallback state without attributing finalizer response usage to the native model", async () => {
+    const runtimeModelSelection = { provider: "openai", model: "gpt-5.6-sol" };
+    const response = { provider: "google", model: "gemini-2.5-flash" };
+    const selectedModelRef = `${runtimeModelSelection.provider}/${runtimeModelSelection.model}`;
+    const responseModelRef = `${response.provider}/${response.model}`;
+    const runId = "native-fallback-cleared";
+    const usage = { input: 120, output: 8 };
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
+      modelProvider: runtimeModelSelection.provider,
+      model: runtimeModelSelection.model,
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: selectedModelRef,
+        activeModel: responseModelRef,
+        reason: "timeout",
+      },
+    });
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "finalized answer" }],
+      meta: {
+        agentMeta: {
+          sessionId: "session",
+          ...response,
+          agentHarnessId: "codex",
+          runtimeModelSelection,
+          usage,
+        },
+      },
+    });
+    const { run } = createMinimalRun({
+      opts: { runId },
+      sessionEntry,
+      sessionStore,
+      storePath,
+      runOverrides: runtimeModelSelection,
+      sessionCtx: { ChatType: "direct" },
+    });
+    const fallbackEvents: Array<Record<string, unknown>> = [];
+    const off = onAgentEvent((event) => {
+      if (
+        event.runId === runId &&
+        event.stream === "lifecycle" &&
+        (event.data.phase === "fallback" || event.data.phase === "fallback_cleared")
+      ) {
+        fallbackEvents.push(event.data);
+      }
+    });
+    try {
+      const result = await run();
+      const text = (Array.isArray(result) ? result : [result])
+        .map((payload) => payload?.text ?? "")
+        .join("\n");
+
+      expect(requireStoredSessionEntry(storePath).fallbackNotice).toBeUndefined();
+      expect(fallbackEvents).toEqual([
+        expect.objectContaining({
+          phase: "fallback_cleared",
+          selectedProvider: runtimeModelSelection.provider,
+          selectedModel: runtimeModelSelection.model,
+          activeProvider: runtimeModelSelection.provider,
+          activeModel: runtimeModelSelection.model,
+          previousActiveModel: responseModelRef,
+        }),
+      ]);
+      expect(text).toContain(`Model Fallback cleared: ${selectedModelRef}`);
+      expect(text).toContain("finalized answer");
+      expect(consumeReplyUsageState(runId)).toMatchObject({ ...response, usage });
+    } finally {
+      off();
+    }
+  });
+
   it("announces fallback transitions and emits lifecycle events while verbose is off", async () => {
     const sessionEntry = makeSessionEntry();
     const sessionStore = { main: sessionEntry };
@@ -5711,6 +5900,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 });
 
-import { getReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -7,7 +7,7 @@ import type {
   ContextEngineRuntimeSettings,
   ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
-import type { AgentMessage } from "../runtime/index.js";
+import { estimateTokens, type AgentMessage } from "../runtime/index.js";
 import { resolveToolResultContextMaxChars } from "../tool-result-limits.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
@@ -17,6 +17,7 @@ import {
   type CompactionReplayPressureContext,
 } from "./run/preemptive-compaction.js";
 import {
+  TOOL_IMAGE_CHARS,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   type MessageCharEstimateCache,
   createMessageCharEstimateCache,
@@ -205,9 +206,10 @@ function truncateToolResultToChars(
       ]);
     };
 
-    // Reserve non-text content first. The shared allocator keeps diagnostic tails
-    // and short text blocks within the same weighted cap, with or without images.
-    for (let retainedImages = imageCount; retainedImages >= 0; retainedImages -= 1) {
+    // Image cost alone rules out larger prefixes. The allocator still reserves
+    // other non-text content and preserves diagnostic tails and short text blocks.
+    const maxRetainedImages = Math.min(imageCount, Math.floor(maxChars / TOOL_IMAGE_CHARS));
+    for (let retainedImages = maxRetainedImages; retainedImages >= 0; retainedImages -= 1) {
       let seenImages = 0;
       const retainedContent = content.filter(
         (block) => !isImage(block) || ++seenImages <= retainedImages,
@@ -297,9 +299,9 @@ function toMidTurnPrecheckRequest(
 }
 
 /**
- * Per-iteration `afterTurn` + `assemble` wrapper for sessions where
- * the context engine owns compaction. Lets the engine compact inside
- * a long tool loop instead of only at end of attempt.
+ * Reassemble each tool-loop iteration for engines that own compaction.
+ * Admitted turns advance through their accepted-turn owner; standalone
+ * attempts retain their eager lifecycle and finalization checkpoint.
  */
 export function installContextEngineLoopHook(params: {
   agent: GuardableAgent;
@@ -313,6 +315,7 @@ export function installContextEngineLoopHook(params: {
   repairAssembledMessages?: (messages: AgentMessage[]) => AgentMessage[];
   getPrePromptMessageCount?: () => number;
   onAfterTurnCheckpoint?: (messageCount: number) => void;
+  deferredTurn?: { prompt: string; readonly availableTools: Set<string> };
   getRuntimeContext?: (params: {
     messages: AgentMessage[];
     prePromptMessageCount: number;
@@ -336,21 +339,16 @@ export function installContextEngineLoopHook(params: {
       : messages;
     signal?.throwIfAborted();
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
-    const transcriptMessages = projectTranscriptPromptMessages(
-      sourceMessages,
-      transcriptProjectionCache,
-    );
+    const transcriptMessages = params.deferredTurn
+      ? sourceMessages
+      : projectTranscriptPromptMessages(sourceMessages, transcriptProjectionCache);
     const providerMessages = stripTranscriptPromptMarkers(sourceMessages);
-    const checkedPrefixLength =
-      lastSeenLength == null ? 0 : Math.min(lastSeenLength, transcriptMessages.length);
     const sourceHistoryChanged =
       lastSeenLength != null &&
       lastSourceMessages != null &&
       (transcriptMessages.length < lastSeenLength ||
         (transcriptMessages.length === lastSeenLength &&
-          transcriptMessages
-            .slice(0, checkedPrefixLength)
-            .some((message, index) => message !== lastSourceMessages?.[index])));
+          transcriptMessages.some((message, index) => message !== lastSourceMessages?.[index])));
     if (sourceHistoryChanged) {
       lastSeenLength = null;
       lastAssembledView = null;
@@ -367,32 +365,31 @@ export function installContextEngineLoopHook(params: {
       ),
     );
 
-    const hasNewMessages = transcriptMessages.length > prePromptMessageCount;
-    if (!hasNewMessages) {
+    if (transcriptMessages.length <= prePromptMessageCount) {
       lastSeenLength = prePromptMessageCount;
       lastSourceMessages = transcriptMessages;
       return lastAssembledView ?? providerMessages;
     }
     try {
-      if (typeof contextEngine.afterTurn === "function") {
-        await contextEngine.afterTurn({
-          sessionId,
-          sessionKey,
-          sessionTarget: params.sessionTarget,
-          sessionFile,
-          messages: transcriptMessages,
-          prePromptMessageCount,
-          tokenBudget,
-          runtimeContext: params.getRuntimeContext?.({
+      if (!params.deferredTurn) {
+        if (typeof contextEngine.afterTurn === "function") {
+          await contextEngine.afterTurn({
+            sessionId,
+            sessionKey,
+            sessionTarget: params.sessionTarget,
+            sessionFile,
             messages: transcriptMessages,
             prePromptMessageCount,
-          }),
-          runtimeSettings: params.runtimeSettings,
-          isHeartbeat: params.isHeartbeat,
-        });
-      } else {
-        const newMessages = transcriptMessages.slice(prePromptMessageCount);
-        if (newMessages.length > 0) {
+            tokenBudget,
+            runtimeContext: params.getRuntimeContext?.({
+              messages: transcriptMessages,
+              prePromptMessageCount,
+            }),
+            runtimeSettings: params.runtimeSettings,
+            isHeartbeat: params.isHeartbeat,
+          });
+        } else {
+          const newMessages = transcriptMessages.slice(prePromptMessageCount);
           if (typeof contextEngine.ingestBatch === "function") {
             await contextEngine.ingestBatch({
               sessionId,
@@ -412,27 +409,38 @@ export function installContextEngineLoopHook(params: {
             }
           }
         }
+        signal?.throwIfAborted();
+        params.onAfterTurnCheckpoint?.(transcriptMessages.length);
       }
-      signal?.throwIfAborted();
       lastSeenLength = transcriptMessages.length;
-      params.onAfterTurnCheckpoint?.(lastSeenLength);
       lastSourceMessages = transcriptMessages;
+      // An admitted turn is not in the engine's store yet. Assemble accepted
+      // history separately, then retain the host-owned user/tool exchange.
+      const historyLength = params.deferredTurn
+        ? (params.getPrePromptMessageCount?.() ?? 0)
+        : providerMessages.length;
+      const pendingMessages = providerMessages.slice(historyLength);
+      const pendingTokens = pendingMessages.reduce(
+        (sum, message) => sum + estimateTokens(message),
+        0,
+      );
       const assembled = await contextEngine.assemble({
         sessionId,
         sessionKey,
-        messages: providerMessages.slice(),
-        tokenBudget,
+        messages: providerMessages.slice(0, historyLength),
+        ...params.deferredTurn,
+        tokenBudget:
+          tokenBudget === undefined ? undefined : Math.max(1, tokenBudget - pendingTokens),
         model: modelId,
         runtimeSettings: params.runtimeSettings,
       });
       signal?.throwIfAborted();
       if (assembled && Array.isArray(assembled.messages)) {
-        const repairedMessages =
-          params.repairAssembledMessages?.(assembled.messages) ?? assembled.messages;
-        if (repairedMessages !== providerMessages || assembled.messages !== providerMessages) {
-          lastAssembledView = repairedMessages;
-          return repairedMessages;
-        }
+        const modelMessages = pendingMessages.length
+          ? [...assembled.messages, ...pendingMessages]
+          : assembled.messages;
+        lastAssembledView = params.repairAssembledMessages?.(modelMessages) ?? modelMessages;
+        return lastAssembledView;
       }
       lastAssembledView = null;
     } catch {

@@ -51,11 +51,11 @@ async function expectText(locator: Locator, text: string): Promise<void> {
   await expect.poll(() => locator.textContent()).toContain(text);
 }
 
-async function captureArtifact(page: Page, name: string): Promise<void> {
+async function captureArtifact(target: Page | Locator, name: string): Promise<void> {
   if (!artifactDir) {
     return;
   }
-  await page.screenshot({ path: path.join(artifactDir, `${name}.png`) });
+  await target.screenshot({ path: path.join(artifactDir, `${name}.png`) });
 }
 
 const pullPreviewResponse = {
@@ -169,43 +169,57 @@ describeControlUiE2e("GitHub link hover cards", () => {
 
   it.each([
     { theme: "light", reducedMotion: "no-preference", width: 1180, fails: false },
+    { theme: "light", reducedMotion: "no-preference", width: 1180, fails: true },
     { theme: "dark", reducedMotion: "no-preference", width: 1180, fails: false },
     { theme: "dark", reducedMotion: "reduce", width: 390, fails: true },
-  ] as const)("shimmers while pending ($theme, $reducedMotion, $width)", async (scenario) => {
-    const { card, gateway, page, pullLink } = await openPullPreviewPage(true);
-    await page.emulateMedia({ colorScheme: scenario.theme, reducedMotion: scenario.reducedMotion });
-    await page.setViewportSize({ width: scenario.width, height: 800 });
-    await pullLink.focus();
-    await gateway.waitForRequest("controlUi.githubPreview");
+  ] as const)(
+    "shimmers while pending ($theme, $reducedMotion, $width, fails=$fails)",
+    async (scenario) => {
+      const { card, gateway, page, pullLink } = await openPullPreviewPage(true);
+      await page.emulateMedia({
+        colorScheme: scenario.theme,
+        reducedMotion: scenario.reducedMotion,
+      });
+      await page.setViewportSize({ width: scenario.width, height: 800 });
+      await pullLink.focus();
+      const request = await gateway.waitForRequest("controlUi.githubPreview");
+      expect(request.params).toMatchObject({ agentId: "main" });
 
-    await expect.poll(() => card.getAttribute("aria-label")).toBe("Loading GitHub details…");
-    const skeleton = card.locator('[aria-hidden="true"]');
-    await skeleton.waitFor({ state: "visible" });
-    expect(await card.locator("a").count()).toBe(0);
-    expect(await card.textContent()).toBe("");
-    const placeholder = skeleton.locator(".skeleton").first();
-    await placeholder.waitFor({ state: "visible" });
-    const animating = () =>
-      placeholder.evaluate((element) =>
-        element
-          .getAnimations({ subtree: true })
-          .some((animation) => animation.playState === "running"),
-      );
-    await expect.poll(animating).toBe(scenario.reducedMotion === "no-preference");
-    const bounds = await card.boundingBox();
-    expect(bounds!.x).toBeGreaterThanOrEqual(0);
-    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(scenario.width);
+      await expect.poll(() => card.getAttribute("aria-label")).toBe("Loading GitHub details…");
+      const skeleton = card.locator('[aria-hidden="true"]');
+      await skeleton.waitFor({ state: "visible" });
+      expect(await card.locator("a").count()).toBe(0);
+      expect((await card.textContent())?.trim()).toBe("");
+      const placeholder = skeleton.locator(".skeleton").first();
+      await placeholder.waitFor({ state: "visible" });
+      const animating = () =>
+        placeholder.evaluate((element) =>
+          element
+            .getAnimations({ subtree: true })
+            .some((animation) => animation.playState === "running"),
+        );
+      await expect.poll(animating).toBe(scenario.reducedMotion === "no-preference");
+      const bounds = await card.boundingBox();
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(scenario.width);
 
-    if (scenario.fails) {
-      await gateway.rejectDeferred("controlUi.githubPreview", { message: "Unavailable" });
-      await expectText(card, "GitHub preview unavailable");
-    } else {
-      await gateway.resolveDeferred("controlUi.githubPreview");
-      await expectText(card, pullPreviewResponse.title);
-    }
-    expect(await card.locator(".skeleton").count()).toBe(0);
-    expect(await card.getAttribute("aria-label")).not.toBe("Loading GitHub details…");
-  });
+      if (scenario.fails) {
+        const error = "GitHub API rate limit exceeded (HTTP 403). Try again in 2 minutes.";
+        await gateway.rejectDeferred("controlUi.githubPreview", { message: error });
+        await expectText(card, "GitHub preview unavailable");
+        const detail = card.locator(".github-link-hovercard__error");
+        await expectText(detail, error);
+        expect(await card.getAttribute("aria-describedby")).toBe(await detail.getAttribute("id"));
+        expect(await detail.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+        await captureArtifact(card, "github-hovercard-error-subtext");
+      } else {
+        await gateway.resolveDeferred("controlUi.githubPreview");
+        await expectText(card, pullPreviewResponse.title);
+      }
+      expect(await card.locator(".skeleton").count()).toBe(0);
+      expect(await card.getAttribute("aria-label")).not.toBe("Loading GitHub details…");
+    },
+  );
 
   it("reloads a dismissed pending preview on rehover and caches the successful response", async () => {
     const proofDir =

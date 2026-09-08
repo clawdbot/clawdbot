@@ -60,8 +60,14 @@ function extractAgentDefaultModelFallbacks(model: unknown): string[] | undefined
   return Array.isArray(fallbacks) ? fallbacks.map((value) => String(value)) : undefined;
 }
 
-function hasAgentDefaultModelPrimary(cfg: OpenClawConfig): boolean {
-  return resolvePrimaryStringValue(cfg.agents?.defaults?.model) !== undefined;
+function completeProviderPreset(
+  cfg: OpenClawConfig,
+  next: OpenClawConfig,
+  primaryModelRef: string | undefined,
+): OpenClawConfig {
+  return primaryModelRef && resolvePrimaryStringValue(cfg.agents?.defaults?.model) === undefined
+    ? applyAgentDefaultModelPrimary(next, primaryModelRef)
+    : next;
 }
 
 function normalizeAgentModelAliasEntry(entry: AgentModelAliasEntry): {
@@ -171,27 +177,6 @@ function resolveProviderModelMergeState(
   };
 }
 
-function buildProviderConfig(params: {
-  existingProvider: ModelProviderConfig | undefined;
-  api: ModelApi;
-  baseUrl: string;
-  mergedModels: ModelDefinitionConfig[];
-  fallbackModels: ModelDefinitionConfig[];
-}): ModelProviderConfig {
-  const { apiKey: existingApiKey, ...existingProviderRest } = (params.existingProvider ?? {}) as {
-    apiKey?: string;
-  };
-  const normalizedApiKey = typeof existingApiKey === "string" ? existingApiKey.trim() : undefined;
-
-  return {
-    ...existingProviderRest,
-    baseUrl: params.baseUrl,
-    api: params.api,
-    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-    models: params.mergedModels.length > 0 ? params.mergedModels : params.fallbackModels,
-  };
-}
-
 function applyProviderConfigWithMergedModels(
   cfg: OpenClawConfig,
   params: {
@@ -201,18 +186,19 @@ function applyProviderConfigWithMergedModels(
     api: ModelApi;
     baseUrl: string;
     mergedModels: ModelDefinitionConfig[];
-    fallbackModels: ModelDefinitionConfig[];
   },
 ): OpenClawConfig {
   const mergedModels = normalizeProviderModelsForConfig(params.providerId, params.mergedModels);
-  const fallbackModels = normalizeProviderModelsForConfig(params.providerId, params.fallbackModels);
-  params.providerState.providers[params.providerId] = buildProviderConfig({
-    existingProvider: params.providerState.existingProvider,
-    api: params.api,
+  const { apiKey: existingApiKey, ...existingProviderRest } =
+    params.providerState.existingProvider ?? {};
+  const normalizedApiKey = typeof existingApiKey === "string" ? existingApiKey.trim() : undefined;
+  params.providerState.providers[params.providerId] = {
+    ...existingProviderRest,
     baseUrl: params.baseUrl,
-    mergedModels,
-    fallbackModels,
-  });
+    api: params.api,
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels,
+  };
   return applyOnboardAuthAgentModelsAndProviders(cfg, {
     agentModels: params.agentModels,
     providers: params.providerState.providers,
@@ -487,7 +473,6 @@ export function applyProviderConfigWithDefaultModels(
     api: params.api,
     baseUrl: params.baseUrl,
     mergedModels,
-    fallbackModels: defaultModels,
   });
 }
 
@@ -526,19 +511,15 @@ export function applyProviderConfigWithDefaultModelPreset(
     primaryModelRef?: string;
   },
 ): OpenClawConfig {
-  const next = applyProviderConfigWithDefaultModel(cfg, {
-    agentModels: withAgentModelAliases(cfg.agents?.defaults?.models, params.aliases ?? []),
+  return applyProviderConfigWithDefaultModelsPreset(cfg, {
     providerId: params.providerId,
     api: params.api,
     baseUrl: params.baseUrl,
-    defaultModel: params.defaultModel,
+    defaultModels: [params.defaultModel],
     defaultModelId: params.defaultModelId,
+    aliases: params.aliases,
+    primaryModelRef: params.primaryModelRef,
   });
-  return params.primaryModelRef
-    ? hasAgentDefaultModelPrimary(cfg)
-      ? next
-      : applyAgentDefaultModelPrimary(next, params.primaryModelRef)
-    : next;
 }
 
 /** Build setup appliers for presets that resolve to one default provider model. */
@@ -580,11 +561,7 @@ export function applyProviderConfigWithDefaultModelsPreset(
     defaultModels: params.defaultModels,
     defaultModelId: params.defaultModelId,
   });
-  return params.primaryModelRef
-    ? hasAgentDefaultModelPrimary(cfg)
-      ? next
-      : applyAgentDefaultModelPrimary(next, params.primaryModelRef)
-    : next;
+  return completeProviderPreset(cfg, next, params.primaryModelRef);
 }
 
 /** Build setup appliers for presets that resolve to multiple default provider models. */
@@ -634,7 +611,6 @@ export function applyProviderConfigWithModelCatalog(
     api: params.api,
     baseUrl: params.baseUrl,
     mergedModels,
-    fallbackModels: catalogModels,
   });
 }
 
@@ -657,11 +633,7 @@ export function applyProviderConfigWithModelCatalogPreset(
     baseUrl: params.baseUrl,
     catalogModels: params.catalogModels,
   });
-  return params.primaryModelRef
-    ? hasAgentDefaultModelPrimary(cfg)
-      ? next
-      : applyAgentDefaultModelPrimary(next, params.primaryModelRef)
-    : next;
+  return completeProviderPreset(cfg, next, params.primaryModelRef);
 }
 
 /** Build setup appliers for presets that resolve to a provider model catalog. */

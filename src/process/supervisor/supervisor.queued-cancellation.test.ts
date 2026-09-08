@@ -46,8 +46,6 @@ function createSpawnInput(params: {
 }): SpawnInput {
   return {
     runId: params.runId,
-    sessionId: "queued-cancellation",
-    backendId: "test",
     scopeKey: params.scopeKey,
     replaceExistingScope: params.replaceExistingScope,
     mode: params.mode ?? "child",
@@ -106,9 +104,9 @@ describe("process supervisor queued cancellation", () => {
         exitCode: null,
         exitSignal: null,
       });
-      expect(supervisor.getRecord(replacementRunId)).toMatchObject({
-        state: "exited",
-        terminationReason: "manual-cancel",
+      expect(replacementRun.activity).toEqual({
+        resultSettled: true,
+        lastOutputAtMs: replacementRun.startedAtMs,
       });
 
       first.settle(0);
@@ -174,5 +172,47 @@ describe("process supervisor queued cancellation", () => {
       expect.objectContaining({ reason: "exit" }),
       expect.objectContaining({ reason: "exit" }),
     ]);
+  });
+
+  it("rejects retired request authority behind a scope fence without cancelling its survivor", async () => {
+    const first = createStubProcessAdapter();
+    const replacement = createStubProcessAdapter(1235);
+    const firstStartup = createDeferred<StubProcessAdapter>();
+    createChildAdapterMock
+      .mockReturnValueOnce(firstStartup.promise)
+      .mockResolvedValueOnce(replacement);
+    const supervisor = createProcessSupervisor();
+    const scopeKey = "scope:retired-request";
+    const retired = new Error("request authority retired behind scope fence");
+    let current = true;
+    const firstRunPromise = supervisor.spawn(createSpawnInput({ runId: "survivor", scopeKey }));
+    const replacementPromise = supervisor.spawn({
+      ...createSpawnInput({ runId: "retired-request", scopeKey, replaceExistingScope: true }),
+      assertCurrent: () => {
+        if (!current) {
+          throw retired;
+        }
+      },
+    });
+    const replacementOutcome = Promise.allSettled([replacementPromise]);
+
+    expect(createChildAdapterMock).toHaveBeenCalledOnce();
+    current = false;
+    firstStartup.resolve(first);
+    const firstRun = await firstRunPromise;
+    const [outcome] = await replacementOutcome;
+    try {
+      expect(outcome).toEqual({ status: "rejected", reason: retired });
+      expect(createChildAdapterMock).toHaveBeenCalledOnce();
+      expect(first.killMock).not.toHaveBeenCalled();
+    } finally {
+      first.settle(0);
+      replacement.settle(0);
+      await firstRun.wait();
+      if (outcome?.status === "fulfilled") {
+        await outcome.value.wait();
+      }
+      await supervisor.shutdown();
+    }
   });
 });

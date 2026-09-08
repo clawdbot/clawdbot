@@ -358,10 +358,26 @@ internal object AndroidScreenshotFixture {
           add(chatMessage("user", "Draft a short status update for the team.", 1_783_555_260_000))
           add(
             chatMessage(
-              "assistant",
-              "The Android release is close. Two review follow-ups and one localization pass remain; once those land, " +
-                "the changelog can be reviewed and the tag can go out.",
-              1_783_555_320_000,
+              role = "assistant",
+              content =
+                "The Android release is close. Two review follow-ups and one localization pass remain; once those land, " +
+                  "the changelog can be reviewed and the tag can go out.",
+              timestamp = 1_783_555_320_000,
+              provider = "openai",
+              model = "gpt-5.2",
+              usage =
+                buildJsonObject {
+                  put("input", JsonPrimitive(2_100))
+                  put("output", JsonPrimitive(160))
+                  put("cacheRead", JsonPrimitive(76_500))
+                },
+              cost =
+                buildJsonObject {
+                  put("input", JsonPrimitive(0.003))
+                  put("output", JsonPrimitive(0.004))
+                  put("cacheRead", JsonPrimitive(0.0015))
+                  put("total", JsonPrimitive(0.0085))
+                },
             ),
           )
         },
@@ -375,7 +391,12 @@ internal object AndroidScreenshotFixture {
           put("unread", JsonPrimitive(false))
           put("modelProvider", JsonPrimitive("openai"))
           put("model", JsonPrimitive("gpt-5.2"))
-          put("contextTokens", JsonPrimitive(200_000))
+          put("inputTokens", JsonPrimitive(18_420))
+          put("outputTokens", JsonPrimitive(840))
+          put("totalTokens", JsonPrimitive(109_800))
+          put("totalTokensFresh", JsonPrimitive(true))
+          put("contextTokens", JsonPrimitive(272_000))
+          put("estimatedCostUsd", JsonPrimitive(0.022956))
         },
       )
       put(
@@ -393,6 +414,10 @@ internal object AndroidScreenshotFixture {
     timestamp: Long,
     provenanceSourceTool: String? = null,
     marker: JsonObject? = null,
+    provider: String? = null,
+    model: String? = null,
+    usage: JsonObject? = null,
+    cost: JsonObject? = null,
   ) = buildJsonObject {
     put("role", JsonPrimitive(role))
     put("content", JsonPrimitive(content))
@@ -407,6 +432,10 @@ internal object AndroidScreenshotFixture {
       )
     }
     marker?.let { put("__openclaw", it) }
+    provider?.let { put("provider", JsonPrimitive(it)) }
+    model?.let { put("model", JsonPrimitive(it)) }
+    usage?.let { put("usage", it) }
+    cost?.let { put("cost", it) }
   }
 
   private fun sessionList(paramsJson: String?): String {
@@ -487,8 +516,12 @@ internal object AndroidScreenshotFixture {
     put("category", JsonNull)
     put("modelProvider", JsonPrimitive("openai"))
     put("model", JsonPrimitive("gpt-5.2"))
-    put("totalTokens", JsonPrimitive(18_420))
-    put("contextTokens", JsonPrimitive(200_000))
+    put("inputTokens", JsonPrimitive(18_420))
+    put("outputTokens", JsonPrimitive(840))
+    put("totalTokens", JsonPrimitive(109_800))
+    put("totalTokensFresh", JsonPrimitive(true))
+    put("contextTokens", JsonPrimitive(272_000))
+    put("estimatedCostUsd", JsonPrimitive(0.022956))
   }
 
   private fun chatMetadata(): String =

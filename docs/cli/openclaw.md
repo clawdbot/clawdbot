@@ -27,6 +27,8 @@ Running `openclaw` with no subcommand routes based on config state:
 
 Running `openclaw setup` first live-tests the configured default model. A passing turn starts OpenClaw. An interactive failure opens guided inference setup and hands off to OpenClaw after a candidate passes. One-shot, JSON, and other noninteractive requests fail with instructions to run `openclaw onboard` when inference is unavailable. `openclaw --help` and `openclaw --version` keep their normal fast paths.
 
+If inference plugin loading or owner verification fails, the error includes the underlying cause after applying OpenClaw's error redaction. One-shot text and JSON output retain that detail alongside onboarding guidance.
+
 Noninteractive bare `openclaw` (no TTY) exits with a short message instead of printing root help: it points to non-interactive onboarding on a fresh or invalid install, or to `openclaw agent --local ...` when config is valid.
 
 `openclaw onboard --modern` remains a compatibility alias for OpenClaw, but uses the same inference gate: working inference opens the chat, interactive failures start guided inference setup, and noninteractive failures exit with onboarding guidance. `openclaw onboard --classic` opens the full step-by-step wizard.
@@ -54,7 +56,7 @@ openclaw setup
 openclaw setup --json
 openclaw setup --message "models"
 openclaw setup --message "validate config"
-openclaw setup --message "setup workspace ~/Projects/work" --yes
+openclaw setup --message "setup workspace ~/path/to/work" --yes
 openclaw setup --message "set default model openai/gpt-5.6" --yes
 openclaw onboard --modern
 ```
@@ -67,7 +69,7 @@ health
 doctor
 validate config
 setup
-setup workspace ~/Projects/work
+setup workspace ~/path/to/work
 config set gateway.port 19001
 config set-ref gateway.auth.token env OPENCLAW_GATEWAY_TOKEN
 gateway status
@@ -75,7 +77,7 @@ configure gateway
 open gateway wizard
 restart gateway
 agents
-create agent work workspace ~/Projects/work
+create agent work workspace ~/path/to/work
 models
 configure model provider
 set default model openai/gpt-5.6
@@ -91,7 +93,7 @@ plugins list
 plugins search slack
 plugin install clawhub:openclaw-codex-app-server
 talk to work agent
-talk to agent for ~/Projects/work
+talk to agent for ~/path/to/work
 audit
 quit
 ```
@@ -106,7 +108,7 @@ Starting a guided setup flow also runs immediately: channel setup (`connect tele
 
 `configure gateway` guides you through the local Gateway's port, bind address, token or password auth, and Tailscale exposure. It saves config without applying it to the running Gateway, because changing the active address or credential could disconnect the setup chat. Say `restart gateway` after chat setup, or run `openclaw gateway restart` after a terminal-wizard handoff. Remote mode is guidance-only: use `openclaw onboard` for a fresh setup or `openclaw configure` to change the mode.
 
-`import memory` is copy-only rather than a config write. It detects supported local agent homes, lets you choose the available sources, and copies new memory files into the existing default agent workspace without importing config, credentials, or skills. It requires completed onboarding and reports confirmed imports, nothing-to-import results, provider failures, and failures where some files may already have been copied. No Gateway restart is needed. Use the Control UI's [Import Memory page](/web/control-ui#import-assistant-memory) when you need to target another agent or replace an existing import.
+`import memory` is copy-only rather than a config write. It detects supported local agent homes, lets you choose the available sources, and copies new memory files into the existing default agent workspace without importing config, credentials, or skills. It requires completed onboarding and reports confirmed imports, nothing-to-import results, provider failures, and failures where some files may already have been copied. No Gateway restart is needed. Use the Control UI's [Import Memory page](/web/control-ui/settings#import-assistant-memory) when you need to target another agent or replace an existing import.
 
 In direct OpenClaw chat, persistent operations require conversational approval (or `--yes` for a one-shot command): write config, `config set`, `config set-ref`, setup/onboarding bootstrap, change the default model, start/stop/restart the Gateway, create agents, and install plugins.
 
@@ -122,6 +124,12 @@ tool policy, and the operation restrictions below still apply. The host also che
 that the requesting run and verified inference route remain valid. Interactive
 setup and agent handoffs still require a direct operator session; delegated chat
 cannot start a wizard, even when a model proposes it.
+
+While a human reviews the proposal, the requesting tool stays open. **Allow once**
+applies the exact proposal and returns its application outcome; **Deny** or expiry
+returns a non-applied outcome instead of leaving the agent reporting a pending
+change. Stopping the requesting run cancels its approval. A late approval cannot
+restart a closed run: request the change again from an active run if still needed.
 
 Configured agents can ask OpenClaw to create another agent through their
 `openclaw` tool. The request enters the same typed create-agent operation and
@@ -178,6 +186,11 @@ Discovery and read-only operations are not included. Secrets never appear in
 change history; config journal records contain changed paths rather than config
 values, and value comparison uses protected fingerprints.
 
+Config-write records retain the writer's origin label when supplied. Automatic
+startup config repairs record `origin: "doctor"` even when console output and
+runtime snapshot refresh are suppressed. Existing unlabeled records are not
+backfilled.
+
 Channel, web-search, and local Gateway setup can run as hosted conversations
 until they reach a secret. The local OpenClaw TUI does not accept sensitive wizard answers
 because terminal chat input is visible. It offers `open channel wizard`
@@ -218,7 +231,7 @@ completes a real live turn. Start OpenClaw again after onboarding succeeds.
 
 ```text
 setup
-setup workspace ~/Projects/work
+setup workspace ~/path/to/work
 ```
 
 `setup` preserves the verified effective model. It does not configure or
@@ -257,6 +270,9 @@ supervision opt-outs remain untouched during inference setup.
 ## AI conversation
 
 Interactive OpenClaw's free-form conversation runs through the same agent loop as regular OpenClaw agents, restricted to one ring-zero OpenClaw authority tool, `openclaw`, that wraps the typed operations. Read actions run freely, mutations require your conversational approval for that exact operation (see Operations and approval), and every applied write is audited and re-validated. The agent session persists, so OpenClaw has real multi-turn memory. If the verified inference route later stops working, return to `openclaw onboard` and repair it before continuing.
+
+A failed or timed-out turn ends that setup conversation with a visible error.
+Retrying starts a fresh conversation and live-checks the inference route again.
 
 The host does not parse natural-language requests into operations. Free-form
 messages — including command-looking text and questions such as "why did my
@@ -344,8 +360,8 @@ OpenClaw: Applied. Audit entry written.
 Agent creation can also be queued locally or via rescue:
 
 ```text
-create agent work workspace ~/Projects/work model openai/gpt-5.6-sol
-/openclaw create agent work workspace ~/Projects/work
+create agent work workspace ~/path/to/work model openai/gpt-5.6-sol
+/openclaw create agent work workspace ~/path/to/work
 ```
 
 Agent creation may name only the current live-verified default model. Omit the

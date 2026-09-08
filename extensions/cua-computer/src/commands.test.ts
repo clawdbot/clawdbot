@@ -220,6 +220,7 @@ describe("cua-computer provider", () => {
     };
     const { observationId } = observed.observation;
     const elementRef = observed.observation.elements[0]!.elementRef;
+    expect(observed).toMatchObject({ details: { coordinateSpace: "image-pixels" } });
     expect(observationId).toMatch(/^cua:v2:observation:/);
     expect(elementRef).toMatch(/^cua:v2:element:/);
 

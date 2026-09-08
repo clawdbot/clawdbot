@@ -18,6 +18,7 @@ vi.mock("../../agents/workspace-templates.js", () => ({
 }));
 
 vi.mock("../../agents/workspace.js", () => ({
+  publishBootstrapFile: async () => true,
   resolveDefaultAgentWorkspaceDir: () => mocks.workspace,
 }));
 

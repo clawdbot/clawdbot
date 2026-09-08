@@ -810,6 +810,9 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
             id: "sensitive",
             text: sensitiveText,
             attachments: [attachment])))
+        try await databases.watchMessages.importLegacy(.init(messages: [
+            .init(id: "watch-sensitive", gatewayStableID: "gw-a", text: sensitiveText, submittedAtMs: nil),
+        ], recentMessageIDs: []), nowMs: Int64(Date().timeIntervalSince1970 * 1000))
         await storeB.storeSessions([cacheSessionEntry(key: "keep", updatedAt: 1)])
 
         try databases.removeGatewayData(gatewayID: "gw-a")
@@ -847,6 +850,8 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
             "client-state-outbox-attachment-rekey-v6",
             "client-state-outbox-settings-expectation-v7",
             "client-state-outbox-settings-claim-v8",
+            "client-state-watch-message-journal-v9",
+            "client-state-watch-message-legacy-receipts-v1",
         ])
     }
 }
@@ -1598,5 +1603,765 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
         #expect(!OpenClawChatSQLiteTranscriptCache.canEnqueueAttachmentBytes(
             commandBytes: 2,
             queuedBytes: OpenClawChatSQLiteTranscriptCache.maxQueuedAttachmentBytes - 1))
+    }
+}
+
+final class WatchMessageJournalStoreTests: ClientDatabaseTestSuite, @unchecked Sendable {
+    private let now = Int64(Date().timeIntervalSince1970 * 1000)
+    private var journal: OpenClawWatchMessageJournal {
+        self.databases.watchMessages
+    }
+
+    private func context(gatewayID: String = "gw-a") async throws -> OpenClawWatchChatDeliveryContext {
+        try await self.journal.importLegacy(.init(messages: [], recentMessageIDs: []), nowMs: self.now)
+        let identity = try #require(OpenClawChatSessionRoutingIdentity(contract: "per-sender|main|main"))
+        await databases.store(gatewayID: gatewayID).storeSessionRoutingIdentity(identity)
+        let route = try #require(try await journal.route(gatewayStableID: gatewayID))
+        return try OpenClawWatchChatDeliveryContext(
+            gatewayStableID: gatewayID, routeGeneration: #require(route.owner.routeGeneration),
+            agentId: "main", sessionKey: "main", deliverySessionKey: "agent:main:main",
+            sessionRoutingContract: route.routingIdentity.contract)
+    }
+
+    private func command(id: String = "watch-command", text: String = "hello", gatewayID: String = "gw-a") async throws
+        -> OpenClawWatchChatDeliveryCommand
+    {
+        try await OpenClawWatchChatDeliveryCommand(
+            context: self.context(gatewayID: gatewayID), commandId: id, submittedAtMs: self.now,
+            body: .chat(text: text))
+    }
+
+    private func claim(_ command: OpenClawWatchChatDeliveryCommand) async throws -> OpenClawWatchMessageEntry {
+        _ = try await self.journal.admit(command, nowMs: self.now)
+        return try #require(try await self.journal.claim(
+            command, nowMs: self.now))
+    }
+
+    @Test func `Watch admission waits for a prepared legacy import`() async throws {
+        await #expect(throws: OpenClawWatchChatDeliveryError.self) {
+            _ = try await self.journal.route(gatewayStableID: "gw-a")
+        }
+        await #expect(throws: OpenClawWatchChatDeliveryError.self) {
+            try await self.journal.importLegacy(.init(messages: [], recentMessageIDs: []), nowMs: Int64.max)
+        }
+        await #expect(throws: OpenClawWatchChatDeliveryError.self) {
+            _ = try await journal.route(gatewayStableID: "gw-a")
+        }
+        try await self.journal.importLegacy(.init(messages: [], recentMessageIDs: []), nowMs: self.now)
+        #expect(try await self.journal.route(gatewayStableID: "gw-a") == nil)
+    }
+
+    @Test func `Watch admission receipt and immutable payload survive reopen`() async throws {
+        let input = try await command()
+        let admitted = try await journal.admit(input, nowMs: self.now)
+        let duplicate = try await journal.admit(input, nowMs: self.now + 1000)
+        #expect(duplicate == admitted)
+        #expect(admitted.receipt?.state == .admitted(atMs: self.now))
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? reopened.close() }
+        #expect(try await reopened.watchMessages.entries() == [admitted])
+        #expect(try await reopened.watchMessages.route(gatewayStableID: "gw-a")?.owner == admitted.owner)
+
+        let changed = OpenClawWatchChatDeliveryCommand(
+            context: input.context, commandId: input.commandId, submittedAtMs: self.now, body: .chat(text: "different"))
+        await #expect(throws: OpenClawWatchChatDeliveryError.self) {
+            _ = try await self.journal.admit(changed, nowMs: self.now)
+        }
+        await #expect(throws: OpenClawWatchChatDeliveryError.self) {
+            _ = try await self.journal.admit(input, nowMs: self.now, destination: .phone)
+        }
+        #expect(try await self.journal.entries() == [admitted])
+    }
+
+    @Test func `failed Watch insert rolls back without an admission receipt`() async throws {
+        let input = try await command()
+        try await databases.stateQueue.write { db in
+            try db.execute(sql: """
+            CREATE TRIGGER reject_watch_insert BEFORE INSERT ON watch_message_journal
+            BEGIN SELECT RAISE(ABORT, 'fixture write failure'); END;
+            """)
+        }
+        await #expect(throws: DatabaseError.self) { _ = try await self.journal.admit(input, nowMs: self.now) }
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? reopened.close() }
+        #expect(try await reopened.watchMessages.entries().isEmpty)
+    }
+
+    @Test func `accepted Watch run resumes readback and terminal receipt replays without another claim`() async throws {
+        let input = try await command()
+        let claimed = try await claim(input)
+        #expect(try await self.journal.recordAccepted(claimed, runID: "owned-run") == .applied)
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? reopened.close() }
+        let recovered = reopened.watchMessages
+        try await recovered.recoverInterruptedWork(nowMs: self.now)
+        let accepted = try #require(try await recovered.accepted(owner: .init(context: input.context)).first)
+        #expect(accepted.acceptedRunID == "owned-run")
+        #expect(try await recovered.claim(
+            input,
+            nowMs: self.now) == nil)
+        #expect(try await recovered
+            .recordTerminal(accepted, outcome: .reply(text: "owned reply"), nowMs: self.now) == .applied)
+        let ready = try #require(try await recovered.pendingReceipts().first)
+        let receipt = try #require(ready.receipt)
+        #expect(receipt.terminal?.runId == "owned-run")
+        #expect(try await recovered.admit(input, nowMs: self.now + 1).receipt == receipt)
+        let ack = try OpenClawWatchChatDeliveryReceiptAck(
+            context: input.context, commandId: input.commandId, receiptId: #require(receipt.terminal?.receiptId))
+        #expect(try await recovered.acknowledge(ack) == .applied)
+        #expect(try await recovered.pendingReceipts().isEmpty)
+        #expect(try await recovered.admit(input, nowMs: self.now + 2).receipt == receipt)
+    }
+
+    @Test func `Watch process recovery marks an interrupted send uncertain only once`() async throws {
+        let input = try await command()
+        _ = try await self.claim(input)
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? reopened.close() }
+        try await reopened.watchMessages.recoverInterruptedWork(nowMs: self.now)
+        let result = try #require(try await reopened.watchMessages.pendingReceipts().first)
+        let outcome = try #require(result.receipt?.terminal?.outcome)
+        guard case .uncertain = outcome else {
+            Issue.record("An interrupted send must not become queued or successful")
+            return
+        }
+        let another = try await command(id: "live-new-claim")
+        _ = try await reopened.watchMessages.admit(another, nowMs: self.now)
+        _ = try await reopened.watchMessages.claim(
+            another,
+            nowMs: self.now)
+        try await reopened.watchMessages.recoverInterruptedWork(nowMs: self.now)
+        #expect(try await reopened.watchMessages.entries().first(where: { $0.commandId == another.commandId })?
+            .phase == .sending)
+    }
+
+    @Test func `not dispatched release fences a late acceptance from the previous attempt`() async throws {
+        let input = try await command()
+        let first = try await claim(input)
+        #expect(try await self.journal.releaseNotDispatched(first) == .applied)
+        let second = try #require(try await journal.claim(
+            input, nowMs: self.now))
+        #expect(second.attemptVersion > first.attemptVersion)
+        #expect(try await self.journal.recordAccepted(first, runID: "stale-run") == .superseded)
+        #expect(try await self.journal.recordAccepted(second, runID: "current-run") == .applied)
+        #expect(try await self.journal.entries().first?.acceptedRunID == "current-run")
+    }
+
+    @Test func `waiting Watch chat does not block a fresh quick reply`() async throws {
+        let input = try await command()
+        let chat = try await claim(input)
+        #expect(try await self.journal.recordAccepted(chat, runID: "chat-run") == .applied)
+        let reply = OpenClawWatchChatDeliveryCommand(
+            context: input.context, commandId: "quick-reply", submittedAtMs: self.now,
+            body: .quickReply(promptId: "prompt", actionId: "yes", actionLabel: "Yes", note: nil))
+        let quick = try await claim(reply)
+        #expect(try await self.journal.recordAccepted(quick, runID: "reply-run") == .applied)
+        #expect(try await self.journal.recordTerminal(quick, outcome: .forwarded, nowMs: self.now) == .applied)
+        #expect(try await self.journal.pendingReceipts().map(\.commandId) == [reply.commandId])
+        #expect(try await self.journal.accepted(owner: .init(context: input.context))
+            .map(\.commandId) == [input.commandId])
+    }
+
+    @Test func `phone notification actions do not wait for a Watch receipt acknowledgment`() async throws {
+        let input = try await command()
+        _ = try await self.journal.admit(input, nowMs: self.now, destination: .phone)
+        let claimed = try #require(try await journal.claim(
+            input, nowMs: self.now))
+        #expect(try await self.journal.recordAccepted(claimed, runID: "phone-run") == .applied)
+        #expect(try await self.journal.recordTerminal(claimed, outcome: .forwarded, nowMs: self.now) == .applied)
+        let entry = try #require(try await journal.entries().first)
+        #expect(entry.destination == .phone)
+        #expect(entry.phase == .received)
+        #expect(try await self.journal.pendingReceipts().isEmpty)
+    }
+
+    @Test(arguments: ["queued", "sending", "accepted"])
+    func `active Watch deliveries cannot be dismissed or discarded`(phase: String) async throws {
+        let input = try await self.command()
+        _ = try await self.journal.admit(input, nowMs: self.now)
+        if phase != "queued" {
+            let claim = try #require(try await self.journal.claim(
+                input, nowMs: self.now))
+            if phase == "accepted" {
+                #expect(try await self.journal.recordAccepted(claim, runID: input.commandId) == .applied)
+            }
+        }
+        let original = try #require(try await self.journal.entries().first)
+        #expect(original.phase.rawValue == phase)
+        #expect(try await self.journal.dismiss(id: original.commandId, exactOwner: original.owner) == .superseded)
+        #expect(try await self.journal.discard(id: original.commandId, exactOwner: original.owner) == .superseded)
+        #expect(try await self.journal.entries() == [original])
+    }
+
+    @Test(arguments: [false, true], [OpenClawWatchChatDeliveryKind.chat, .quickReply])
+    func `dismiss preserves the committed Watch receipt and its original expiry`(
+        acknowledged: Bool, kind: OpenClawWatchChatDeliveryKind) async throws
+    {
+        let original = try await self.command(text: "caf\u{E9}")
+        let body: OpenClawWatchChatDeliveryBody = kind == .chat ? original.body :
+            .quickReply(promptId: "prompt", actionId: "approve", actionLabel: nil, note: nil)
+        let input = OpenClawWatchChatDeliveryCommand(
+            context: original.context, commandId: original.commandId,
+            submittedAtMs: original.submittedAtMs, body: body)
+        let changedBody: OpenClawWatchChatDeliveryBody = kind == .chat ? .chat(text: "cafe\u{301}") :
+            .quickReply(promptId: "prompt", actionId: "approve", actionLabel: nil, note: "")
+        let conflicts = [
+            OpenClawWatchChatDeliveryCommand(
+                context: input.context, commandId: input.commandId,
+                submittedAtMs: input.submittedAtMs, body: changedBody),
+            OpenClawWatchChatDeliveryCommand(
+                context: input.context, commandId: input.commandId,
+                submittedAtMs: input.submittedAtMs + 1, body: input.body),
+        ]
+        let replayTime = self.now + 1000
+        func requireIdentityConflict(in journal: OpenClawWatchMessageJournal) async throws {
+            for command in conflicts {
+                do {
+                    _ = try await journal.admit(command, nowMs: replayTime)
+                    Issue.record("A conflicting command must not receive another command's saved result")
+                } catch let error as OpenClawWatchChatDeliveryError {
+                    #expect(error.code == "identity_conflict")
+                }
+            }
+        }
+        let watch = OpenClawWatchChatDeliveryStore(
+            databaseURL: self.directory.appendingPathComponent("watch-receipts.sqlite"))
+        try await watch.enqueue(input, nowMs: self.now)
+        let claimed = try await self.claim(input)
+        #expect(try await self.journal.recordAccepted(claimed, runID: input.commandId) == .applied)
+        let owner = OpenClawWatchMessageOwner(context: input.context)
+        let accepted = try #require(try await self.journal.accepted(owner: owner).first)
+        let outcome: OpenClawWatchChatDeliveryOutcome = kind == .chat ?
+            .reply(text: "Committed terminal reply") : .forwarded
+        #expect(try await self.journal.recordTerminal(accepted, outcome: outcome, nowMs: self.now) == .applied)
+        let ready = try #require(try await self.journal.pendingReceipts(owner: owner).first)
+        let receipt = try #require(ready.receipt)
+        // The Watch commits once; its exact ACK can arrive either side of phone dismissal.
+        let heldAck = try #require(try await watch.record(receipt, nowMs: self.now))
+        if acknowledged {
+            #expect(try await self.journal.acknowledge(heldAck) == .applied)
+        }
+        #expect(try await self.journal.dismiss(
+            id: ready.commandId,
+            exactOwner: .init(gatewayStableID: owner.gatewayStableID, routeGeneration: "different")) == .superseded)
+        #expect(try await self.journal.discard(id: ready.commandId, exactOwner: owner) == .superseded)
+        // Byte-distinct Unicode and nil/empty reply metadata remain different commands.
+        try await requireIdentityConflict(in: self.journal)
+        #expect(try await self.journal.dismiss(id: ready.commandId, exactOwner: owner) == .applied)
+
+        let reopened = try OpenClawClientDatabases(directoryURL: self.directory)
+        defer { try? reopened.close() }
+        let dismissed = try #require(try await reopened.watchMessages.entries(owner: owner).first)
+        #expect(dismissed.displayText == nil)
+        #expect(dismissed.command == nil)
+        #expect(dismissed.receipt == receipt)
+        #expect(dismissed.phase == (acknowledged ? .received : .receiptReady))
+        #expect(dismissed.acceptedRunID == ready.acceptedRunID)
+        #expect(dismissed.attemptVersion == ready.attemptVersion)
+        #expect(dismissed.expiresAtMs == input.expiresAtMs)
+        let replay = try await reopened.watchMessages.admit(input, nowMs: self.now + 1000)
+        #expect(replay == dismissed)
+        try await requireIdentityConflict(in: reopened.watchMessages)
+        let differentContext = try await OpenClawWatchChatDeliveryCommand(
+            context: self.context(gatewayID: "gw-b"), commandId: input.commandId,
+            submittedAtMs: input.submittedAtMs, body: input.body)
+        do {
+            _ = try await reopened.watchMessages.admit(differentContext, nowMs: self.now + 1000)
+            Issue.record("Dismissed IDs must not admit another delivery context")
+        } catch let error as OpenClawWatchChatDeliveryError {
+            #expect(error.code == "identity_conflict")
+        }
+        #expect(try await reopened.watchMessages.claim(
+            input, nowMs: self.now + 1000) == nil)
+        let pending = try await reopened.watchMessages.pendingReceipts(owner: owner)
+        #expect(pending.map(\.receipt) == (acknowledged ? [] : [receipt]))
+        #expect(try await watch.record(receipt, nowMs: self.now + 1000) == heldAck)
+        #expect(try await reopened.watchMessages.acknowledge(heldAck) == .applied)
+        #expect(try await reopened.watchMessages.pendingReceipts(owner: owner).isEmpty)
+        #expect(try await reopened.watchMessages.pruneExpired(nowMs: input.expiresAtMs - 1) == 0)
+        #expect(try await reopened.watchMessages.pruneExpired(nowMs: input.expiresAtMs) == 1)
+        #expect(try await reopened.watchMessages.entries().isEmpty)
+    }
+
+    @Test func `Forget retires the persisted Watch generation while canceled staging preserves it`() async throws {
+        let input = try await command()
+        let original = try await claim(input)
+        try databases.stageGatewayRemoval(gatewayID: "gw-a")
+        await #expect(throws: OpenClawWatchChatDeliveryError.self) {
+            _ = try await self.journal.admit(input, nowMs: self.now)
+        }
+        try databases.cancelGatewayRemoval(gatewayID: "gw-a")
+        #expect(try await self.journal.route(gatewayStableID: "gw-a")?.owner == original.owner)
+        try databases.removeGatewayData(gatewayID: "gw-a")
+        #expect(try await self.journal.entries().isEmpty)
+        let repaired = try await context()
+        #expect(repaired.routeGeneration != input.context.routeGeneration)
+        await #expect(throws: OpenClawWatchChatDeliveryError.self) {
+            _ = try await self.journal.admit(input, nowMs: self.now)
+        }
+        #expect(try await self.journal.recordAccepted(original, runID: "late-run") == .missing)
+    }
+
+    @Test(arguments: ["accepted", "notDispatched", "uncertain"])
+    func `cancelable Forget preserves late settlement without granting a new dispatch`(settlement: String) async throws {
+        let input = try await self.command()
+        try await self.journal.recoverInterruptedWork(nowMs: self.now)
+        let original = try await self.claim(input)
+        let queued = try await self.command(id: "not-yet-dispatched")
+        _ = try await self.journal.admit(queued, nowMs: self.now)
+        let owner = try #require(original.owner)
+        try self.databases.stageGatewayRemoval(gatewayID: "gw-a")
+        await #expect(throws: OpenClawWatchChatDeliveryError.self) {
+            _ = try await self.journal.claim(queued, nowMs: self.now)
+        }
+
+        let expectedPhase: OpenClawWatchMessagePhase
+        switch settlement {
+        case "accepted":
+            #expect(try await self.journal.recordAccepted(original, runID: input.commandId) == .applied)
+            expectedPhase = .accepted
+        case "notDispatched":
+            #expect(try await self.journal.releaseNotDispatched(original) == .applied)
+            expectedPhase = .queued
+        default:
+            #expect(try await self.journal.recordTerminal(
+                original, outcome: .uncertain(message: "Connection ended"), nowMs: self.now) == .applied)
+            expectedPhase = .receiptReady
+        }
+        try self.databases.cancelGatewayRemoval(gatewayID: "gw-a")
+        try await self.journal.recoverInterruptedWork(nowMs: self.now)
+        let settled = try #require(try await self.journal.entries(owner: owner)
+            .first { $0.commandId == input.commandId })
+        #expect(settled.phase == expectedPhase)
+        #expect(settled.attemptVersion == original.attemptVersion)
+        if settlement == "accepted" {
+            #expect(settled.acceptedRunID == input.commandId)
+        } else if settlement == "uncertain" {
+            #expect(settled.receipt?.terminal?.outcome == .uncertain(message: "Connection ended"))
+        }
+
+        try self.databases.removeGatewayData(gatewayID: "gw-a")
+        let replacement = try await self.claim(self.command())
+        #expect(replacement.owner != original.owner)
+        #expect(try await self.journal.recordAccepted(original, runID: "retired-run") == .superseded)
+        #expect(try await self.journal.entries().first == replacement)
+    }
+
+    @Test(arguments: ["accepted", "notDispatched", "uncertain", "routingChanged"], ["retry", "expiry", "forget"])
+    func `failed Sending settlements preserve their claim across recovery`(
+        settlement: String, disposition: String) async throws
+    {
+        let input = try await self.command()
+        // Complete initial recovery before claiming, as the coordinator does.
+        try await self.journal.recoverInterruptedWork(nowMs: self.now)
+        let original = try await self.claim(input)
+        let owner = try #require(original.owner)
+        if disposition == "retry" {
+            try self.databases.stageGatewayRemoval(gatewayID: "gw-a")
+        }
+        defer {
+            if disposition == "retry" {
+                try? self.databases.cancelGatewayRemoval(gatewayID: "gw-a")
+            }
+        }
+        try await self.databases.stateQueue.write { db in
+            try db.execute(sql: """
+            CREATE TRIGGER reject_watch_settlement BEFORE UPDATE OF phase ON watch_message_journal
+            WHEN OLD.command_id = 'watch-command' AND OLD.phase = 'sending' AND NEW.phase != 'sending'
+            BEGIN SELECT RAISE(ABORT, 'fixture settlement write failure'); END;
+            """)
+        }
+        await #expect(throws: DatabaseError.self) {
+            switch settlement {
+            case "accepted":
+                _ = try await self.journal.recordAccepted(original, runID: input.commandId)
+            case "notDispatched":
+                _ = try await self.journal.releaseNotDispatched(original)
+            case "uncertain":
+                _ = try await self.journal.recordTerminal(
+                    original, outcome: .uncertain(message: "Connection ended"), nowMs: self.now)
+            default:
+                _ = try await self.journal.recordTerminal(
+                    original,
+                    outcome: .failed(code: "routing_changed", message: "Route changed before dispatch"),
+                    nowMs: self.now)
+            }
+        }
+        #expect(try await self.journal.entries(owner: owner) == [original])
+        if disposition == "retry" {
+            await #expect(throws: DatabaseError.self) {
+                try await self.journal.recoverInterruptedWork(nowMs: self.now)
+            }
+            #expect(try await self.journal.entries(owner: owner) == [original])
+        }
+        try await self.databases.stateQueue.write { db in
+            try db.execute(sql: "DROP TRIGGER reject_watch_settlement")
+        }
+
+        switch disposition {
+        case "retry":
+            // Phase one pauses dispatch, not settlement of the existing claim.
+            try await self.journal.recoverInterruptedWork(nowMs: self.now)
+            let settled = try #require(try await self.journal.entries(owner: owner).first)
+            let expectedPhase: OpenClawWatchMessagePhase = switch settlement {
+            case "accepted": .accepted
+            case "notDispatched": .queued
+            default: .receiptReady
+            }
+            #expect(settled.phase == expectedPhase)
+            #expect(settled.command == input)
+            #expect(settled.owner == owner)
+            #expect(settled.attemptVersion == original.attemptVersion)
+            #expect(settled.expiresAtMs == input.expiresAtMs)
+            switch settlement {
+            case "accepted":
+                #expect(settled.acceptedRunID == input.commandId)
+            case "notDispatched":
+                #expect(settled.acceptedRunID == nil)
+                #expect(settled.receipt == original.receipt)
+            case "uncertain":
+                guard case .uncertain? = settled.receipt?.terminal?.outcome else {
+                    Issue.record("Failed uncertain settlement must remain uncertain")
+                    return
+                }
+            default:
+                guard case let .failed(code, _)? = settled.receipt?.terminal?.outcome else {
+                    Issue.record("The pre-dispatch routing failure must remain a failure")
+                    return
+                }
+                #expect(code == "routing_changed")
+            }
+        case "expiry":
+            // Test expiry before pruning so deletion alone cannot satisfy the fence.
+            try await self.journal.recoverInterruptedWork(nowMs: input.expiresAtMs)
+            #expect(try await self.journal.entries(owner: owner) == [original])
+            #expect(try await self.journal.pruneExpired(nowMs: input.expiresAtMs) == 1)
+            let next = OpenClawWatchChatDeliveryCommand(
+                context: input.context, commandId: input.commandId, submittedAtMs: input.expiresAtMs,
+                body: .chat(text: "replacement after expiry"))
+            _ = try await self.journal.admit(next, nowMs: input.expiresAtMs)
+            let replacement = try #require(try await self.journal.claim(
+                next, nowMs: input.expiresAtMs))
+            try await self.journal.recoverInterruptedWork(nowMs: input.expiresAtMs)
+            #expect(try await self.journal.entries(owner: owner) == [replacement])
+        default:
+            try self.databases.removeGatewayData(gatewayID: "gw-a")
+            #expect(try await self.journal.entries().isEmpty)
+            let replacement = try await self.claim(self.command(text: "replacement after Forget"))
+            #expect(replacement.owner != owner)
+            try await self.journal.recoverInterruptedWork(nowMs: self.now)
+            #expect(try await self.journal.entries() == [replacement])
+        }
+    }
+
+    @Test func `legacy import marker survives discard Forget and delayed defaults cleanup`() async throws {
+        let snapshot = OpenClawWatchMessageLegacyImport(messages: [
+            .init(id: "legacy-a", gatewayStableID: "gw-a", text: "keep until discard", submittedAtMs: 1),
+            .init(id: "legacy-b", gatewayStableID: "gw-b", text: "keep other gateway", submittedAtMs: nil),
+            .init(id: "legacy-retired", gatewayStableID: "gw-a", text: "already retired text", submittedAtMs: 1),
+        ], recentMessageIDs: ["legacy-recent", "legacy-retired"])
+        try await journal.importLegacy(snapshot, nowMs: self.now)
+        let imported = try await journal.entries()
+        #expect(imported.filter { $0.phase == .needsReview }.count == 2)
+        #expect(imported.first { $0.commandId == "legacy-a" }?.expiresAtMs == nil)
+        #expect(imported.first { $0.commandId == "legacy-retired" }?.displayText == nil)
+        #expect(try await self.journal
+            .pruneExpired(nowMs: self.now + 2 * OpenClawWatchChatDeliveryCodec.lifetimeMs) == 2)
+        #expect(try await self.journal.discard(
+            id: "legacy-a", exactOwner: .init(gatewayStableID: "gw-a", routeGeneration: nil)) == .applied)
+        try databases.removeGatewayData(gatewayID: "gw-b")
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? reopened.close() }
+        try await reopened.watchMessages.importLegacy(
+            snapshot,
+            nowMs: self.now + 3 * OpenClawWatchChatDeliveryCodec.lifetimeMs)
+        #expect(try await reopened.watchMessages.entries().isEmpty)
+        try await reopened.watchMessages.importLegacy(
+            .init(messages: [snapshot.messages[2]], recentMessageIDs: []),
+            nowMs: self.now + 4 * OpenClawWatchChatDeliveryCodec.lifetimeMs)
+        #expect(try await reopened.watchMessages.entries().isEmpty)
+
+        let later = OpenClawWatchMessageLegacyImport(messages: [
+            .init(id: "later-old-writer", gatewayStableID: "gw-a", text: "new unsent text", submittedAtMs: nil),
+        ], recentMessageIDs: [])
+        let laterTime = self.now + 5 * OpenClawWatchChatDeliveryCodec.lifetimeMs
+        try await reopened.watchMessages.importLegacy(later, nowMs: laterTime)
+        let recovered = try #require(try await reopened.watchMessages.entries().first)
+        #expect(recovered.commandId == "later-old-writer")
+        #expect(recovered.displayText == "new unsent text")
+        #expect(recovered.phase == .needsReview)
+        #expect(recovered.command == nil)
+        #expect(recovered.expiresAtMs == nil)
+        try await reopened.watchMessages.importLegacy(later, nowMs: laterTime + 1000)
+        #expect(try await reopened.watchMessages.entries() == [recovered])
+    }
+
+    @Test(arguments: ["text", "gateway", "timestamp", "unicode"])
+    func `legacy recent metadata cannot erase an imported content fingerprint`(changedField: String) async throws {
+        let original = OpenClawWatchMessageLegacyImport.Message(
+            id: "fingerprinted", gatewayStableID: "gw-a", text: "\u{E9}", submittedAtMs: nil)
+        try await self.journal.importLegacy(.init(messages: [original], recentMessageIDs: []), nowMs: self.now)
+        let imported = try #require(try await self.journal.entries().first)
+        #expect(try await self.journal.discard(id: imported.commandId, exactOwner: imported.owner) == .applied)
+        try await self.journal.importLegacy(.init(messages: [], recentMessageIDs: [original.id]), nowMs: self.now)
+
+        let changed = OpenClawWatchMessageLegacyImport.Message(
+            id: original.id,
+            gatewayStableID: changedField == "gateway" ? "gw-b" : original.gatewayStableID,
+            text: changedField == "text" ? "different" : changedField == "unicode" ? "e\u{301}" : original.text,
+            submittedAtMs: changedField == "timestamp" ? 0 : original.submittedAtMs)
+        let fresh = OpenClawWatchMessageLegacyImport.Message(
+            id: "batch-new", gatewayStableID: "gw-a", text: "keep after retry", submittedAtMs: nil)
+        await #expect(throws: (any Error).self) {
+            try await self.journal.importLegacy(
+                .init(messages: [fresh, changed], recentMessageIDs: []), nowMs: self.now)
+        }
+        #expect(try await self.journal.entries().allSatisfy { $0.displayText == nil })
+        try await self.journal.importLegacy(
+            .init(messages: [fresh, original], recentMessageIDs: []), nowMs: self.now)
+        let recovered = try await self.journal.entries().filter { $0.displayText != nil }
+        #expect(recovered.map(\.commandId) == [fresh.id])
+        #expect(recovered.first?.displayText == fresh.text)
+    }
+
+    @Test(arguments: [false, true])
+    func `conflicting legacy batches preserve owned rows and roll back new receipts`(
+        hasModernCommand: Bool) async throws
+    {
+        let original = OpenClawWatchMessageLegacyImport.Message(
+            id: "conflicting", gatewayStableID: "gw-a", text: "original", submittedAtMs: 1)
+        if hasModernCommand {
+            let command = try await self.command(id: original.id, text: "modern command")
+            _ = try await self.journal.admit(command, nowMs: self.now)
+        }
+        let before = try await self.journal.entries()
+        let fresh = OpenClawWatchMessageLegacyImport.Message(
+            id: "batch-new", gatewayStableID: "gw-a", text: "new text", submittedAtMs: nil)
+        let changed = OpenClawWatchMessageLegacyImport.Message(
+            id: original.id, gatewayStableID: original.gatewayStableID, text: "changed", submittedAtMs: 1)
+        await #expect(throws: (any Error).self) {
+            try await self.journal.importLegacy(
+                .init(messages: [fresh, original, changed], recentMessageIDs: []), nowMs: self.now)
+        }
+        #expect(try await self.journal.entries() == before)
+        if hasModernCommand {
+            #expect(try await self.journal.route(gatewayStableID: "gw-a") != nil)
+        } else {
+            await #expect(throws: OpenClawWatchChatDeliveryError.self) {
+                _ = try await self.journal.route(gatewayStableID: "gw-a")
+            }
+        }
+        try await self.journal.importLegacy(.init(messages: [fresh], recentMessageIDs: []), nowMs: self.now)
+        let after = try await self.journal.entries()
+        #expect(after.first { $0.commandId == fresh.id }?.displayText == fresh.text)
+        #expect(after.filter { $0.commandId != fresh.id } == before)
+    }
+
+    @Test(arguments: [false, true])
+    func `unseen legacy IDs from a forgotten Gateway remain unimported after re-pair`(repaired: Bool) async throws {
+        try await self.journal.importLegacy(.init(messages: [], recentMessageIDs: []), nowMs: self.now)
+        try self.databases.removeGatewayData(gatewayID: "gw-forgotten")
+        if repaired {
+            _ = try await self.context(gatewayID: "gw-forgotten")
+        }
+        let fresh = OpenClawWatchMessageLegacyImport.Message(
+            id: "other-gateway", gatewayStableID: "gw-a", text: "independent text", submittedAtMs: nil)
+        let ambiguous = OpenClawWatchMessageLegacyImport.Message(
+            id: "unseen-before-forget", gatewayStableID: "gw-forgotten", text: "preserve source", submittedAtMs: nil)
+        await #expect(throws: (any Error).self) {
+            try await self.journal.importLegacy(
+                .init(messages: [fresh, ambiguous], recentMessageIDs: []), nowMs: self.now)
+        }
+        #expect(try await self.journal.entries().isEmpty)
+        try await self.journal.importLegacy(.init(messages: [fresh], recentMessageIDs: []), nowMs: self.now)
+        let recovered = try #require(try await self.journal.entries().first)
+        #expect(recovered.commandId == fresh.id)
+        #expect(recovered.displayText == fresh.text)
+        #expect(recovered.phase == .needsReview)
+    }
+
+    @Test func `legacy import identities preserve exact UTF8 bytes`() async throws {
+        let first = OpenClawWatchMessageLegacyImport.Message(
+            id: "legacy-\u{E9}", gatewayStableID: "gw-a", text: "first", submittedAtMs: nil)
+        let second = OpenClawWatchMessageLegacyImport.Message(
+            id: "legacy-e\u{301}", gatewayStableID: "gw-a", text: "second", submittedAtMs: nil)
+        try await self.journal.importLegacy(.init(messages: [first], recentMessageIDs: []), nowMs: self.now)
+        try await self.journal.importLegacy(.init(messages: [second], recentMessageIDs: []), nowMs: self.now)
+        let entries = try await self.journal.entries()
+        #expect(entries.count == 2)
+        #expect(Set(entries.map(\.id)).count == entries.count)
+        #expect(Set(entries.map(\.id)) == [Data(first.id.utf8), Data(second.id.utf8)])
+        #expect(entries.first { $0.id == Data(first.id.utf8) }?.displayText == first.text)
+        #expect(entries.first { $0.id == Data(second.id.utf8) }?.displayText == second.text)
+    }
+
+    @Test func `failed legacy import commits neither partial rows nor its marker`() async throws {
+        let snapshot = OpenClawWatchMessageLegacyImport(messages: [
+            .init(id: "first", gatewayStableID: "gw-a", text: "first text", submittedAtMs: nil),
+            .init(id: "reject", gatewayStableID: "gw-a", text: "second text", submittedAtMs: nil),
+        ], recentMessageIDs: [])
+        try await databases.stateQueue.write { db in
+            try db.execute(sql: """
+            CREATE TRIGGER reject_watch_import BEFORE INSERT ON watch_message_journal
+            WHEN NEW.command_id = 'reject' BEGIN SELECT RAISE(ABORT, 'fixture failure'); END;
+            """)
+        }
+        await #expect(throws: DatabaseError.self) { try await self.journal.importLegacy(snapshot, nowMs: self.now) }
+        await #expect(throws: OpenClawWatchChatDeliveryError.self) {
+            _ = try await self.journal.route(gatewayStableID: "gw-a")
+        }
+        #expect(try await self.journal.entries().isEmpty)
+        try await databases.stateQueue.write { db in try db.execute(sql: "DROP TRIGGER reject_watch_import") }
+        try await self.journal.importLegacy(snapshot, nowMs: self.now)
+        #expect(try await self.journal.entries().count == 2)
+    }
+
+    @Test func `Watch expiry never renews a replayed command`() async throws {
+        let input = try await command()
+        _ = try await self.journal.admit(input, nowMs: self.now)
+        #expect(try await self.journal.pruneExpired(nowMs: input.expiresAtMs) == 1)
+        await #expect(throws: OpenClawWatchChatDeliveryError.self) {
+            _ = try await self.journal.admit(input, nowMs: input.expiresAtMs)
+        }
+        let future = OpenClawWatchChatDeliveryCommand(
+            context: input.context, commandId: "future",
+            submittedAtMs: self.now + OpenClawWatchChatDeliveryCodec.maxFutureSkewMs + 1,
+            body: .chat(text: "future"))
+        await #expect(throws: OpenClawWatchChatDeliveryError.self) { _ = try await self.journal.admit(
+            future,
+            nowMs: self.now) }
+        #expect(try await self.journal.entries().isEmpty)
+    }
+
+    @Test(.timeLimit(
+        .minutes(
+            1))) func `Watch list observation includes committed admissions and trigger based Forget`() async throws
+    {
+        let input = try await command()
+        let observation = try await self.journal.changes()
+        var changes = observation.makeAsyncIterator()
+        #expect(try await changes.next() == [])
+        _ = try await self.journal.admit(input, nowMs: self.now)
+        #expect(try await changes.next()?.map(\.commandId) == [input.commandId])
+        try databases.removeGatewayData(gatewayID: "gw-a")
+        #expect(try await changes.next() == [])
+    }
+
+    @Test func `Watch pending capacity rejects before admission and accepted work frees a slot`() async throws {
+        let target = try await context()
+        for index in 0..<OpenClawWatchChatDeliveryCodec.maxPendingCommands {
+            _ = try await self.journal.admit(
+                .init(
+                    context: target, commandId: "queued-\(index)", submittedAtMs: self.now, body: .chat(
+                        text: "queued")),
+                nowMs: self.now)
+        }
+        let extra = OpenClawWatchChatDeliveryCommand(
+            context: target, commandId: "overflow", submittedAtMs: now, body: .chat(text: "overflow"))
+        await #expect(throws: OpenClawWatchChatDeliveryError.self) { _ = try await self.journal.admit(
+            extra,
+            nowMs: self.now) }
+        #expect(try await self.journal.entries().count == OpenClawWatchChatDeliveryCodec.maxPendingCommands)
+        let first = try #require(try await journal.entries().first?.command)
+        let claimed = try #require(try await journal.claim(
+            first,
+            nowMs: self.now))
+        #expect(try await self.journal.recordAccepted(claimed, runID: "accepted") == .applied)
+        #expect(try await self.journal.admit(extra, nowMs: self.now).commandId == "overflow")
+    }
+
+    @Test func `changed routing settles a queued Watch command without dispatch`() async throws {
+        let input = try await command()
+        _ = try await self.journal.admit(input, nowMs: self.now)
+        try await store
+            .storeSessionRoutingIdentity(#require(OpenClawChatSessionRoutingIdentity(contract: "global|main|other")))
+        #expect(try await self.journal.claim(
+            input,
+            nowMs: self.now) == nil)
+        let receipt = try #require(try await journal.pendingReceipts().first?.receipt)
+        let outcome = try #require(receipt.terminal?.outcome)
+        guard case let .failed(code, _) = outcome else {
+            Issue.record("A changed routing contract must settle visibly")
+            return
+        }
+        #expect(code == "routing_changed")
+        #expect(try await self.journal.admit(input, nowMs: self.now + 1).receipt == receipt)
+    }
+
+    @Test func `pending Forget does not block interrupted retirement on another Gateway`() async throws {
+        let first = try await self.command(id: "interrupted-a", gatewayID: "gw-a")
+        let second = try await self.command(id: "interrupted-b", gatewayID: "gw-b")
+        _ = try await self.claim(first)
+        _ = try await self.claim(second)
+        try self.databases.stageGatewayRemoval(gatewayID: "gw-a")
+        let reopened = try OpenClawClientDatabases(directoryURL: self.directory)
+        defer { try? reopened.close() }
+        try await reopened.watchMessages.recoverInterruptedWork(nowMs: self.now)
+        let recovered = try await reopened.watchMessages.pendingReceipts()
+        #expect(Set(recovered.map(\.commandId)) == [first.commandId, second.commandId])
+        for entry in recovered {
+            let outcome = try #require(entry.receipt?.terminal?.outcome)
+            guard case .uncertain = outcome else {
+                Issue.record("Interrupted retirement must not assert execution or discard user text")
+                return
+            }
+            #expect(entry.displayText != nil)
+        }
+        try self.databases.cancelGatewayRemoval(gatewayID: "gw-a")
+        try await reopened.watchMessages.recoverInterruptedWork(nowMs: self.now)
+        #expect(try await reopened.watchMessages.claim(
+            first, nowMs: self.now) == nil)
+    }
+
+    @Test(arguments: [
+        false,
+        true,
+    ]) func `first Watch journal use prunes expired fresh copies`(subscription: Bool) async throws {
+        let target = try await self.context()
+        let past = self.now - OpenClawWatchChatDeliveryCodec.lifetimeMs - 1000
+        let input = OpenClawWatchChatDeliveryCommand(
+            context: target, commandId: "expired-before-open", submittedAtMs: past,
+            body: .chat(text: "expired fixture"))
+        _ = try await self.journal.admit(input, nowMs: past)
+        let entries: [OpenClawWatchMessageEntry]
+        if subscription {
+            let observation = try await self.journal.changes()
+            var changes = observation.makeAsyncIterator()
+            entries = try #require(try await changes.next())
+        } else {
+            entries = try await self.journal.entries()
+        }
+        #expect(entries.isEmpty)
+        let remaining = try await self.databases.stateQueue.read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM watch_message_journal")
+        }
+        #expect(remaining == 0)
+    }
+
+    @Test func `actual v8 migrations reopen the additive Watch schema and preserve its generation`() async throws {
+        let input = try await command()
+        _ = try await self.journal.admit(input, nowMs: self.now)
+        let older = try DatabaseQueue(path: directory
+            .appendingPathComponent(OpenClawClientDatabases.clientStateFilename).path)
+        defer { try? older.close() }
+        var migrator = DatabaseMigrator()
+        OpenClawClientDatabases.registerClientStateMigrationsV1ThroughV5(&migrator)
+        OpenClawClientDatabases.registerClientStateMigrationsV6ThroughV8(&migrator)
+        try migrator.migrate(older)
+        // The unchanged routing writer names its fields, so an older refresh
+        // preserves the generation that only the new Watch flow understands.
+        try await store
+            .storeSessionRoutingIdentity(#require(OpenClawChatSessionRoutingIdentity(contract: "per-sender|main|main")))
+        let generation = try await older.read { db in
+            try String.fetchOne(
+                db,
+                sql: "SELECT watch_route_generation FROM gateway_routing_identity WHERE gateway_id = 'gw-a'")
+        }
+        #expect(generation == input.context.routeGeneration)
+        try databases.removeGatewayData(gatewayID: "gw-a")
+        let remaining = try await older.read { db in try Int.fetchOne(
+            db,
+            sql: "SELECT COUNT(*) FROM watch_message_journal") }
+        #expect(remaining == 0)
     }
 }

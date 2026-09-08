@@ -2,7 +2,7 @@ import type {
   AgentHarnessIsolatedCompletionParamsV2,
   AgentHarnessIsolatedCompletionResult,
 } from "./harness/types.js";
-import { completeWithPreparedSimpleCompletionModel } from "./simple-completion-runtime.js";
+import { completeWithPreparedSimpleCompletionModel } from "./simple-completion-execution.js";
 
 /** Executes one zero-tool completion using the exact host-prepared model and credential. */
 export async function runHostPreparedIsolatedCompletion(
@@ -11,11 +11,13 @@ export async function runHostPreparedIsolatedCompletion(
   if (params.authorization.owner !== "host") {
     throw new Error("Isolated completion requires host-prepared authorization.");
   }
+  params.assertCurrent?.();
   const timeoutSignal = AbortSignal.timeout(params.timeoutMs);
   const signal = params.abortSignal
     ? AbortSignal.any([params.abortSignal, timeoutSignal])
     : timeoutSignal;
   const assistant = await completeWithPreparedSimpleCompletionModel({
+    assertCurrent: params.assertCurrent,
     model: params.authorization.model,
     auth: params.authorization.auth,
     cfg: params.config,
@@ -33,5 +35,6 @@ export async function runHostPreparedIsolatedCompletion(
       signal,
     },
   });
+  params.assertCurrent?.();
   return { assistant };
 }

@@ -5,10 +5,11 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { completeSimple, type AssistantMessage, type Model } from "openclaw/plugin-sdk/llm";
+import { createLlmRuntime, type AssistantMessage, type Model } from "@openclaw/ai";
+import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
-import { formatErrorMessage } from "../src/infra/errors.ts";
 import { formatDurationCompact } from "../src/infra/format-time/format-duration.ts";
 import {
   syncControlUiCatalogFallbackBaseline,
@@ -29,15 +30,19 @@ import {
   compareStringArrays,
   createControlUiLocaleSyncPlan,
   flattenTranslations,
-  resolveLocaleMetaProvenance,
   type GlossaryEntry,
   type LocaleEntry,
   type LocaleMeta,
   type TranslationBatchItem,
 } from "./lib/control-ui-i18n-sync-plan.ts";
-import { toErrorObject as toLintErrorObject } from "./lib/error-format.mts";
+import { escapeRegExp } from "./lib/regexp.mjs";
 import { sleep } from "./lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
+
+// Translation is standalone tooling: Gateway host hooks open operator state
+// and log model identifiers before this script can redact provider failures.
+const translationRuntime = createLlmRuntime();
+registerBuiltInApiProviders(translationRuntime.registry);
 
 type RunProcessParentSignalState = {
   done: boolean;
@@ -64,6 +69,7 @@ const activeRunProcessParentSignals = new Set<RunProcessParentSignalState>();
 const PROGRESS_HEARTBEAT_MS = 30_000;
 const ENV_PROVIDER = "OPENCLAW_CONTROL_UI_I18N_PROVIDER";
 const ENV_MODEL = "OPENCLAW_CONTROL_UI_I18N_MODEL";
+const ENV_FALLBACK_MODEL = "OPENCLAW_I18N_FALLBACK_MODEL";
 const ENV_THINKING = "OPENCLAW_CONTROL_UI_I18N_THINKING";
 const ENV_BATCH_CHAR_BUDGET = "OPENCLAW_CONTROL_UI_I18N_BATCH_CHAR_BUDGET";
 const ENV_PROMPT_TIMEOUT = "OPENCLAW_CONTROL_UI_I18N_PROMPT_TIMEOUT";
@@ -252,12 +258,7 @@ function sha256(input: string | Uint8Array): string {
 }
 
 function cacheNamespace(): string {
-  return [
-    `wf=${CONTROL_UI_I18N_WORKFLOW}`,
-    "engine=openclaw-llm",
-    `provider=${resolveConfiguredProvider()}`,
-    `model=${resolveConfiguredModel()}`,
-  ].join("|");
+  return `wf=${CONTROL_UI_I18N_WORKFLOW}|engine=openclaw-llm`;
 }
 
 function cacheKey(segmentId: string, textHash: string, targetLocale: string): string {
@@ -398,7 +399,8 @@ function buildSystemPrompt(targetLocale: string, glossary: readonly GlossaryEntr
     "- Preserve placeholders exactly, including {count}, {time}, {shown}, {total}, and similar tokens.",
     "- Preserve Swift interpolation expressions such as \\(name) exactly, including the backslash and parentheses.",
     "- Preserve Kotlin interpolation expressions such as $name and ${value} exactly.",
-    "- Preserve punctuation, ellipses, arrows, and casing when they are part of literal UI text.",
+    "- Use natural target-language punctuation and spacing in translated prose. Keep ellipses and arrows unchanged when they are UI indicators.",
+    "- Preserve exact syntax, punctuation, and casing in code, URLs, commands, placeholders, identifiers, and clearly identified literal third-party UI labels.",
     "- Preserve Markdown, inline code, HTML tags, and slash commands when present.",
     "- Use fluent, neutral product UI language.",
     "- Do not add explanations, comments, or extra keys.",
@@ -831,7 +833,7 @@ export function resolveTranslationModel(): Model {
 class TranslationClient {
   private closed = false;
   private sequence: Promise<unknown> = Promise.resolve();
-  private readonly model: Model;
+  private model: Model;
   private readonly systemPrompt: string;
 
   private constructor(systemPrompt: string) {
@@ -865,28 +867,53 @@ class TranslationClient {
           reject(new Error(`${label}: translation prompt timed out after ${timeoutMs}ms`));
         }, timeoutMs);
 
-        completeSimple(
-          this.model,
-          {
-            systemPrompt: this.systemPrompt,
-            messages: [{ role: "user", content: message, timestamp: Date.now() }],
-          },
-          {
-            maxTokens: 4096,
-            reasoning: resolveThinkingLevel(),
-            signal: controller.signal,
-            timeoutMs,
-          },
-        )
-          .then((assistantMessage) => {
+        const complete = () =>
+          translationRuntime
+            .completeSimple(
+              this.model,
+              {
+                systemPrompt: this.systemPrompt,
+                messages: [{ role: "user", content: message, timestamp: Date.now() }],
+              },
+              {
+                maxTokens: 4096,
+                reasoning: resolveThinkingLevel(),
+                signal: controller.signal,
+                timeoutMs,
+              },
+            )
+            .then(extractTranslationResult);
+        complete()
+          .catch(async (error: unknown) => {
+            const fallback = process.env[ENV_FALLBACK_MODEL]?.trim();
+            if (
+              error instanceof TranslationProviderError &&
+              error.code === "model_not_found" &&
+              !controller.signal.aborted &&
+              !this.closed &&
+              this.model.provider === "openai" &&
+              fallback &&
+              fallback !== this.model.id
+            ) {
+              logProgress(`${label}: primary model unavailable; using configured fallback`);
+              this.model = { ...this.model, id: fallback, name: fallback };
+              return await complete();
+            }
+            throw error;
+          })
+          .then((translation) => {
             clearTimeout(timer);
             clearInterval(heartbeat);
-            resolve(extractTranslationResult(assistantMessage));
+            resolve(translation);
           })
           .catch((error: unknown) => {
             clearTimeout(timer);
             clearInterval(heartbeat);
-            reject(toLintErrorObject(error, "Non-Error rejection"));
+            reject(
+              error instanceof TranslationProviderError
+                ? error
+                : new TranslationProviderError("provider_error"),
+            );
           });
       });
     });
@@ -903,9 +930,26 @@ class TranslationClient {
   }
 }
 
+class TranslationProviderError extends Error {
+  readonly code: "model_not_found" | "authentication_error" | "provider_error";
+
+  constructor(code: TranslationProviderError["code"]) {
+    super(`translation provider failed (${code}); check the private provider configuration`);
+    this.code = code;
+  }
+}
+
 function extractTranslationResult(message: AssistantMessage): string {
   if (message.errorMessage || message.stopReason === "error") {
-    throw new Error(message.errorMessage?.trim() || "translation provider error");
+    // Provider prose can contain private model names. Only the explicit model
+    // availability code authorizes fallback; all public errors use fixed text.
+    throw new TranslationProviderError(
+      message.errorCode === "model_not_found"
+        ? "model_not_found"
+        : isProviderAuthError(new Error(message.errorMessage))
+          ? "authentication_error"
+          : "provider_error",
+    );
   }
   const text = message.content
     .map((block) => (block.type === "text" ? block.text : ""))
@@ -923,7 +967,11 @@ function parseTranslationReply(raw: string): Record<string, unknown> {
   const trimmed = raw.trim();
   const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/.exec(trimmed);
   const json = fenced ? expectDefined(fenced[1], "fenced translation JSON body") : trimmed;
-  return JSON.parse(json);
+  try {
+    return JSON.parse(json);
+  } catch {
+    throw new Error("translation provider returned invalid JSON");
+  }
 }
 
 export function parseTranslationBatchReply(
@@ -938,6 +986,14 @@ export function parseTranslationBatchReply(
     const value = parsed[item.key];
     if (typeof value !== "string" || !value.trim()) {
       throw new Error(`missing translation for ${item.key}`);
+    }
+    const privateModels = [process.env[ENV_MODEL], process.env[ENV_FALLBACK_MODEL]];
+    if (
+      privateModels.some(
+        (model) => model?.trim() && value.toLowerCase().includes(model.trim().toLowerCase()),
+      )
+    ) {
+      throw new TranslationProviderError("provider_error");
     }
     validateTranslation?.(item.text, value, item.key, locale);
     translated.set(item.key, value);
@@ -1135,7 +1191,7 @@ async function syncLocale(
     const batches = buildTranslationBatches(plan.pending);
     const batchCount = batches.length;
     logProgress(
-      `${localeLabel}: start keys=${sourceFlat.size} pending=${plan.pending.length} batches=${batchCount} provider=${resolveConfiguredProvider()} model=${resolveConfiguredModel()} thinking=${resolveThinkingLevel()} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
+      `${localeLabel}: start keys=${sourceFlat.size} pending=${plan.pending.length} batches=${batchCount} thinking=${resolveThinkingLevel()} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
     );
     const clientAccess = createTranslationClientAccess(entry.locale, glossary);
     try {
@@ -1147,8 +1203,6 @@ async function syncLocale(
           locale: entry.locale,
         });
         plan.recordTranslations(batch, translated, {
-          model: resolveConfiguredModel(),
-          provider: resolveConfiguredProvider(),
           sourceLocale: SOURCE_LOCALE,
           updatedAt: () => new Date().toISOString(),
         });
@@ -1181,18 +1235,10 @@ async function syncLocale(
   // legitimately stay identical to English. Track fallback keys from actual
   // fallback decisions and previous fallback metadata instead.
 
-  const provenance = resolveLocaleMetaProvenance({
-    didTranslate: allowTranslate && plan.pending.length > 0,
-    model: allowTranslate ? resolveConfiguredModel() : "",
-    previousMeta,
-    provider: allowTranslate ? resolveConfiguredProvider() : "",
-  });
   const artifacts = plan.render({
     defaultGlossary: DEFAULT_GLOSSARY,
     generatedAt: new Date().toISOString(),
     glossary,
-    model: provenance.model,
-    provider: provenance.provider,
     workflow: CONTROL_UI_I18N_WORKFLOW,
   });
   assertPlaceholderParity(sourceFlat, artifacts.nextFlat, entry.locale);
@@ -1279,7 +1325,7 @@ async function main() {
 
   const allowTranslate = args.command === "sync" && hasTranslationProvider();
   logProgress(
-    `command=${args.command} locales=${entries.length} provider=${allowTranslate ? resolveConfiguredProvider() : "disabled"} model=${allowTranslate ? resolveConfiguredModel() : "n/a"} thinking=${allowTranslate ? resolveThinkingLevel() : "n/a"} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
+    `command=${args.command} locales=${entries.length} translation=${allowTranslate ? "enabled" : "disabled"} thinking=${allowTranslate ? resolveThinkingLevel() : "n/a"} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
   );
   const outcomes: SyncOutcome[] = [];
   for (const [index, entry] of entries.entries()) {
@@ -1344,7 +1390,26 @@ function isCliEntrypoint() {
 
 if (isCliEntrypoint()) {
   await main().catch((error: unknown) => {
-    console.error(formatErrorMessage(error));
+    console.error(
+      formatErrorMessage(error, {
+        // Keep failure reporting independent of Gateway logging configuration.
+        redact: (text) => {
+          let redacted = text;
+          for (const name of [
+            ENV_MODEL,
+            ENV_FALLBACK_MODEL,
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+          ]) {
+            const secret = process.env[name]?.trim();
+            if (secret) {
+              redacted = redacted.replaceAll(new RegExp(escapeRegExp(secret), "gi"), "[redacted]");
+            }
+          }
+          return redacted;
+        },
+      }),
+    );
     process.exit(1);
   });
 }

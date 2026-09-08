@@ -2,10 +2,13 @@
 summary: "Adds OpenCode Go model provider support to OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the opencode-go plugin
-title: "OpenCode Go plugin"
+title: "OpenCode Go plugin reference"
 ---
 
-# OpenCode Go plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Adds OpenCode Go model provider support to OpenClaw.
 
@@ -16,7 +19,8 @@ Adds OpenCode Go model provider support to OpenClaw.
 
 ## Surface
 
-providers: `opencode-go`; contracts: `mediaUnderstandingProviders`
+- Providers: `opencode-go`
+- Contracts: `mediaUnderstandingProviders`
 
 ## Related docs
 

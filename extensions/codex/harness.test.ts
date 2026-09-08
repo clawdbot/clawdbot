@@ -20,6 +20,7 @@ vi.mock("./src/app-server/run-attempt.js", () => ({
 }));
 
 import { createCodexAppServerAgentHarness } from "./harness.js";
+import codexPluginPackage from "./package.json" with { type: "json" };
 import { buildCodexRuntimeModelParams } from "./src/app-server/model-runtime.js";
 import {
   createCodexTestBindingStore,
@@ -491,7 +492,7 @@ describe("Codex agent harness reset()", () => {
         binding: { threadId: "thread-1", cwd: "/repo" },
       }),
     ).resolves.toBe(true);
-    await expect(bindingStore.read(identity)).resolves.toMatchObject({ threadId: "thread-1" });
+    expect(bindingStore.read(identity)).toMatchObject({ threadId: "thread-1" });
   });
 
   it("clears an in-place session generation without stranding its replacement", async () => {
@@ -517,14 +518,14 @@ describe("Codex agent harness reset()", () => {
       reason: "reset",
     });
 
-    await expect(bindingStore.read(identity)).resolves.toBeUndefined();
+    expect(bindingStore.read(identity)).toBeUndefined();
     await expect(
       bindingStore.mutate(identity, {
         kind: "set",
         binding: { threadId: "thread-2", cwd: "/repo" },
       }),
     ).resolves.toBe(true);
-    await expect(bindingStore.read(identity)).resolves.toMatchObject({ threadId: "thread-2" });
+    expect(bindingStore.read(identity)).toMatchObject({ threadId: "thread-2" });
   });
 
   it("repairs a retirement fence left by an earlier in-place reset", async () => {
@@ -643,32 +644,43 @@ describe("Codex agent harness reset()", () => {
       ),
     ).rejects.toThrow("owned by supervision");
     expect(run).not.toHaveBeenCalled();
-    await expect(bindingStore.read(identity)).resolves.toMatchObject({
+    expect(bindingStore.read(identity)).toMatchObject({
       threadId: "thread-supervised",
     });
   });
 });
 
 describe("Codex agent harness dispose()", () => {
-  it("uses the preloaded shared-client lifecycle seam", async () => {
-    const sharedDisposer = Symbol.for("openclaw.codexAppServerClientDisposer");
-    const state = globalThis as typeof globalThis & {
-      [sharedDisposer]?: () => Promise<void>;
-    };
-    const previous = state[sharedDisposer];
-    const dispose = vi.fn(async () => {});
-    state[sharedDisposer] = dispose;
-    const harness = createCodexAppServerAgentHarness({
-      bindingStore: testCodexAppServerBindingStore,
-    });
+  it("runs this build's shared-client disposer and ignores a bare-name one", async () => {
+    // The disposer slot is keyed by plugin version like the client table: an old build's
+    // harness must close that build's clients even after a newer build's module evaluated.
+    const versionedSlot = Symbol.for(
+      `openclaw.codexAppServerClientDisposer@${codexPluginPackage.version}`,
+    );
+    const bareSlot = Symbol.for("openclaw.codexAppServerClientDisposer");
+    const globalState = globalThis as Record<symbol, unknown>;
+    const previous = { versioned: globalState[versionedSlot], bare: globalState[bareSlot] };
+    const versioned = vi.fn(async () => {});
+    const bare = vi.fn(async () => {});
+    globalState[versionedSlot] = versioned;
+    globalState[bareSlot] = bare;
     try {
+      const harness = createCodexAppServerAgentHarness({
+        bindingStore: createCodexTestBindingStore(),
+      });
       await harness.dispose?.();
-      expect(dispose).toHaveBeenCalledOnce();
+      expect(versioned).toHaveBeenCalledTimes(1);
+      expect(bare).not.toHaveBeenCalled();
     } finally {
-      if (previous) {
-        state[sharedDisposer] = previous;
-      } else {
-        delete state[sharedDisposer];
+      for (const [slot, value] of [
+        [versionedSlot, previous.versioned],
+        [bareSlot, previous.bare],
+      ] as const) {
+        if (value === undefined) {
+          delete globalState[slot];
+        } else {
+          globalState[slot] = value;
+        }
       }
     }
   });

@@ -6,7 +6,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import {
+  patchSessionEntryCore,
+  replaceSessionEntry,
+} from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
@@ -192,7 +195,8 @@ describe("subagent registry persistence", () => {
         callGateway({ method: "agent.wait", params, timeoutMs }),
       sendRecoveryNotice: vi.fn(),
     };
-    activateSubagentRegistry(() => ({ recoveryRuntime }) as never);
+    const gateway = { recoveryRuntime, resolveGatewayContext: () => gateway as never };
+    activateSubagentRegistry(() => gateway as never);
   };
 
   const fastPersistSubagentRunsToDisk = (runs: Map<string, SubagentRunRecord>) =>
@@ -276,6 +280,9 @@ describe("subagent registry persistence", () => {
       sessionId: "sess-timing",
       updatedAt: startedAt - 1,
     });
+    await patchSessionEntryCore({ storePath, sessionKey: "agent:main:subagent:timing" }, () => ({
+      lastRunError: "Previous setup failed",
+    }));
     await persistSubagentSessionTiming({
       runId: "run-session-timing",
       childSessionKey: "agent:main:subagent:timing",
@@ -294,6 +301,7 @@ describe("subagent registry persistence", () => {
     expect(persisted?.endedAt).toBe(endedAt);
     expect(persisted?.runtimeMs).toBe(500);
     expect(persisted?.status).toBe("done");
+    expect(persisted?.lastRunError).toBeUndefined();
     expect(persisted?.startedAt).toBeGreaterThanOrEqual(startedAt);
     expect(persisted?.startedAt).toBeLessThanOrEqual(endedAt);
   });
@@ -857,7 +865,7 @@ describe("subagent registry persistence", () => {
     expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
   });
 
-  it("finalizes stale unended restored runs with abortedLastRun in the sweeper", async () => {
+  it("finalizes restored runs whose restart interruption exceeded the recovery window", async () => {
     vi.mocked(callGateway).mockImplementationOnce(async (request) => {
       expectFields(request, {
         method: "agent.wait",
@@ -893,7 +901,8 @@ describe("subagent registry persistence", () => {
     await writeChildSessionEntry({
       sessionKey: childSessionKey,
       sessionId: "sess-stale-aborted-restore",
-      updatedAt: now,
+      // Age the interruption marker; task age alone remains restart-recoverable.
+      updatedAt: now - 3 * 60 * 60 * 1_000,
       abortedLastRun: true,
     });
 

@@ -44,8 +44,7 @@ import {
   resolveBindingIdsForSession,
   resolveBindingRecordKey,
   resolveThreadBindingIdleTimeoutMs,
-  resolveThreadBindingInactivityExpiresAt,
-  resolveThreadBindingMaxAgeExpiresAt,
+  resolvePreparedThreadBindingLifecycle,
   resolveThreadBindingMaxAgeMs,
   saveBindingsToDisk,
   setBindingRecord,
@@ -133,41 +132,21 @@ export function createThreadBindingManager(params: {
         continue;
       }
       const now = Date.now();
-      const inactivityExpiresAt = resolveThreadBindingInactivityExpiresAt({
+      const lifecycle = resolvePreparedThreadBindingLifecycle({
         record: binding,
-        defaultIdleTimeoutMs: idleTimeoutMs,
+        idleTimeoutMs,
+        maxAgeMs,
       });
-      const maxAgeExpiresAt = resolveThreadBindingMaxAgeExpiresAt({
-        record: binding,
-        defaultMaxAgeMs: maxAgeMs,
-      });
-      const expirationCandidates: Array<{
-        reason: "idle-expired" | "max-age-expired";
-        at: number;
-      }> = [];
-      if (inactivityExpiresAt != null && now >= inactivityExpiresAt) {
-        expirationCandidates.push({ reason: "idle-expired", at: inactivityExpiresAt });
-      }
-      if (maxAgeExpiresAt != null && now >= maxAgeExpiresAt) {
-        expirationCandidates.push({ reason: "max-age-expired", at: maxAgeExpiresAt });
-      }
-      if (expirationCandidates.length > 0) {
-        expirationCandidates.sort((a, b) => a.at - b.at);
-        const reason = expirationCandidates[0]?.reason ?? "idle-expired";
+      const { expiresAt, reason } = lifecycle;
+      if (expiresAt != null && reason && now >= expiresAt) {
         manager.unbindThread({
           threadId: binding.threadId,
           reason,
           sendFarewell: true,
           farewellText: resolveThreadBindingFarewellText({
             reason,
-            idleTimeoutMs: resolveThreadBindingIdleTimeoutMs({
-              record: binding,
-              defaultIdleTimeoutMs: idleTimeoutMs,
-            }),
-            maxAgeMs: resolveThreadBindingMaxAgeMs({
-              record: binding,
-              defaultMaxAgeMs: maxAgeMs,
-            }),
+            idleTimeoutMs: lifecycle.idleTimeoutMs,
+            maxAgeMs: lifecycle.maxAgeMs,
           }),
         });
         continue;

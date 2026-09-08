@@ -14,17 +14,17 @@ describe("mergeRealtimePartialTranscript", () => {
     expect(mergeRealtimePartialTranscript("hello", " there")).toBe("hello there");
   });
 
-  it("does not split a surrogate pair at the tail cap boundary", () => {
-    const tail = "x".repeat(239);
-    const next = `${"y".repeat(50)}🦞${tail}`;
+  it("does not split a surrogate pair at the prefix cap boundary", () => {
+    const prefix = "x".repeat(239);
+    const next = `${prefix}🦞${"y".repeat(50)}`;
 
-    expect(mergeRealtimePartialTranscript("", next)).toBe(tail);
+    expect(mergeRealtimePartialTranscript("", next)).toBe(prefix);
   });
 
   it("keeps an intact surrogate pair that sits just inside the cap", () => {
-    const tail = `🦞${"w".repeat(238)}`;
-    const next = `${"z".repeat(10)}${tail}`;
+    const prefix = `${"w".repeat(238)}🦞`;
+    const next = `${prefix}${"z".repeat(10)}`;
 
-    expect(mergeRealtimePartialTranscript("", next)).toBe(tail);
+    expect(mergeRealtimePartialTranscript("", next)).toBe(prefix);
   });
 });

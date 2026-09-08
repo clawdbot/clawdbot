@@ -1,13 +1,19 @@
 import { formatErrorMessage } from "../infra/errors.js";
+import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import {
   includeContributionOwnsAgentRoster,
   includeContributionOwnsBindings,
 } from "./agent-roster-provenance.js";
+import { cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
 import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
 import { ConfigIncludeError } from "./includes.js";
-import type { ConfigIoContext } from "./io.context.js";
-import { maybeRecoverSuspiciousConfigRead } from "./io.observe-recovery.js";
+import { createConfigIoContext, type ConfigIoContext } from "./io.context.js";
+import {
+  maybeRecoverSuspiciousConfigRead,
+  prepareSuspiciousConfigRead,
+} from "./io.observe-recovery.js";
 import {
   coerceConfig,
   containsConfigIncludeDirective,
@@ -28,6 +34,7 @@ import {
 import type {
   BestEffortConfigSnapshot,
   ConfigSnapshotReadOptions,
+  PreparedConfigRecovery,
   ReadConfigFileSnapshotForWriteResult,
   ReadConfigFileSnapshotInternalResult,
   ReadConfigFileSnapshotWithPluginMetadataResult,
@@ -60,11 +67,12 @@ function listResolvedIncludePaths(includeFilePathsForWatch: ReadonlySet<string>)
 export async function readConfigFileSnapshotInternal(
   context: ConfigIoContext,
   options: InternalReadOptions = {},
+  sourceRaw?: string,
 ): Promise<ReadConfigFileSnapshotInternalResult> {
-  const { deps, configPath } = context;
+  const { deps, configPath, pathResolution } = context;
   maybeLoadDotEnvForConfig(deps.env);
   const envBeforeRead = snapshotEnv(deps.env);
-  if (!deps.fs.existsSync(configPath)) {
+  if (sourceRaw === undefined && !deps.fs.existsSync(configPath)) {
     const migrated = migratePersistedImplicitMainRoster({});
     const config = coerceConfig(migrated.config);
     const metadata = context.createValidationPluginMetadataSnapshotLoader({
@@ -85,12 +93,12 @@ export async function readConfigFileSnapshotInternal(
         // Missing config is the fresh-install default path: materialize the
         // same runtime defaults an existing empty {} config gets, so snapshot
         // consumers see identical out-of-box behavior either way.
-        runtimeConfig: materializeRuntimeConfig(
-          config,
-          coreOnly
+        runtimeConfig: materializeRuntimeConfig(config, {
+          ...pathResolution,
+          ...(coreOnly
             ? { manifestRegistry: { plugins: [] } }
-            : { loadManifestRegistry: () => metadata.load(config).manifestRegistry },
-        ),
+            : { loadManifestRegistry: () => metadata.load(config).manifestRegistry }),
+        }),
         hash: hashConfigRaw(null),
         issues: [],
         warnings: [],
@@ -113,8 +121,9 @@ export async function readConfigFileSnapshotInternal(
   let bindingsIncludeOwned = false;
 
   try {
-    const raw = await deps.measure("config.snapshot.read.file", () =>
-      deps.fs.readFileSync(configPath, "utf-8"),
+    const raw = await deps.measure(
+      "config.snapshot.read.file",
+      () => sourceRaw ?? deps.fs.readFileSync(configPath, "utf-8"),
     );
     const rawHash = await deps.measure("config.snapshot.read.hash", () => hashConfigRaw(raw));
     fallbackRaw = raw;
@@ -220,7 +229,7 @@ export async function readConfigFileSnapshotInternal(
     });
     const validated = await deps.measure("config.snapshot.read.validate", () =>
       validateConfigObjectWithPlugins(validationConfigRaw, {
-        env: deps.env,
+        ...pathResolution,
         pluginValidation: context.options.pluginValidation,
         loadPluginMetadataSnapshot: pluginMetadata.load,
         sourceRaw: effectiveParsed,
@@ -323,6 +332,7 @@ export async function readConfigFileSnapshotInternal(
     }
     const snapshotConfig = await deps.measure("config.snapshot.read.materialize", () =>
       materializeRuntimeConfig(validated.config, {
+        ...pathResolution,
         manifestRegistry:
           pluginMetadata.getSnapshot()?.manifestRegistry ??
           (context.options.pluginValidation === "core-only" ? { plugins: [] } : undefined),
@@ -360,6 +370,9 @@ export async function readConfigFileSnapshotInternal(
       ),
     );
   } catch (error) {
+    if (findStartupMaintenanceRequiredError(error)) {
+      throw error;
+    }
     const nodeError = error as NodeJS.ErrnoException;
     let message: string;
     if (nodeError?.code === "EACCES") {
@@ -398,6 +411,60 @@ export async function readConfigFileSnapshotInternal(
       includeFileTargetsForWrite,
     });
   }
+}
+
+/** Preview recovery through the ordinary snapshot pipeline at the selected config path. */
+export async function prepareConfigRecoveryFromContext(
+  context: ConfigIoContext,
+  current: ConfigFileSnapshot,
+): Promise<PreparedConfigRecovery | null> {
+  return await withArtifactPreservingStateReads(async () => {
+    if (
+      !current.exists ||
+      !current.valid ||
+      typeof current.raw !== "string" ||
+      containsConfigIncludeDirective(current.parsed)
+    ) {
+      return null;
+    }
+    if (current.path !== context.configPath) {
+      throw new ConfigMutationConflictError("config recovery path changed since last load", {
+        retryable: false,
+      });
+    }
+    const previewContext = createConfigIoContext({
+      ...context.options,
+      configPath: context.configPath,
+      env: cloneEnvWithPlatformSemantics(context.deps.env),
+      observe: false,
+    });
+    const plan = await prepareSuspiciousConfigRead({
+      deps: previewContext.deps,
+      configPath: context.configPath,
+      raw: current.raw,
+      parsed: current.parsed,
+      prepareBackup: previewContext.prepareRecoveryBackupCandidate,
+    });
+    if (!plan) {
+      return null;
+    }
+    const envBeforeRead = snapshotEnv(previewContext.deps.env);
+    try {
+      const { snapshot, pluginMetadataSnapshot } = await readConfigFileSnapshotInternal(
+        previewContext,
+        { allowCurrentPluginMetadata: false },
+        plan.candidate.raw,
+      );
+      return snapshot.valid ? { snapshot, pluginMetadataSnapshot, apply: plan.apply } : null;
+    } finally {
+      // The prepared writer keeps the selected environment; candidate env.vars are preview-only.
+      restoreEnvChangesIfUnchanged({
+        env: previewContext.deps.env,
+        before: envBeforeRead,
+        after: snapshotEnv(previewContext.deps.env),
+      });
+    }
+  });
 }
 
 export async function readConfigFileSnapshotFromContext(
@@ -468,23 +535,27 @@ export async function readConfigFileSnapshotForWriteFromContext(
 export async function readBestEffortConfigSnapshotFromContext(
   context: ConfigIoContext,
 ): Promise<BestEffortConfigSnapshot> {
-  const result = await readConfigFileSnapshotInternal(context);
-  if (!result.snapshot.valid) {
+  const operation = async () => {
+    const result = await readConfigFileSnapshotInternal(context);
+    if (!result.snapshot.valid) {
+      return {
+        config: result.snapshot.config,
+        sourceConfig: result.snapshot.sourceConfig,
+        configDiagnostics: {
+          path: result.snapshot.path,
+          issues: result.snapshot.issues,
+        },
+      };
+    }
     return {
-      config: result.snapshot.config,
+      // The snapshot already materialized under the caller's plugin-validation policy.
+      config: context.finalizeLoadedRuntimeConfig(result.snapshot.config),
       sourceConfig: result.snapshot.sourceConfig,
-      configDiagnostics: {
-        path: result.snapshot.path,
-        issues: result.snapshot.issues,
-      },
+      configDiagnostics: null,
     };
-  }
-  return {
-    // The snapshot already materialized under the caller's plugin-validation policy.
-    config: context.finalizeLoadedRuntimeConfig(result.snapshot.config),
-    sourceConfig: result.snapshot.sourceConfig,
-    configDiagnostics: null,
   };
+  // Unobserved CLI reads resolve plugin metadata before command-specific admission.
+  return await (context.deps.observe ? operation() : withArtifactPreservingStateReads(operation));
 }
 
 export async function readSourceConfigBestEffortFromContext(

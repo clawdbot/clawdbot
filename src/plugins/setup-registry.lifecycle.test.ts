@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snapshot.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-import { resolvePluginSetupRegistry } from "./setup-registry.js";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
+import { resolvePluginSetupProviderCore, resolvePluginSetupRegistry } from "./setup-registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -11,9 +13,55 @@ const tempDirs: string[] = [];
 afterEach(() => {
   clearPluginMetadataLifecycleCaches();
   cleanupTrackedTempDirs(tempDirs);
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 describe("plugin setup registry artifact lifecycle", () => {
+  it.each([undefined, ["trace-provider"], []])(
+    "traces prepared setup lookup with plugin IDs %j",
+    (pluginIds) => {
+      const rootDir = fs.realpathSync(makeTrackedTempDir("openclaw-setup-trace", tempDirs));
+      const setupSource = path.join(rootDir, "setup-api.cjs");
+      fs.writeFileSync(
+        setupSource,
+        'module.exports = { register(api) { api.registerProvider({ id: "trace-provider", label: "Trace provider" }); } };\n',
+      );
+      const snapshot = createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "trace-provider",
+            rootDir,
+            origin: "global",
+            setupSource,
+            setup: { requiresRuntime: true, providers: [{ id: "trace-provider" }] },
+          },
+        ],
+      });
+      vi.stubEnv("OPENCLAW_PLUGIN_LIFECYCLE_TRACE", "1");
+      const trace = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+      const provider = withPluginMetadataSnapshotScope(
+        snapshot,
+        () => resolvePluginSetupProviderCore({ provider: "trace-provider", pluginIds }),
+        { trustConfigIdentity: true },
+      );
+
+      expect(provider?.label).toBe(pluginIds?.length === 0 ? undefined : "Trace provider");
+      const phases = trace.mock.calls
+        .map(([message]) => message)
+        .filter((message) => message.includes('phase="manifest registry"'));
+      const pluginIdCount = pluginIds ? ` pluginIdCount=${pluginIds.length}` : "";
+      expect(phases).toEqual([
+        expect.stringMatching(
+          new RegExp(
+            `^\\[plugins:lifecycle\\] phase="manifest registry" ms=\\d+\\.\\d{2} status=ok includeDisabled=true${pluginIdCount} indexPluginCount=1$`,
+          ),
+        ),
+      ]);
+    },
+  );
+
   it.each<{
     artifactDir: string;
     declared: boolean;

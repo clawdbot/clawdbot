@@ -6,10 +6,8 @@ import {
 import {
   SHORT_TERM_LOCK_MAX_ENTRIES,
   SHORT_TERM_LOCK_NAMESPACE,
-  SHORT_TERM_RECALL_NAMESPACE,
   memoryCoreWorkspaceStateKey,
   openMemoryCoreStateStore,
-  readMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
 import {
   deleteShortTermLockEntryIfCurrent,
@@ -20,6 +18,7 @@ import {
 import { filterLiveShortTermRecallEntries } from "./short-term-promotion-record.js";
 import {
   readPhaseSignalStore,
+  readShortTermStore,
   readStore,
   resolveStorePath,
   writePhaseSignalStore,
@@ -67,18 +66,11 @@ export async function auditShortTermPromotionArtifacts(params: {
   let updatedAt: string | undefined;
 
   const nowIso = new Date().toISOString();
-  const rawEntries = await readMemoryCoreWorkspaceEntries<unknown>({
-    namespace: SHORT_TERM_RECALL_NAMESPACE,
-    workspaceDir,
-  });
-  const exists = rawEntries.length > 0;
+  const raw = await readShortTermStore(workspaceDir, "recall", nowIso);
+  const rawEntryCount = Object.keys(raw.entries).length;
+  const exists = rawEntryCount > 0;
   if (exists) {
-    const parsed = {
-      version: 1,
-      updatedAt: nowIso,
-      entries: Object.fromEntries(rawEntries.map((entry) => [entry.key, entry.value])),
-    };
-    const store = normalizeShortTermRecallStore(parsed, nowIso);
+    const store = normalizeShortTermRecallStore(raw, nowIso);
     const normalizedEntryCount = Object.keys(store.entries).length;
     updatedAt = store.updatedAt;
     entryCount = normalizedEntryCount;
@@ -96,7 +88,7 @@ export async function auditShortTermPromotionArtifacts(params: {
         .filter((entry) => (entry.conceptTags?.length ?? 0) > 0)
         .map((entry) => entry.conceptTags ?? []),
     );
-    invalidEntryCount = rawEntries.length - entryCount;
+    invalidEntryCount = rawEntryCount - entryCount;
     if (invalidEntryCount > 0) {
       issues.push({
         severity: "warn",
@@ -183,23 +175,11 @@ export async function repairShortTermPromotionArtifacts(params: {
   }
 
   await withMemoryWorkspaceLock(workspaceDir, async () => {
-    const rawEntries = await readMemoryCoreWorkspaceEntries<unknown>({
-      namespace: SHORT_TERM_RECALL_NAMESPACE,
-      workspaceDir,
-    });
-    if (rawEntries.length > 0) {
-      const normalized = normalizeShortTermRecallStore(
-        {
-          version: 1,
-          updatedAt: nowIso,
-          entries: Object.fromEntries(rawEntries.map((entry) => [entry.key, entry.value])),
-        },
-        nowIso,
-      );
-      removedInvalidEntries = Math.max(
-        0,
-        rawEntries.length - Object.keys(normalized.entries).length,
-      );
+    const raw = await readShortTermStore(workspaceDir, "recall", nowIso);
+    const rawEntryCount = Object.keys(raw.entries).length;
+    if (rawEntryCount > 0) {
+      const normalized = normalizeShortTermRecallStore(raw, nowIso);
+      removedInvalidEntries = Math.max(0, rawEntryCount - Object.keys(normalized.entries).length);
       const nextEntries = Object.fromEntries(
         Object.entries(normalized.entries).map(([key, entry]) => {
           const conceptTags = deriveConceptTags({ path: entry.path, snippet: entry.snippet });

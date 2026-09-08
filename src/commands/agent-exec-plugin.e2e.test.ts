@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { waitForDead } from "../../test/helpers/process-wait.js";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
@@ -166,7 +168,106 @@ function buildCliSource(args: string[]): string {
   `;
 }
 
-describe("agent exec installed plugin isolation", () => {
+describe("agent exec built runtime", () => {
+  it.skipIf(process.platform === "win32")(
+    "reclaims authentication-probe descendants when the CLI run times out",
+    async () => {
+      const root = tempDirs.make("openclaw-agent-exec-auth-timeout-");
+      const binDir = path.join(root, "bin");
+      const processPath = path.join(root, "processes.jsonl");
+      const stopPath = path.join(root, "stop");
+      const repoRoot = path.resolve(import.meta.dirname, "../..");
+      await fs.mkdir(binDir);
+      await fs.writeFile(
+        path.join(binDir, "claude"),
+        `#!${process.execPath}
+const fs = require("node:fs");
+const { spawn } = require("node:child_process");
+if (process.argv[2] === "--version") {
+  console.log("2.1.0 (Claude Code)");
+} else {
+  const child = spawn(process.execPath, ["-e", ${JSON.stringify(`
+    const fs = require("node:fs");
+    setInterval(() => {
+      if (fs.existsSync(${JSON.stringify(stopPath)})) process.exit(0);
+    }, 25);
+  `)}], { stdio: "inherit" });
+  child.once("spawn", () => {
+    fs.appendFileSync(${JSON.stringify(processPath)}, JSON.stringify({
+      phase: process.argv[2] === "auth" ? "auth" : "agent",
+      pids: [process.pid, child.pid, process.ppid],
+    }) + "\\n");
+  });
+}
+`,
+        { mode: 0o755 },
+      );
+      await writeConfig(root, {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-7" },
+            models: {
+              "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      });
+      type ProcessReceipt = {
+        phase: "auth" | "agent";
+        pids: number[];
+      };
+      const readProcesses = async (): Promise<ProcessReceipt[]> =>
+        (await fs.readFile(processPath, "utf8").catch(() => ""))
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line) as ProcessReceipt);
+
+      try {
+        const result = await runNodeScript(
+          [
+            path.join(repoRoot, "openclaw.mjs"),
+            "agent",
+            "exec",
+            "probe",
+            "--config",
+            path.join(root, "openclaw.json"),
+            "--cwd",
+            root,
+            "--timeout",
+            "1",
+            "--json",
+          ],
+          {
+            PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+            HOME: root,
+            USERPROFILE: root,
+            OPENCLAW_STATE_DIR: root,
+            CLAUDE_CONFIG_DIR: path.join(root, ".claude"),
+            ANTHROPIC_API_KEY: "synthetic-proof-key",
+            OPENCLAW_SERVICE_MARKER: "openclaw",
+          },
+          30_000,
+          { cwd: root },
+        );
+        expect(result.error, result.stderr).toBeUndefined();
+        expect(result.status, result.stderr).toBe(2);
+        expect(JSON.parse(result.stdout)).toMatchObject({ ok: false, status: "timeout" });
+        const receipts = await readProcesses();
+        expect(receipts.map(({ phase }) => phase)).toContain("auth");
+        await Promise.all(
+          receipts.flatMap(({ pids }) => pids.map((pid) => waitForDead(pid, 5_000))),
+        );
+      } finally {
+        // Assert extinction before asking any leaked fixture children to exit.
+        await fs.writeFile(stopPath, "");
+        await Promise.all(
+          (await readProcesses()).flatMap(({ pids }) => pids.map((pid) => waitForDead(pid, 5_000))),
+        );
+      }
+    },
+  );
+
   it("runs an operator-installed harness without retaining run state", async () => {
     const stateDir = tempDirs.make("openclaw-agent-exec-plugin-e2e-");
     await writeHarnessPlugin(stateDir);

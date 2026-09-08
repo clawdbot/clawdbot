@@ -1,29 +1,51 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import * as providerAuth from "../../agents/model-provider-auth.js";
 import { PreparedModelCatalogConfigReplacedError } from "../../agents/prepared-model-catalog.errors.js";
 import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 
 const catalogMocks = vi.hoisted(() => ({
   loadSnapshot: vi.fn(),
   loadPublishedOwner: vi.fn(),
+  getPreparedOwner: vi.fn(),
   authStore: { version: 1, profiles: {} } as AuthProfileStore,
+  authModes: {} as PreparedAgentCredentialModes,
+  isCurrent: (): boolean => true,
 }));
 
-vi.mock("../../agents/prepared-model-catalog.js", () => ({
-  loadPreparedModelCatalogSnapshot: catalogMocks.loadSnapshot,
-  loadPreparedModelCatalogOwnerSnapshot: async (...args: unknown[]) => {
+vi.mock("../../agents/prepared-model-catalog.js", () => {
+  const loadOwner = async (...args: unknown[]) => {
     const owner = {
       modelCatalog: await catalogMocks.loadSnapshot(...args),
-      authModes: {},
+      authModes: catalogMocks.authModes,
+      metadataSnapshot: createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "anthropic", cliBackends: ["claude-cli"] }],
+      }),
+      isCurrent: catalogMocks.isCurrent,
     };
     setPreparedModelRuntimeAuthStore(owner, catalogMocks.authStore);
     return owner;
-  },
-  loadPublishedPreparedModelCatalogOwnerSnapshot: catalogMocks.loadPublishedOwner,
-}));
+  };
+  return {
+    loadPreparedModelCatalogSnapshot: catalogMocks.loadSnapshot,
+    loadPreparedModelCatalogOwnerSnapshot: loadOwner,
+    withPreparedModelCatalogOwner: async (
+      params: unknown,
+      read: (owner: Awaited<ReturnType<typeof loadOwner>>) => unknown,
+    ) => read(await loadOwner(params)),
+    loadPublishedPreparedModelCatalogOwnerSnapshot: catalogMocks.loadPublishedOwner,
+    getPreparedModelCatalogOwnerSnapshot: catalogMocks.getPreparedOwner,
+  };
+});
 
-const { buildPreparedModelsProviderData } = await import("./commands-models.js");
+const { buildPreparedModelsProviderData, resolveModelsCommandReply } =
+  await import("./commands-models.js");
 
 const staleCfg = {
   agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
@@ -33,12 +55,248 @@ const replacementCfg = {
   agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
 } as OpenClawConfig;
 
+beforeEach(() => {
+  // Semantic projections must not exhaust their deadline through host CPU load.
+  vi.useFakeTimers({ toFake: ["Date"] });
+});
+
 afterEach(() => {
-  vi.clearAllMocks();
+  catalogMocks.loadSnapshot.mockReset();
+  catalogMocks.loadPublishedOwner.mockReset();
+  catalogMocks.getPreparedOwner.mockReset();
+  vi.useRealTimers();
   catalogMocks.authStore = { version: 1, profiles: {} };
+  catalogMocks.authModes = {};
+  catalogMocks.isCurrent = () => true;
+  cliBackendsTesting.resetDepsForTest();
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 describe("/models browse catalog recovery", () => {
+  it.each([
+    { nativeAuth: true, providerKey: false, disabled: false, visible: true, slowCatalog: false },
+    { nativeAuth: false, providerKey: false, disabled: false, visible: false, slowCatalog: false },
+    { nativeAuth: false, providerKey: true, disabled: false, visible: false, slowCatalog: false },
+    { nativeAuth: true, providerKey: true, disabled: true, visible: false, slowCatalog: false },
+    { nativeAuth: true, providerKey: false, disabled: false, visible: true, slowCatalog: true },
+  ])(
+    "lists bound models using native auth=$nativeAuth, provider key=$providerKey, disabled=$disabled, slow catalog=$slowCatalog",
+    async ({ nativeAuth, providerKey, disabled, visible, slowCatalog }) => {
+      if (slowCatalog) {
+        vi.useRealTimers();
+        vi.useFakeTimers();
+      }
+      vi.stubEnv("ANTHROPIC_API_KEY", providerKey ? "synthetic-provider-key" : "");
+      cliBackendsTesting.setDepsForTest({
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            modelProvider: "anthropic",
+            pluginId: "anthropic",
+            config: { command: "claude" },
+          },
+        ],
+      });
+      catalogMocks.authModes = nativeAuth ? { "claude-cli": "api_key" } : {};
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-5" },
+            modelPolicy: { allow: [] },
+            models: {
+              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+        ...(disabled ? { plugins: { entries: { anthropic: { enabled: false } } } } : {}),
+      };
+      const snapshot = {
+        entries: [
+          { provider: "anthropic", id: "claude-opus-4-5", name: "Default" },
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "Bound" },
+          { provider: "anthropic", id: "claude-haiku-4-5", name: "Unbound" },
+        ],
+        routeVariants: [],
+      };
+      const preparedOwner = {
+        modelCatalog: snapshot,
+        authModes: catalogMocks.authModes,
+        metadataSnapshot: createPluginMetadataSnapshotFixture({
+          plugins: [{ id: "anthropic", cliBackends: ["claude-cli"] }],
+        }),
+        isCurrent: () => true,
+      };
+      setPreparedModelRuntimeAuthStore(preparedOwner, catalogMocks.authStore);
+      catalogMocks.getPreparedOwner.mockReturnValue(preparedOwner);
+      catalogMocks.loadSnapshot.mockReturnValue(
+        slowCatalog ? new Promise(() => {}) : Promise.resolve(snapshot),
+      );
+
+      const replyPromise = resolveModelsCommandReply({
+        cfg,
+        commandBodyNormalized: "/models anthropic",
+        agentId: "main",
+      });
+      if (slowCatalog) {
+        await vi.advanceTimersByTimeAsync(750);
+      }
+      const reply = await replyPromise;
+
+      expect(reply?.text?.includes("- anthropic/claude-sonnet-4-6")).toBe(visible);
+      expect(reply?.text?.includes("- anthropic/claude-haiku-4-5")).toBe(providerKey);
+      expect(reply?.text).toContain("- anthropic/claude-opus-4-5");
+    },
+  );
+
+  it("keeps unprepared setup hints on provider auth", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
+        },
+      ],
+    });
+    const checker = providerAuth.createProviderAuthChecker({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      },
+      env: { ANTHROPIC_API_KEY: "synthetic-provider-key" },
+      discoverExternalCliAuth: false,
+      allowPluginSyntheticAuth: false,
+      allowPreparedRuntimeAuth: false,
+    });
+
+    await expect(checker("anthropic", { modelId: "claude-sonnet-4-6" })).resolves.toBe(true);
+  });
+
+  it.each(["pinnedProfileId", "requiredProfileId"] as const)(
+    "does not replace an expired %s with a prepared native login",
+    async (selection) => {
+      cliBackendsTesting.setDepsForTest({
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            modelProvider: "anthropic",
+            pluginId: "anthropic",
+            config: { command: "claude" },
+          },
+        ],
+      });
+      const checker = providerAuth.createProviderAuthChecker({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+              },
+            },
+          },
+        },
+        env: {},
+        discoverExternalCliAuth: false,
+        allowPluginSyntheticAuth: false,
+        allowPreparedRuntimeAuth: true,
+        preparedAuth: {
+          authModes: { "claude-cli": "api_key" },
+          authStore: {
+            version: 1,
+            profiles: {
+              selected: {
+                provider: "anthropic",
+                type: "token",
+                token: "synthetic-expired-token",
+                expires: 1,
+              },
+            },
+          },
+        },
+      });
+
+      await expect(
+        checker("anthropic", { modelId: "claude-sonnet-4-6", [selection]: "selected" }),
+      ).resolves.toBe(false);
+    },
+  );
+
+  it.each([
+    { view: "default", delayMs: 0 },
+    { view: "all", delayMs: 1_000 },
+    { view: "default", delayMs: 1_000 },
+  ] as const)(
+    "recovers supersession during $view auth projection within its deadline (delay=$delayMs)",
+    async ({ view, delayMs }) => {
+      vi.useRealTimers();
+      vi.useFakeTimers();
+      let current = true;
+      catalogMocks.isCurrent = () => current;
+      const evaluating = createDeferred();
+      const resumeAuth = createDeferred();
+      const evaluateModelAuth = vi.fn(async () => ({
+        availability: true as const,
+        routeResolution: null,
+      }));
+      evaluateModelAuth.mockImplementationOnce(async () => {
+        evaluating.resolve();
+        await resumeAuth.promise;
+        return { availability: true, routeResolution: null };
+      });
+      vi.spyOn(providerAuth, "createProviderAuthChecker").mockReturnValue(
+        Object.assign(async () => true, { evaluateModelAuth }),
+      );
+      catalogMocks.loadSnapshot
+        .mockResolvedValueOnce({
+          entries: [{ provider: "anthropic", id: "claude-opus-4-5", name: "Stale model" }],
+          routeVariants: [],
+        })
+        .mockResolvedValueOnce({
+          entries: [{ provider: "openai", id: "gpt-5.6-luna", name: "Current model" }],
+          routeVariants: [],
+        });
+      catalogMocks.loadPublishedOwner.mockImplementationOnce(async () => {
+        catalogMocks.isCurrent = () => true;
+        return { config: replacementCfg };
+      });
+
+      let settled = false;
+      const result = buildPreparedModelsProviderData(staleCfg, undefined, { view }).then((data) => {
+        settled = true;
+        return data;
+      });
+      await evaluating.promise;
+      current = false;
+      const timedOut = view === "default" && delayMs > 750;
+      if (delayMs) {
+        await vi.advanceTimersByTimeAsync(delayMs);
+        expect(settled).toBe(timedOut);
+      }
+      resumeAuth.resolve();
+      const data = await result;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(data.resolvedDefault).toEqual(
+        timedOut
+          ? { provider: "anthropic", model: "claude-opus-4-5" }
+          : { provider: "openai", model: "gpt-5.6-luna" },
+      );
+      expect(data.providers).toEqual([timedOut ? "anthropic" : "openai"]);
+      expect(data.modelNames.has("anthropic/claude-opus-4-5")).toBe(false);
+      expect(data.modelNames.get("openai/gpt-5.6-luna")).toBe(
+        timedOut ? undefined : "Current model",
+      );
+      expect(catalogMocks.loadPublishedOwner).toHaveBeenCalledTimes(timedOut ? 0 : 1);
+    },
+  );
+
   it.each([false, true])(
     "projects prepared external OAuth with explicit exclusion=%s",
     async (excluded) => {
@@ -92,42 +350,255 @@ describe("/models browse catalog recovery", () => {
     expect(catalogMocks.loadPublishedOwner).not.toHaveBeenCalled();
   });
 
-  it("rebuilds the whole browse result from the replacement owner's config, not the stale cfg", async () => {
+  it("carries the command-selected directory into current-owner recovery", async () => {
     catalogMocks.loadSnapshot
-      .mockRejectedValueOnce(new PreparedModelCatalogConfigReplacedError("/tmp/agent-dir"))
+      .mockRejectedValueOnce(new PreparedModelCatalogConfigReplacedError("/tmp/selected-agent"))
       .mockResolvedValueOnce({
-        entries: [{ provider: "openai", id: "gpt-5.6-luna", name: "GPT-5.6 Luna" }],
+        entries: [{ provider: "openai", id: "gpt-5.6-luna", name: "Current Luna" }],
         routeVariants: [],
       });
+    catalogMocks.loadPublishedOwner.mockResolvedValueOnce({
+      agentDir: "/tmp/current-agent",
+      config: replacementCfg,
+    });
+
+    await resolveModelsCommandReply({
+      cfg: staleCfg,
+      commandBodyNormalized: "/models",
+      agentId: "worker",
+      agentDir: "/tmp/selected-agent",
+      workspaceDir: "/tmp/selected-workspace",
+    });
+
+    expect(catalogMocks.loadSnapshot.mock.calls[0]?.[0]).toMatchObject({
+      agentId: "worker",
+      agentDir: "/tmp/selected-agent",
+      config: staleCfg,
+      workspaceDir: "/tmp/selected-workspace",
+    });
+    expect(catalogMocks.loadPublishedOwner).toHaveBeenCalledWith({
+      agentId: "worker",
+      readOnly: true,
+      workspaceDir: "/tmp/selected-workspace",
+    });
+    expect(catalogMocks.loadSnapshot.mock.calls[1]?.[0]).toMatchObject({
+      agentId: "worker",
+      agentDir: "/tmp/current-agent",
+      config: replacementCfg,
+      workspaceDir: "/tmp/selected-workspace",
+    });
+  });
+
+  it.each([
+    ["config replacement", () => new PreparedModelCatalogConfigReplacedError("/tmp/agent-dir")],
+    [
+      "publication supersession",
+      () => new PreparedModelRuntimePublicationSupersededError("superseded"),
+    ],
+  ])("rebuilds the whole browse result after %s", async (_label, createError) => {
+    catalogMocks.loadSnapshot.mockRejectedValueOnce(createError()).mockResolvedValueOnce({
+      entries: [{ provider: "openai", id: "gpt-5.6-luna", name: "GPT-5.6 Luna" }],
+      routeVariants: [],
+    });
     catalogMocks.loadPublishedOwner.mockResolvedValueOnce({ config: replacementCfg });
 
     const data = await buildPreparedModelsProviderData(staleCfg);
 
-    // The recovered menu reflects the replacement generation end-to-end: its catalog entry
-    // and its resolved default both come from replacementCfg, never staleCfg's stale anthropic
-    // default that the new config already removed.
     expect(data.resolvedDefault).toEqual({ provider: "openai", model: "gpt-5.6-luna" });
     expect(data.byProvider.get("anthropic")).toBeUndefined();
     expect(data.byProvider.get("openai")).toEqual(new Set(["gpt-5.6-luna"]));
+    expect(data.modelNames.get("openai/gpt-5.6-luna")).toBe("GPT-5.6 Luna");
+    expect(data.runtimeChoicesByProvider?.has("openai")).toBe(true);
     expect(catalogMocks.loadPublishedOwner).toHaveBeenCalledTimes(1);
-    expect(catalogMocks.loadPublishedOwner).toHaveBeenCalledWith(
-      expect.objectContaining({ readOnly: true }),
-    );
     expect(catalogMocks.loadSnapshot).toHaveBeenCalledTimes(2);
     expect(catalogMocks.loadSnapshot.mock.calls[1]?.[0]).toMatchObject({ config: replacementCfg });
-    expect(catalogMocks.loadSnapshot.mock.calls.map(([params]) => params.readOnly)).toEqual([
-      true,
-      true,
-    ]);
   });
 
-  it("lets a second owner replacement escape", async () => {
-    const first = new PreparedModelCatalogConfigReplacedError("/tmp/agent-a");
-    const second = new PreparedModelCatalogConfigReplacedError("/tmp/agent-b");
-    catalogMocks.loadSnapshot.mockRejectedValueOnce(first).mockRejectedValueOnce(second);
+  it("uses the current agent directory and selected workspace across multiple reloads", async () => {
+    const intermediateCfg = {
+      agents: {
+        defaults: { model: { primary: "google/gemini-3.1-pro" } },
+        list: [
+          {
+            id: "worker",
+            default: true,
+            agentDir: "/tmp/intermediate-agent",
+            workspace: "/tmp/intermediate-workspace",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const currentCfg = {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.6-luna" } },
+        list: [
+          {
+            id: "worker",
+            default: true,
+            agentDir: "/tmp/current-agent",
+            workspace: "/tmp/current-workspace",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    catalogMocks.loadSnapshot
+      .mockRejectedValueOnce(new PreparedModelCatalogConfigReplacedError("/tmp/stale-agent"))
+      .mockRejectedValueOnce(new PreparedModelRuntimePublicationSupersededError("superseded again"))
+      .mockResolvedValueOnce({
+        entries: [{ provider: "openai", id: "gpt-5.6-luna", name: "Current Luna" }],
+        routeVariants: [],
+      });
+    catalogMocks.loadPublishedOwner
+      .mockResolvedValueOnce({ agentDir: "/tmp/intermediate-agent", config: intermediateCfg })
+      .mockResolvedValueOnce({ agentDir: "/tmp/current-agent", config: currentCfg });
+
+    const reply = await resolveModelsCommandReply({
+      cfg: staleCfg,
+      commandBodyNormalized: "/models",
+      agentId: "worker",
+      agentDir: "/tmp/selected-agent",
+      workspaceDir: "/tmp/selected-workspace",
+    });
+
+    expect(reply?.text).toContain("openai");
+    expect(reply?.text).not.toContain("anthropic");
+    expect(reply?.text).not.toContain("google");
+    expect(catalogMocks.loadPublishedOwner).toHaveBeenCalledTimes(2);
+    for (const [params] of catalogMocks.loadPublishedOwner.mock.calls) {
+      expect(params).toMatchObject({
+        agentId: "worker",
+        readOnly: true,
+        workspaceDir: "/tmp/selected-workspace",
+      });
+      expect(params).not.toHaveProperty("config");
+      expect(params).not.toHaveProperty("agentDir");
+    }
+    expect(catalogMocks.loadSnapshot.mock.calls[0]?.[0]).toMatchObject({
+      agentId: "worker",
+      agentDir: "/tmp/selected-agent",
+      config: staleCfg,
+      workspaceDir: "/tmp/selected-workspace",
+    });
+    expect(catalogMocks.loadSnapshot.mock.calls[1]?.[0]).toMatchObject({
+      agentId: "worker",
+      agentDir: "/tmp/intermediate-agent",
+      config: intermediateCfg,
+      workspaceDir: "/tmp/selected-workspace",
+    });
+    expect(catalogMocks.loadSnapshot.mock.calls[2]?.[0]).toMatchObject({
+      agentId: "worker",
+      agentDir: "/tmp/current-agent",
+      config: currentCfg,
+      workspaceDir: "/tmp/selected-workspace",
+    });
+  });
+
+  it("uses one browse deadline across repeated owner replacements", async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers();
+    const intermediateCfg = {
+      agents: { defaults: { model: { primary: "google/gemini-3.1-pro" } } },
+    } as OpenClawConfig;
+    const currentCfg = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
+    } as OpenClawConfig;
+    const rejectAfter = (delayMs: number, error: Error) =>
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(() => reject(error), delayMs);
+      });
+    catalogMocks.loadSnapshot
+      .mockImplementationOnce(() =>
+        rejectAfter(300, new PreparedModelCatalogConfigReplacedError("/tmp/stale-agent")),
+      )
+      .mockImplementationOnce(() =>
+        rejectAfter(300, new PreparedModelRuntimePublicationSupersededError("superseded again")),
+      )
+      .mockImplementationOnce(() => new Promise(() => {}));
+    catalogMocks.loadPublishedOwner
+      .mockResolvedValueOnce({ config: intermediateCfg })
+      .mockResolvedValueOnce({ config: currentCfg });
+
+    const resultPromise = buildPreparedModelsProviderData(staleCfg);
+    const result = expect(resultPromise).resolves.toMatchObject({
+      resolvedDefault: { provider: "openai", model: "gpt-5.6-luna" },
+      providers: ["openai"],
+    });
+    await vi.advanceTimersByTimeAsync(750);
+    await result;
+    expect(catalogMocks.loadPublishedOwner).toHaveBeenCalledTimes(2);
+    expect(catalogMocks.loadSnapshot).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps explicit full-catalog recovery unbounded across late supersession", async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers();
+    catalogMocks.loadSnapshot
+      .mockImplementationOnce(
+        () =>
+          new Promise<never>((_resolve, reject) => {
+            setTimeout(
+              () => reject(new PreparedModelRuntimePublicationSupersededError("late supersession")),
+              1_000,
+            );
+          }),
+      )
+      .mockResolvedValueOnce({
+        entries: [{ provider: "openai", id: "gpt-5.6-luna", name: "Current Luna" }],
+        routeVariants: [],
+      });
     catalogMocks.loadPublishedOwner.mockResolvedValueOnce({ config: replacementCfg });
 
-    await expect(buildPreparedModelsProviderData(staleCfg)).rejects.toBe(second);
+    const resultPromise = buildPreparedModelsProviderData(staleCfg, undefined, { view: "all" });
+    const result = expect(resultPromise).resolves.toMatchObject({
+      resolvedDefault: { provider: "openai", model: "gpt-5.6-luna" },
+      providers: ["openai"],
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await result;
+
+    expect(catalogMocks.loadPublishedOwner).toHaveBeenCalledOnce();
+    expect(catalogMocks.loadSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("bounds current-owner reacquisition by the original browse deadline", async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers();
+    const fallbackCfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "openai/gpt-configured": { alias: "configured" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    catalogMocks.loadSnapshot.mockImplementationOnce(() => new Promise(() => {}));
+
+    const ordinaryTimeoutPromise = buildPreparedModelsProviderData(fallbackCfg);
+    await vi.advanceTimersByTimeAsync(750);
+    const ordinaryTimeout = await ordinaryTimeoutPromise;
+    expect(ordinaryTimeout.byProvider.get("openai")).toEqual(new Set(["gpt-configured"]));
+
+    catalogMocks.loadSnapshot.mockReset();
+    catalogMocks.loadPublishedOwner.mockReset();
+    catalogMocks.loadSnapshot.mockImplementationOnce(
+      () =>
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(
+            () => reject(new PreparedModelCatalogConfigReplacedError("/tmp/stale-agent")),
+            300,
+          );
+        }),
+    );
+    catalogMocks.loadPublishedOwner.mockImplementationOnce(() => new Promise(() => {}));
+
+    const resultPromise = buildPreparedModelsProviderData(fallbackCfg);
+    await vi.advanceTimersByTimeAsync(750);
+    const reacquisitionTimeout = await resultPromise;
+
+    expect(reacquisitionTimeout).toEqual(ordinaryTimeout);
+    expect(catalogMocks.loadSnapshot).toHaveBeenCalledTimes(1);
     expect(catalogMocks.loadPublishedOwner).toHaveBeenCalledTimes(1);
   });
 

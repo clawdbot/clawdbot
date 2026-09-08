@@ -7,10 +7,12 @@ import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission
 import { getInspectableActiveTaskRestartBlockers } from "../tasks/task-registry.maintenance.js";
 import { formatActiveTaskRestartBlocker } from "../tasks/task-restart-blocker.js";
 import type { ChannelKind } from "./config-reload-plan.js";
+import type { GatewayDeferredChannelReload } from "./config-reload-status.types.js";
+import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
 import {
+  isCurrentGatewayReloadGeneration,
   isGatewayReloadGenerationAborted,
-  type GatewayReloadHandlerParams,
-} from "./server-reload-contracts.js";
+} from "./server-reload-generation.js";
 
 const CHANNEL_RELOAD_DEFERRAL_POLL_MS = 500;
 const CHANNEL_RELOAD_STILL_PENDING_WARN_MS = 30_000;
@@ -20,6 +22,25 @@ export function createGatewayActiveWorkTracker(options: {
   myGeneration: number;
 }) {
   const { params, myGeneration } = options;
+  let deferredChannelReload:
+    | {
+        channels: ChannelKind[];
+        publicationPending: boolean;
+        isCurrent: () => boolean;
+      }
+    | undefined;
+  const getDeferredChannelReloads = (): readonly GatewayDeferredChannelReload[] => {
+    if (
+      !deferredChannelReload ||
+      !isCurrentGatewayReloadGeneration(myGeneration) ||
+      isGatewayReloadGenerationAborted(myGeneration) ||
+      !deferredChannelReload.isCurrent()
+    ) {
+      return [];
+    }
+    const { channels, publicationPending } = deferredChannelReload;
+    return channels.map((channel) => ({ channel, publicationPending }));
+  };
   const getActiveCounts = () => {
     const queueSize = getTotalQueueSize();
     const pendingReplies = getTotalPendingReplies();
@@ -82,6 +103,7 @@ export function createGatewayActiveWorkTracker(options: {
   const waitForActiveWorkBeforeChannelReload = async (
     channels: Iterable<ChannelKind>,
     isTransactionCurrent: () => boolean,
+    publicationPending: boolean,
   ): Promise<boolean> => {
     // Returns true when the wait was cancelled (restart or config supersession),
     // false when active work drained or timed out and channel reload may proceed.
@@ -92,7 +114,8 @@ export function createGatewayActiveWorkTracker(options: {
     if (initial.totalActive <= 0) {
       return false;
     }
-    const channelNames = [...channels].join(", ");
+    const channelIds = [...new Set(channels)];
+    const channelNames = channelIds.join(", ");
     const initialDetails = formatActiveDetails(initial);
     params.logReload.warn(
       `config change requires channel reload (${channelNames}) — deferring until ${initialDetails.join(
@@ -102,37 +125,50 @@ export function createGatewayActiveWorkTracker(options: {
     const timeoutMs = resolveGatewayRestartDeferralTimeoutMs();
     const startedAt = Date.now();
     let nextStillPendingAt = startedAt + CHANNEL_RELOAD_STILL_PENDING_WARN_MS;
-    while (true) {
-      if (!isTransactionCurrent() || isGatewayReloadGenerationAborted(myGeneration)) {
-        return true;
+    const deferred = {
+      channels: channelIds,
+      publicationPending,
+      isCurrent: isTransactionCurrent,
+    };
+    deferredChannelReload = deferred;
+    try {
+      while (true) {
+        if (!isTransactionCurrent() || isGatewayReloadGenerationAborted(myGeneration)) {
+          return true;
+        }
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, CHANNEL_RELOAD_DEFERRAL_POLL_MS);
+          timer.unref?.();
+        });
+        if (!isTransactionCurrent() || isGatewayReloadGenerationAborted(myGeneration)) {
+          return true;
+        }
+        const current = getActiveCounts();
+        if (current.totalActive <= 0) {
+          return false;
+        }
+        const elapsedMs = Date.now() - startedAt;
+        if (timeoutMs !== undefined && elapsedMs >= timeoutMs) {
+          const remaining = formatActiveDetails(current);
+          params.logReload.warn(
+            `channel reload timeout after ${elapsedMs}ms with ${remaining.join(
+              ", ",
+            )} still active; reloading channels anyway`,
+          );
+          return false;
+        }
+        if (Date.now() >= nextStillPendingAt) {
+          const remaining = formatActiveDetails(current);
+          params.logReload.warn(
+            `channel reload still deferred after ${elapsedMs}ms with ${remaining.join(", ")} active`,
+          );
+          nextStillPendingAt = Date.now() + CHANNEL_RELOAD_STILL_PENDING_WARN_MS;
+        }
       }
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, CHANNEL_RELOAD_DEFERRAL_POLL_MS);
-        timer.unref?.();
-      });
-      if (!isTransactionCurrent() || isGatewayReloadGenerationAborted(myGeneration)) {
-        return true;
-      }
-      const current = getActiveCounts();
-      if (current.totalActive <= 0) {
-        return false;
-      }
-      const elapsedMs = Date.now() - startedAt;
-      if (timeoutMs !== undefined && elapsedMs >= timeoutMs) {
-        const remaining = formatActiveDetails(current);
-        params.logReload.warn(
-          `channel reload timeout after ${elapsedMs}ms with ${remaining.join(
-            ", ",
-          )} still active; reloading channels anyway`,
-        );
-        return false;
-      }
-      if (Date.now() >= nextStillPendingAt) {
-        const remaining = formatActiveDetails(current);
-        params.logReload.warn(
-          `channel reload still deferred after ${elapsedMs}ms with ${remaining.join(", ")} active`,
-        );
-        nextStillPendingAt = Date.now() + CHANNEL_RELOAD_STILL_PENDING_WARN_MS;
+    } finally {
+      // A cancelled wait must not clear a newer transaction's diagnostic lease.
+      if (deferredChannelReload === deferred) {
+        deferredChannelReload = undefined;
       }
     }
   };
@@ -142,6 +178,7 @@ export function createGatewayActiveWorkTracker(options: {
     formatDeferredWorkStatus,
     formatTaskBlockers,
     getActiveCounts,
+    getDeferredChannelReloads,
     waitForActiveWorkBeforeChannelReload,
   };
 }

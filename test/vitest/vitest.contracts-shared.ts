@@ -5,6 +5,7 @@ import {
   channelRegistryContractPatterns,
   channelSessionContractPatterns,
   channelSurfaceContractPatterns,
+  pluginContractPatterns,
 } from "./vitest.contracts-paths.mjs";
 import {
   intersectIncludePatterns,
@@ -18,12 +19,11 @@ export {
   channelRegistryContractPatterns,
   channelSessionContractPatterns,
   channelSurfaceContractPatterns,
+  pluginContractPatterns,
 };
 
 const base = sharedVitestConfig as Record<string, unknown>;
 const baseTest = sharedVitestConfig.test ?? {};
-
-export const pluginContractPatterns = ["src/plugins/contracts/**/*.test.ts"];
 
 export function createContractsVitestConfig(
   includePatterns: string[],

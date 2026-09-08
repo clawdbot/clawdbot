@@ -1,82 +1,12 @@
-import type { Context, Model } from "@openclaw/llm-core";
+import type { Context } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
-import { configureAiTransportHost, getAiTransportHost } from "./host.js";
 import {
   anthropicModel,
   context,
   anthropicEvents,
-  createAnthropicResponse,
+  captureAnthropicRequest,
   registerParityHostLifecycle,
 } from "./provider-transport-parity.test-support.js";
-
-async function captureAnthropicRequest(
-  implementation: "provider" | "transport",
-  options: {
-    model?: Partial<Model<"anthropic-messages">>;
-    apiKey?: string;
-    reasoning?: "low" | "off";
-    events?: readonly Record<string, unknown>[];
-    context?: Context;
-    thinkingOverride?: { type: "disabled" } | { type: "enabled"; budget_tokens: number };
-    headers?: Record<string, string>;
-  } = {},
-) {
-  const requests: Array<{ payload: Record<string, unknown>; headers: Headers }> = [];
-  const warnings: string[] = [];
-  const capabilities = getAiTransportHost().resolveProviderRequestCapabilities({});
-  const fetchMock: typeof fetch = async (_input, init) => {
-    if (typeof init?.body !== "string") {
-      throw new Error("Expected a JSON Anthropic request body");
-    }
-    requests.push({
-      payload: JSON.parse(init.body) as Record<string, unknown>,
-      headers: new Headers(init?.headers),
-    });
-    return createAnthropicResponse(options.events ?? anthropicEvents);
-  };
-  configureAiTransportHost({
-    ...getAiTransportHost(),
-    buildModelFetch: () => fetchMock,
-    logWarn: (_subsystem, message) => warnings.push(message),
-    resolveProviderRequestCapabilities: (input) => ({
-      ...capabilities,
-      endpointClass:
-        new URL(input.baseUrl ?? "https://api.anthropic.com").hostname === "api.anthropic.com"
-          ? "anthropic-public"
-          : "custom",
-    }),
-  });
-  const model = { ...anthropicModel, ...options.model };
-  const streamOptions = {
-    apiKey: options.apiKey ?? "sk-test",
-    reasoning: options.reasoning ?? "low",
-    headers: options.headers,
-    onPayload: (payload: unknown) =>
-      options.thinkingOverride
-        ? { ...(payload as Record<string, unknown>), thinking: options.thinkingOverride }
-        : undefined,
-  } as const;
-  const [{ streamSimpleAnthropic }, { createAnthropicMessagesTransportStreamFn }] =
-    await Promise.all([
-      import("./providers/anthropic.js"),
-      import("./transports/anthropic-transport-stream.js"),
-    ]);
-  const requestContext = options.context ?? context;
-  const stream =
-    implementation === "provider"
-      ? streamSimpleAnthropic(model, requestContext, streamOptions)
-      : await Promise.resolve(
-          createAnthropicMessagesTransportStreamFn()(model, requestContext, streamOptions),
-        );
-  const result = await stream.result();
-  expect(result.stopReason).toBe("stop");
-  expect(requests).toHaveLength(1);
-  const [request] = requests;
-  if (!request) {
-    throw new Error("Expected one Anthropic request");
-  }
-  return { ...request, warnings };
-}
 
 describe("Anthropic thinking-binding transport parity", () => {
   registerParityHostLifecycle();

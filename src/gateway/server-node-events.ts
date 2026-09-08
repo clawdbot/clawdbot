@@ -6,7 +6,10 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { validateNodePresenceActivityPayload } from "../../packages/gateway-protocol/src/index.js";
+import {
+  validateNodeHostStatsPayload,
+  validateNodePresenceActivityPayload,
+} from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId as defaultResolveSessionAgentId } from "../agents/agent-scope.js";
 import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
 import { normalizeChannelId as defaultNormalizeChannelId } from "../channels/plugins/index.js";
@@ -43,6 +46,7 @@ import { runWithGatewayIndependentRootWorkContinuation } from "../process/gatewa
 import { normalizeMainKey as defaultNormalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveAgentHarnessSessionContextError } from "../sessions/agent-harness-session-key.js";
+import { NODE_HOST_STATS_EVENT } from "../shared/node-host-stats.js";
 import {
   NODE_PRESENCE_ALIVE_EVENT,
   NODE_PRESENCE_ACTIVITY_EVENT,
@@ -402,27 +406,12 @@ function pruneBoundedTimestampMap(
   pruneMapToMaxSize(map, params.maxEntries);
 }
 
-function compactExecEventOutput(raw: string) {
+function compactNodeEventText(raw: string, maxChars: number) {
   const normalized = raw.replace(/\s+/g, " ").trim();
-  if (!normalized) {
-    return "";
-  }
-  if (normalized.length <= MAX_EXEC_EVENT_OUTPUT_CHARS) {
+  if (normalized.length <= maxChars) {
     return normalized;
   }
-  const safe = Math.max(1, MAX_EXEC_EVENT_OUTPUT_CHARS - 1);
-  return `${sliceUtf16Safe(normalized, 0, safe)}…`;
-}
-
-function compactNotificationEventText(raw: string) {
-  const normalized = raw.replace(/\s+/g, " ").trim();
-  if (!normalized) {
-    return "";
-  }
-  if (normalized.length <= MAX_NOTIFICATION_EVENT_TEXT_CHARS) {
-    return normalized;
-  }
-  const safe = Math.max(1, MAX_NOTIFICATION_EVENT_TEXT_CHARS - 1);
+  const safe = Math.max(1, maxChars - 1);
   return `${sliceUtf16Safe(normalized, 0, safe)}…`;
 }
 
@@ -996,8 +985,14 @@ export const handleNodeEvent = async (
       }
       const packageNameRaw = normalizeOptionalString(obj.packageName);
       const packageName = packageNameRaw ?? null;
-      const title = compactNotificationEventText(normalizeOptionalString(obj.title) ?? "");
-      const text = compactNotificationEventText(normalizeOptionalString(obj.text) ?? "");
+      const title = compactNodeEventText(
+        normalizeOptionalString(obj.title) ?? "",
+        MAX_NOTIFICATION_EVENT_TEXT_CHARS,
+      );
+      const text = compactNodeEventText(
+        normalizeOptionalString(obj.text) ?? "",
+        MAX_NOTIFICATION_EVENT_TEXT_CHARS,
+      );
 
       let summary = `Notification ${change} (node=${nodeId} key=${key}`;
       if (packageName) {
@@ -1119,7 +1114,7 @@ export const handleNodeEvent = async (
         }
       } else if (evt.event === "exec.finished") {
         const exitLabel = timedOut ? "timeout" : `code ${exitCode ?? "?"}`;
-        const compactOutput = compactExecEventOutput(output);
+        const compactOutput = compactNodeEventText(output, MAX_EXEC_EVENT_OUTPUT_CHARS);
         const shouldNotify = timedOut || exitCode !== 0 || compactOutput.length > 0;
         if (!shouldNotify) {
           return undefined;
@@ -1227,6 +1222,18 @@ export const handleNodeEvent = async (
         ctx.logGateway.warn(`push apns register failed node=${nodeId}: ${formatForLog(err)}`);
       }
       return undefined;
+    }
+    case NODE_HOST_STATS_EVENT: {
+      const obj = parsePayloadObject(evt.payloadJSON);
+      if (!obj || !validateNodeHostStatsPayload(obj)) {
+        return { ok: true, event: evt.event, handled: false, reason: "invalid_payload" };
+      }
+      const hostStats = ctx.updateNodeHostStats?.({ nodeId, connId: opts?.connId, stats: obj });
+      if (!hostStats) {
+        return { ok: true, event: evt.event, handled: false, reason: "stale_connection" };
+      }
+      ctx.broadcast("node.hostStats", { nodeId, hostStats }, { dropIfSlow: true });
+      return { ok: true, event: evt.event, handled: true, reason: "updated" };
     }
     case NODE_PRESENCE_ACTIVITY_EVENT: {
       const obj = parsePayloadObject(evt.payloadJSON);

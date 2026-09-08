@@ -2,12 +2,14 @@
  * Worker entrypoint for warming provider auth state off the main thread.
  */
 import { serveWorkerTasks } from "../infra/worker-task-pool.js";
+import { restorePreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
+import { listAgentIds } from "./agent-scope-config.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles.js";
-import {
-  buildCurrentProviderAuthStateSnapshot,
-  type ProviderAuthWarmWorkerInput,
-  type ProviderAuthWarmWorkerResult,
-} from "./model-provider-auth.js";
+import type {
+  ProviderAuthWarmWorkerInput,
+  ProviderAuthWarmWorkerResult,
+} from "./model-provider-auth-warm.js";
+import { buildCurrentProviderAuthStateSnapshot } from "./model-provider-auth.js";
 
 function isWorkerInput(value: unknown): value is ProviderAuthWarmWorkerInput {
   if (!value || typeof value !== "object") {
@@ -16,6 +18,7 @@ function isWorkerInput(value: unknown): value is ProviderAuthWarmWorkerInput {
   const record = value as Record<string, unknown>;
   return (
     "cfg" in record &&
+    Array.isArray(record.syntheticAuth) &&
     (!("runtimeAuthStores" in record) || Array.isArray(record.runtimeAuthStores)) &&
     (!("runtimeAuthLookups" in record) || Array.isArray(record.runtimeAuthLookups)) &&
     (!("omitFalseProviderAuth" in record) || typeof record.omitFalseProviderAuth === "boolean")
@@ -33,6 +36,16 @@ export async function runProviderAuthWarmWorkerInput(
     };
   }
   try {
+    const syntheticAuth = new Map(input.syntheticAuth.map((scope) => [scope.agentId, scope]));
+    for (const agentId of listAgentIds(input.cfg)) {
+      const scope = syntheticAuth.get(agentId);
+      if (!scope) {
+        throw new Error(`Prepared synthetic auth scope is missing for ${agentId}`);
+      }
+      restorePreparedSyntheticAuthFacts(input.cfg, scope.facts, {
+        workspaceDir: scope.workspaceDir,
+      });
+    }
     if (input.runtimeAuthStores?.length) {
       // Worker threads do not share module-local caches, so hydrate runtime stores explicitly.
       replaceRuntimeAuthProfileStoreSnapshots(input.runtimeAuthStores);
@@ -43,6 +56,7 @@ export async function runProviderAuthWarmWorkerInput(
       runtimeAuthLookups: new Map(
         input.runtimeAuthLookups?.map(({ agentId, lookup }) => [agentId, lookup]),
       ),
+      syntheticAuth,
       omitFalseProviderAuth: input.omitFalseProviderAuth,
     });
     return {

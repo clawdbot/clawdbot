@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { listAgentIds, resolveAgentDir } from "../../../agents/agent-scope-config.js";
-import { listRuntimeExternalAuthProfiles } from "../../../agents/auth-profiles/external-auth.js";
+import { listRuntimeExternalAuthProfiles } from "../../../agents/auth-profiles/external-auth-runtime.js";
 import {
   resolveAuthProfileEligibility,
   resolveAuthProfileOrder,

@@ -132,31 +132,17 @@ describe("Code Mode nested TTS delivery", () => {
   it("does not publish a raw speech result that completes after cancellation", async () => {
     const started = createDeferred();
     const releaseSpeech = createDeferred();
-    const acceptedLateResult = createDeferred();
     vi.spyOn(ttsRuntime, "textToSpeech").mockImplementation(async () => {
       started.resolve();
       await releaseSpeech.promise;
       return speechResult;
     });
-    const harness = createTtsHarness("late-abort");
+    const target = createTtsTool({ config: {} });
+    const execute = vi.spyOn(target, "execute");
+    const harness = createTtsHarness("late-abort", target);
     const lifecycle = vi.spyOn(harness.subscription, "runToolLifecycle");
-    const runtime = new ToolSearchRuntime(
-      {
-        ...harness,
-        executeTool: (params) =>
-          harness.executeTool({
-            ...params,
-            acceptResultBeforeProjection: async (result) => {
-              const accepted = await params.acceptResultBeforeProjection(result);
-              acceptedLateResult.resolve();
-              return accepted;
-            },
-          }),
-      },
-      resolveToolSearchConfig(harness.config),
-    );
     try {
-      const call = runtime.call("tts", { text: "Synthetic speech" });
+      const call = harness.runtime.call("tts", { text: "Synthetic speech" });
       const rejected = expect(call).rejects.toMatchObject({ name: "AbortError" });
       await started.promise;
       harness.runAbortController.abort(new Error("cancel nested speech"));
@@ -164,7 +150,9 @@ describe("Code Mode nested TTS delivery", () => {
       // The outer abort race settles before nested terminal cleanup finishes.
       await expect(lifecycle.mock.results[0]?.value).rejects.toMatchObject({ name: "AbortError" });
       releaseSpeech.resolve();
-      await acceptedLateResult.promise;
+      await expect(execute.mock.results[0]?.value).resolves.toMatchObject({
+        details: { audioPath },
+      });
       await finishReply(harness);
       expect(harness.delivered).toEqual([]);
     } finally {

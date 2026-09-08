@@ -16,20 +16,19 @@ try {
     new URL("../.github/actions/git-owner/owner.py", import.meta.url),
     "utf8",
   );
-  const marker = "          run_owner <<'PYTHON'\n";
-  const endMarker = "          PYTHON\n";
+  const marker =
+    "          # Generated from .github/actions/git-owner/owner.py; do not edit here.\n";
+  const endMarker = "          # End generated CI Git owner.\n";
   const start = workflow.indexOf(marker) + marker.length;
   const end = workflow.indexOf(endMarker, start);
   if (workflow.split(marker).length !== 2 || end < start) {
-    throw new Error("Expected exactly one CI Git owner heredoc");
+    throw new Error("Expected exactly one CI Git owner projection");
   }
-  const projection =
-    "# Generated from .github/actions/git-owner/owner.py; do not edit here.\n" + source;
+  // Bash can block before starting the reader of a large heredoc on Darwin.
+  // A literal argument preserves the source without pre-filling an unread pipe.
+  const projection = `run_owner '${source.replaceAll("'", "'\\''")}'\n`;
   const next =
-    workflow.slice(0, start) +
-    projection.replace(/^(?=.)/gmu, "          ").trimEnd() +
-    "\n" +
-    workflow.slice(end);
+    workflow.slice(0, start) + projection.replace(/^(?=.)/gmu, "          ") + workflow.slice(end);
   const check = args.includes("--check");
   const result = writeGeneratedOutput({ check, next, outputPath: workflowPath, repoRoot });
   if (check && result.changed) {

@@ -106,6 +106,7 @@ export function createContext(
     pairingBusyRequestId: null,
     whatsappLoginMessage: null,
     whatsappLoginQrDataUrl: null,
+    whatsappLoginSessionKey: null,
     whatsappLoginConnected: null,
     whatsappBusy: false,
   };

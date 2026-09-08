@@ -4,6 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   cpSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -329,7 +330,7 @@ describe("upgrade recovery result assertions", () => {
   });
 });
 
-function writeMigratedSessionState(stateDir: string): void {
+function writeMigratedSessionState(stateDir: string): undefined {
   const agentSessionsDir = join(stateDir, "agents", "main", "sessions");
   const agentDbDir = join(stateDir, "agents", "main", "agent");
   mkdirSync(agentSessionsDir, { recursive: true });
@@ -502,6 +503,24 @@ function writeLegacySessionEntriesState(stateDir: string): void {
   }
 }
 
+function writeSharedRuntimeCaches(stateDir: string, versioned = false): void {
+  const roots = ["discord", "telegram", "whatsapp"].map((plugin) =>
+    join(plugin, ".openclaw-runtime-deps-copy-stale"),
+  );
+  if (versioned) {
+    roots.push(
+      ...["discord", "feishu", "telegram", "whatsapp"].map(
+        (plugin) => `openclaw-2026.4.24-${plugin}`,
+      ),
+    );
+  }
+  for (const root of roots) {
+    const dir = join(stateDir, "plugin-runtime-deps", root, "node_modules", "stale-sentinel");
+    mkdirSync(dir, { recursive: true });
+    writeJson(join(dir, "package.json"), { name: "stale-sentinel", version: "0.0.0" });
+  }
+}
+
 function runSessionStateAssertion(
   setup: (stateDir: string) => NodeJS.ProcessEnv | undefined,
   options: { scenario?: string; commands?: string[] } = {},
@@ -516,6 +535,7 @@ function runSessionStateAssertion(
     writeJson(join(stateDir, "agents", "main", "sessions", "legacy-session.json"), {
       id: "legacy-session",
     });
+    writeSharedRuntimeCaches(stateDir, options.scenario === "versioned-runtime-deps");
     const fixtureEnv = setup(stateDir);
     for (const command of options.commands ?? ["assert-state"]) {
       execFileSync(process.execPath, [ASSERTIONS_PATH, command], {
@@ -525,6 +545,7 @@ function runSessionStateAssertion(
           OPENCLAW_STATE_DIR: stateDir,
           OPENCLAW_TEST_WORKSPACE_DIR: workspace,
           OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: options.scenario ?? "base",
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: "2026.4.24",
         },
         stdio: "pipe",
       });
@@ -549,6 +570,7 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
       id: "legacy-session",
     });
     writeMigratedSessionState(stateDir);
+    writeSharedRuntimeCaches(stateDir);
     writeJson(join(matrixInstallDir, "package.json"), {
       name: "@openclaw/matrix",
     });
@@ -1127,6 +1149,7 @@ process.stdout.write(sessionDir + "\\n");
     ) as string[];
 
     expect(scenarios).toContain("base");
+    expect(scenarios).toContain("mobile-pairing-reconnect");
     expect(scenarios).toContain("acpx-openclaw-tools-bridge");
     expect(scenarios).toContain("prerelease-plugin-registry");
     expect(scenarios).toContain("sqlite-volume");
@@ -1151,6 +1174,98 @@ process.stdout.write(sessionDir + "\\n");
       expect(() => run(wrongChannel)).toThrow(/update.channel/);
     },
   );
+
+  it("requires password auth for the mobile pairing reconnect scenario", () => {
+    expect(() =>
+      assertConfig({
+        acceptedIntents: ["gateway"],
+        config: { gateway: { auth: { mode: "password" } } },
+        scenario: "mobile-pairing-reconnect",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertConfig({
+        acceptedIntents: ["gateway"],
+        config: { gateway: { auth: { mode: "token" } } },
+        scenario: "mobile-pairing-reconnect",
+      }),
+    ).toThrow(/gateway auth mode/);
+  });
+
+  it("allows token rotation and requires each reconnect to use the newest stored token", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-mobile-pairing-evidence-"));
+    const phases = ["baseline", "candidate-first", "candidate-restart", "final"];
+    const hashes = ["a", "b", "c", "d", "e"].map((value) => value.repeat(64));
+    const files = phases.map((phase, index) => {
+      const file = join(root, `${phase}.json`);
+      const scopedNodeSurfaceReapproval = index > 0;
+      writeJson(file, {
+        phase,
+        ok: true,
+        health: true,
+        connectedDevicePresent: true,
+        pendingPairingCount: scopedNodeSurfaceReapproval ? 1 : 0,
+        pendingDevicePairingCount: 0,
+        pendingNodePairingCount: scopedNodeSurfaceReapproval ? 1 : 0,
+        pairedDevicePresent: true,
+        pairedNodePresent: true,
+        nodeSurfaceReapprovalRequired: scopedNodeSurfaceReapproval,
+        nodeSurfaceReapprovalExpected: scopedNodeSurfaceReapproval,
+        nodeSurfaceCommandAdditions: scopedNodeSurfaceReapproval
+          ? ["watch.notify", "watch.status"]
+          : [],
+        missingPasswordReason: true,
+        missingPasswordClose1008: true,
+        credentials: {
+          node: {
+            usedTokenHash: hashes[index],
+            storedTokenHash: hashes[index + 1],
+            deviceTokenReturned: true,
+            tokenRotated: true,
+          },
+          operator: {
+            usedTokenHash: hashes[0],
+            storedTokenHash: hashes[0],
+            deviceTokenReturned: true,
+            tokenRotated: false,
+          },
+        },
+      });
+      return file;
+    });
+    const verify = () =>
+      execFileSync(
+        process.execPath,
+        [ASSERTIONS_PATH, "assert-mobile-pairing-evidence", ...files],
+        {
+          stdio: "pipe",
+        },
+      );
+    const finalEvidenceFile = files[2];
+    if (!finalEvidenceFile) {
+      throw new Error("final mobile pairing evidence fixture missing");
+    }
+
+    try {
+      expect(verify).not.toThrow();
+      const stale = JSON.parse(readFileSync(finalEvidenceFile, "utf8"));
+      stale.credentials.node.usedTokenHash = hashes[0];
+      writeJson(finalEvidenceFile, stale);
+      expect(verify).toThrow(/newest stored token/);
+      stale.credentials.node.usedTokenHash = hashes[2];
+      stale.nodeSurfaceCommandAdditions = ["watch.status", "system.run"];
+      writeJson(finalEvidenceFile, stale);
+      expect(verify).toThrow(/known command-surface reapproval/);
+      stale.nodeSurfaceCommandAdditions = [];
+      stale.pendingPairingCount = 0;
+      stale.pendingNodePairingCount = 0;
+      stale.nodeSurfaceReapprovalRequired = false;
+      writeJson(finalEvidenceFile, stale);
+      expect(verify).toThrow(/known command-surface reapproval/);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
 
   it.each(["base", "sqlite-volume"])(
     "seeds recent ordered session timestamps for %s",
@@ -1231,6 +1346,54 @@ process.stdout.write(sessionDir + "\\n");
           expect(timestamp).toBeLessThanOrEqual(afterSeed - dayMs + offset);
           expect(timestamp).toBeGreaterThan(afterSeed - thirtyDaysMs);
           expect(timestamp).toBeLessThanOrEqual(afterSeed);
+        }
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
+
+  it.each(["watchos-direct-node", "mobile-pairing-reconnect"])(
+    "keeps the %s seed free of unrelated migration specimens",
+    (scenario) => {
+      const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-companion-seed-"));
+      try {
+        const stateDir = join(root, "state");
+        const workspace = join(root, "workspace");
+        mkdirSync(stateDir, { recursive: true });
+        mkdirSync(workspace, { recursive: true });
+        const env = {
+          ...process.env,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_WORKSPACE_DIR: workspace,
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
+        };
+
+        execFileSync(process.execPath, [ASSERTIONS_PATH, "seed"], { env, stdio: "pipe" });
+
+        expect(existsSync(join(workspace, "IDENTITY.md"))).toBe(true);
+        expect(existsSync(join(workspace, ".openclaw", "workspace-state.json"))).toBe(true);
+        for (const relative of [
+          "sessions/sessions.json",
+          "agents/main/sessions/legacy-session.json",
+          "exec-approvals.json",
+          "plugin-runtime-deps",
+        ]) {
+          expect(existsSync(join(stateDir, relative)), relative).toBe(false);
+        }
+        for (const stage of ["baseline", "survival"]) {
+          const stageEnv = {
+            ...env,
+            OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: stage,
+          };
+          execFileSync(process.execPath, [ASSERTIONS_PATH, "assert-state"], {
+            env: stageEnv,
+            stdio: "pipe",
+          });
+          execFileSync(process.execPath, [ASSERTIONS_PATH, "assert-exec-approvals"], {
+            env: stageEnv,
+            stdio: "pipe",
+          });
         }
       } finally {
         rmSync(root, { force: true, recursive: true });
@@ -1603,6 +1766,40 @@ process.stdout.write(sessionDir + "\\n");
     expect(() => assertConfiguredPluginState()).not.toThrow();
   });
 
+  it.each(["base", "versioned-runtime-deps"])(
+    "requires intact shared runtime cache contents for %s",
+    (scenario) => {
+      expect(() => runSessionStateAssertion(writeMigratedSessionState, { scenario })).not.toThrow();
+      for (const mutation of ["remove", "corrupt"]) {
+        expect(() =>
+          runSessionStateAssertion(
+            (stateDir) => {
+              writeMigratedSessionState(stateDir);
+              const root =
+                scenario === "base"
+                  ? join("discord", ".openclaw-runtime-deps-copy-stale")
+                  : "openclaw-2026.4.24-feishu";
+              const sentinel = join(
+                stateDir,
+                "plugin-runtime-deps",
+                root,
+                "node_modules",
+                "stale-sentinel",
+                "package.json",
+              );
+              if (mutation === "remove") {
+                rmSync(sentinel);
+              } else {
+                writeJson(sentinel, { name: "stale-sentinel", version: "changed" });
+              }
+            },
+            { scenario },
+          ),
+        ).toThrow(/stale-sentinel/);
+      }
+    },
+  );
+
   it("prefers session_nodes over stale file and cache session stores", () => {
     expect(() =>
       runSessionStateAssertion((stateDir) => {
@@ -1677,6 +1874,83 @@ process.stdout.write(sessionDir + "\\n");
     ).not.toThrow();
   });
 
+  it.each([
+    "ok",
+    "queued",
+    "wait-timeout",
+    "cli-failed",
+    "not-started",
+    "turn-failed",
+    "wrong-session",
+    "user-only",
+    "wrong-reply",
+  ])("requires a completed persisted managed serving reply (%s)", (outcome) => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-survivor-serving-turn-"));
+    try {
+      const bin = join(root, "bin");
+      mkdirSync(bin);
+      writeFileSync(
+        join(bin, "openclaw"),
+        `#!${process.execPath}
+const fs = require("node:fs");
+const method = process.argv[4];
+const params = JSON.parse(process.argv[process.argv.indexOf("--params") + 1]);
+const outcome = process.env.PROBE_OUTCOME;
+if (outcome === "cli-failed") {
+  process.stderr.write(JSON.stringify(process.argv));
+  process.exit(47);
+}
+let result;
+if (method === "chat.send") {
+  fs.writeFileSync(process.env.PROBE_MARKER_FILE, params.message.match(/OPENCLAW_E2E_SURVIVOR_[A-F0-9]+/)[0]);
+  result = { status: outcome === "not-started" ? "error" : "started", runId: "serving-run" };
+} else if (method === "agent.wait") {
+  const pending = ["queued", "wait-timeout"].includes(outcome) && !fs.existsSync(process.env.PROBE_MARKER_FILE + ".waited");
+  fs.writeFileSync(process.env.PROBE_MARKER_FILE + ".waited", "waited");
+  result = { runId: params.runId, status: pending ? (outcome === "wait-timeout" ? "timeout" : "pending") : outcome === "turn-failed" ? "error" : "ok", ...(pending ? {} : { endedAt: 1788820180863 }) };
+} else if (method === "chat.history") {
+  result = { sessionId: outcome === "wrong-session" ? "replacement" : "upgrade-main-session", messages: [{
+    role: outcome === "user-only" ? "user" : "assistant",
+    content: [{ type: "text", text: outcome === "wrong-reply" ? "other" : fs.readFileSync(process.env.PROBE_MARKER_FILE, "utf8") }],
+  }] };
+} else { process.exit(47); }
+process.stdout.write(JSON.stringify(result));
+`,
+        { mode: 0o755 },
+      );
+      const receipt = join(root, "receipt.json");
+      const result = spawnSync(
+        process.execPath,
+        [ASSERTIONS_PATH, "assert-restart-serving-turn", receipt],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${bin}${delimiter}${process.env.PATH}`,
+            GATEWAY_AUTH_TOKEN_REF: "synthetic-serving-token",
+            PROBE_OUTCOME: outcome,
+            PROBE_MARKER_FILE: join(root, "marker"),
+          },
+        },
+      );
+      const succeeded = outcome === "ok" || outcome === "queued" || outcome === "wait-timeout";
+      expect(result.status, result.stderr).toBe(succeeded ? 0 : 1);
+      expect(existsSync(receipt)).toBe(succeeded);
+      expect(result.stderr).not.toContain("synthetic-serving-token");
+      if (outcome === "cli-failed") {
+        expect(result.stderr).toContain("chat.send managed serving probe failed (status 47)");
+      }
+      if (succeeded) {
+        const proof = JSON.parse(readFileSync(receipt, "utf8"));
+        expect(proof.sessionId).toBe("upgrade-main-session");
+        expect(proof.reply.content[0].text).toBe(proof.marker);
+        expect(proof.completion.status).toBe("ok");
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("accepts a SQLite-only migrated session store", () => {
     expect(() =>
       runSessionStateAssertion((stateDir) => {
@@ -1684,6 +1958,71 @@ process.stdout.write(sessionDir + "\\n");
       }),
     ).not.toThrow();
   });
+
+  it.each([
+    { stage: "survival", mutation: "none", error: /metadata prompt was not preserved/ },
+    { stage: "post-inference", mutation: "none", error: undefined },
+    { stage: "post-inference", mutation: "missing-marker", error: /refreshed skills snapshot/ },
+    { stage: "post-inference", mutation: "invalid-marker", error: /refreshed skills snapshot/ },
+    { stage: "post-inference", mutation: "stale-prompt", error: /refreshed skills snapshot/ },
+    { stage: "post-inference", mutation: "malformed-skills", error: /refreshed skills snapshot/ },
+    { stage: "post-inference", mutation: "heavy-cache", error: /heavy resolvedSkills cache/ },
+    {
+      stage: "post-inference",
+      mutation: "missing-session",
+      error: /main legacy session row missing/,
+    },
+    {
+      stage: "post-inference",
+      mutation: "missing-transcript",
+      error: /transcript was not imported/,
+    },
+  ])(
+    "checks migrated session state after inference ($stage, $mutation)",
+    ({ stage, mutation, error }) => {
+      const check = () =>
+        runSessionStateAssertion((stateDir) => {
+          writeMigratedSessionState(stateDir);
+          const db = new DatabaseSync(
+            join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+          );
+          try {
+            db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
+              JSON.stringify({
+                skillsSnapshot: {
+                  prompt:
+                    mutation === "stale-prompt"
+                      ? "legacy prompt survives as metadata"
+                      : "Current runtime skill instructions",
+                  skills: mutation === "malformed-skills" ? null : [{ name: "survivor-skill" }],
+                  ...(mutation === "missing-marker"
+                    ? {}
+                    : { promptFormatVersion: mutation === "invalid-marker" ? 0 : 4 }),
+                  ...(mutation === "heavy-cache" ? { resolvedSkills: [] } : {}),
+                },
+              }),
+              "agent:main:main",
+            );
+            if (mutation === "missing-session") {
+              db.prepare("DELETE FROM session_nodes WHERE session_key = ?").run("agent:main:main");
+            }
+            if (mutation === "missing-transcript") {
+              db.prepare("DELETE FROM transcript_events WHERE session_id = ?").run(
+                "upgrade-main-session",
+              );
+            }
+          } finally {
+            db.close();
+          }
+          return { OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: stage };
+        });
+      if (error) {
+        expect(check).toThrow(error);
+      } else {
+        expect(check).not.toThrow();
+      }
+    },
+  );
 
   it("rejects retired sessionFile metadata in SQLite-backed session rows", () => {
     expect(() =>

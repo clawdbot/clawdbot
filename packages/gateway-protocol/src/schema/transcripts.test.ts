@@ -24,18 +24,26 @@ describe("meeting transcript contracts", () => {
       source: { providerId: "voice" },
       startedAt: "2026-08-02T00:00:00Z",
       active: false,
+      activeSubscription: false,
+      agentId: null,
+      updatedAt: "2026-08-02T00:00:00Z",
+      lastUtteranceAt: null,
       utteranceCount: 0,
       participants: [],
       hasSummary: false,
     };
-    expect(Value.Check(TranscriptsListResultSchema, { sessions: [session] })).toBe(true);
+    expect(
+      Value.Check(TranscriptsListResultSchema, { sessions: [session], nextCursor: null }),
+    ).toBe(true);
     expect(
       Value.Check(TranscriptsListResultSchema, {
+        nextCursor: null,
         sessions: [{ ...session, source: { ...session.source, private: "hidden" } }],
       }),
     ).toBe(false);
     expect(
       Value.Check(TranscriptsListResultSchema, {
+        nextCursor: null,
         sessions: [{ ...session, overview: "x".repeat(281) }],
       }),
     ).toBe(false);

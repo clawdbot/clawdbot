@@ -88,6 +88,7 @@ export async function deliverOutboundPayloadsCore(
       gifPlayback: params.gifPlayback,
       forceDocument: params.forceDocument,
       silent: params.silent,
+      abortSignal,
       mediaAccess: resolveMediaAccess(mediaSources),
       gatewayClientScopes: params.gatewayClientScopes,
       conversationReadOrigin: params.conversationReadOrigin,
@@ -364,9 +365,10 @@ export async function deliverOutboundPayloadsCore(
       let mediaMessageIds: { first?: string; last?: string } | undefined;
       if (
         deliveryHandler.sendPayload &&
-        payloadRequiresDurablePayloadTransport(effectivePayload, {
-          sendTextOnlyErrorPayloads: deliveryHandler.sendTextOnlyErrorPayloads,
-        })
+        ((deliveryHandler.supportsMediaPayload && payloadSummary.mediaUrls.length > 1) ||
+          payloadRequiresDurablePayloadTransport(effectivePayload, {
+            sendTextOnlyErrorPayloads: deliveryHandler.sendTextOnlyErrorPayloads,
+          }))
       ) {
         const delivery = await deliveryHandler.sendPayload(
           effectivePayload,

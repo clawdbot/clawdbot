@@ -64,7 +64,7 @@ describe("Codex Computer Use native service", () => {
       sourceBuild: "1000761",
     });
     const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
-    await expect(fs.access(path.join(targetPath, CLIENT_RELATIVE_PATH))).resolves.toBeUndefined();
+    await fs.access(path.join(targetPath, CLIENT_RELATIVE_PATH));
     await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
   });
 

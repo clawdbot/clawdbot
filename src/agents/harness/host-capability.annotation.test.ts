@@ -182,6 +182,27 @@ async function prepareAdmission(
 }
 
 describe("host-owned current admission annotation", () => {
+  it.each([undefined, "external_user", "inter_session", "internal_system"] as const)(
+    "annotates unchanged %s provenance after transcript persistence",
+    async (kind) => {
+      const provenance = kind ? { kind, sourceTool: "heartbeat" } : undefined;
+      await withAdmission(
+        async (f) => {
+          await f.annotate();
+          expect(f.recorder.getPersistedMessage?.()).toMatchObject({
+            content: "prompt",
+            ...(provenance ? { provenance } : {}),
+            __openclaw: { mirrorIdentity: "native-turn:prompt" },
+          });
+        },
+        {
+          input: { text: "prompt", ...(provenance ? { provenance } : {}) },
+          beforeMessageWrite: ({ message }) => message,
+        },
+      );
+    },
+  );
+
   it.each(["staged", "collected"] as const)(
     "refreshes only the admitted %s input while preserving source custody",
     async (kind) => {
@@ -510,7 +531,9 @@ describe("host-owned current admission annotation", () => {
     await withAdmission(
       async (f) => {
         const before = structuredClone(f.recorder.getPersistedMessage?.());
+        const stored = asOptionalRecord((await loadTranscriptEvents(f.target)).at(-1))?.message;
         await f.annotate();
+        expect(before).toStrictEqual(stored);
         expect(f.recorder.getPersistedMessage?.()).toEqual({
           ...before,
           __openclaw: { ...before?.["__openclaw"], ...nativeAnnotation(), runId: f.attempt.runId },
@@ -524,6 +547,7 @@ describe("host-owned current admission annotation", () => {
           media: [{ path: "/tmp/fixture-image.png", contentType: "image/png" }],
           replyToId: "prior",
           replyToPreview: { text: "prior prompt" },
+          transport: { channel: "webchat", messageId: undefined },
         },
         beforeMessageWrite: hook,
       },

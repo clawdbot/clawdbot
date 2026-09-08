@@ -273,6 +273,7 @@ describe("applyClawMcpUpdate", () => {
       independentOwner: true,
     };
     upsertClawMcpServerRef(independent, stateOptions);
+    upsertClawMcpServerRef({ ...independent, createdAtMs: 99 }, stateOptions);
 
     const execution = await applyClawMcpUpdate(
       plan([

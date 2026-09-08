@@ -68,6 +68,7 @@ export function buildQaRuntimeEnv(params: {
   bundledPluginsDir?: string;
   stagedBundledPluginsRoot?: string | null;
   compatibilityHostVersion?: string;
+  developmentSourceRoot: string | null;
   providerMode?: QaProviderMode;
   baseEnv?: NodeJS.ProcessEnv;
   runtimeEnvPatch?: NodeJS.ProcessEnv;
@@ -122,9 +123,17 @@ export function buildQaRuntimeEnv(params: {
   delete normalizedEnv.OPENCLAW_SKIP_CHANNELS;
   delete normalizedEnv.OPENCLAW_SKIP_PROVIDERS;
   Object.assign(normalizedEnv, params.runtimeEnvPatch);
+  if (params.developmentSourceRoot === null) {
+    delete normalizedEnv.OPENCLAW_DEV_SOURCE_ROOT;
+  } else {
+    normalizedEnv.OPENCLAW_DEV_SOURCE_ROOT = params.developmentSourceRoot;
+  }
+  // Direct Gateway launches need the same private-QA build and SDK admission
+  // as the QA CLI; caller patches cannot disable either half of that contract.
+  normalizedEnv.OPENCLAW_BUILD_PRIVATE_QA = "1";
+  normalizedEnv.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
   // Parent shell startup controls must be removed after caller patches so no
   // launcher or runtime child can import them before its own allowlist runs.
-  normalizedEnv.OPENCLAW_BUILD_PRIVATE_QA = "1";
   delete normalizedEnv[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV];
   delete normalizedEnv[QA_LIVE_SETUP_TOKEN_VALUE_ENV];
   return scrubQaGatewayChildEnv(scrubQaGatewayChildTestRunnerEnv(normalizedEnv));

@@ -15,10 +15,10 @@ import {
   defineLegacyConfigMigration,
   ensureRecord,
   getRecord,
-  mergeMissing,
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import { mergeMissing } from "../../../config/merge-missing.js";
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
 import { visitAgentConfigScopes, visitAgentEntries } from "./legacy-config-record-shared.js";
 import {
@@ -385,9 +385,6 @@ function mergeLegacyIntoDefaults(params: {
     defaults[params.fieldKey] = merged;
     params.changes.push(params.mergedMessage);
   }
-
-  root.defaults = defaults;
-  params.raw[params.rootKey] = root;
 }
 
 function hasLegacySandboxPerSession(value: unknown): boolean {

@@ -4,9 +4,11 @@ import {
   EnvironmentsCreateResultSchema,
   EnvironmentsDestroyResultSchema,
   EnvironmentsListResultSchema,
+  EnvironmentsStatusResultSchema,
   EnvironmentSummarySchema,
   validateEnvironmentsCreateParams,
   validateEnvironmentsDestroyParams,
+  validateEnvironmentsListParams,
   validateWorkerDesktopLaunchParams,
   validateWorkerDesktopLaunchResult,
   WorkerEnvironmentStateSchema,
@@ -199,6 +201,45 @@ describe("worker environment protocol schemas", () => {
     ]) {
       expect(Value.Check(EnvironmentSummarySchema, { ...node, invocableCommands })).toBe(false);
     }
+  });
+
+  it("keeps runtime-scoped node command state bounded and closed", () => {
+    const node = { id: "node:build-mac", type: "node", status: "available" };
+    for (const state of ["invocable", "pending-approval", "undeclared", "unauthorized"] as const) {
+      expect(
+        Value.Check(EnvironmentSummarySchema, {
+          ...node,
+          requiredNodeCommand: { command: "runtime.exec", state },
+        }),
+      ).toBe(true);
+    }
+    const commandState = {
+      ...node,
+      requiredNodeCommand: { command: "runtime.exec", state: "invocable" },
+    };
+    for (const schema of [
+      EnvironmentsCreateResultSchema,
+      EnvironmentsDestroyResultSchema,
+      EnvironmentsStatusResultSchema,
+    ]) {
+      expect(Value.Check(schema, commandState)).toBe(false);
+    }
+    for (const requiredNodeCommand of [
+      { command: "", state: "undeclared" },
+      { command: "x".repeat(129), state: "undeclared" },
+      { command: "runtime.exec", state: "unknown" },
+      { command: "runtime.exec", state: "invocable", pending: true },
+    ]) {
+      expect(Value.Check(EnvironmentSummarySchema, { ...node, requiredNodeCommand })).toBe(false);
+    }
+
+    expect(validateEnvironmentsListParams({})).toBe(true);
+    expect(validateEnvironmentsListParams({ runtimeId: "codex" })).toBe(true);
+    expect(validateEnvironmentsListParams({ runtimeId: "" })).toBe(false);
+    expect(validateEnvironmentsListParams({ runtimeId: "x".repeat(129) })).toBe(false);
+    expect(validateEnvironmentsListParams({ runtimeId: "codex", command: "runtime.exec" })).toBe(
+      false,
+    );
   });
 
   it("accepts bounded node lifecycle history and rejects malformed timestamps", () => {

@@ -54,6 +54,7 @@ import { mintMcpAppViewFromTranscript } from "../mcp-app-reconstruction.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveSessionStoreKey } from "../session-store-key.js";
+import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayMethod } from "./validation.js";
 
@@ -251,10 +252,19 @@ export function createBoardHandlers(
             boardSession.agentId,
           );
           if (boardParams.ops.length > 0) {
-            context.broadcast("board.changed", {
-              sessionKey: snapshot.sessionKey,
-              revision: snapshot.revision,
+            emitSessionsChanged(context, {
+              sessionKey: boardSession.sessionKey,
+              agentId: boardSession.agentId,
+              reason: "board",
             });
+            context.broadcast(
+              "board.changed",
+              {
+                sessionKey: snapshot.sessionKey,
+                revision: snapshot.revision,
+              },
+              { sessionKeys: [boardSession.sessionKey], agentId: boardSession.agentId },
+            );
           }
           respond(true, snapshot);
         } catch (error) {
@@ -445,11 +455,20 @@ export function createBoardHandlers(
             }
           }
           snapshot = projectBoardSnapshot(snapshot, boardSession.agentId);
-          context.broadcast("board.changed", {
-            sessionKey: snapshot.sessionKey,
-            revision: snapshot.revision,
-            widget: snapshot.resolvedWidgetName,
+          emitSessionsChanged(context, {
+            sessionKey: boardSession.sessionKey,
+            agentId: boardSession.agentId,
+            reason: "board",
           });
+          context.broadcast(
+            "board.changed",
+            {
+              sessionKey: snapshot.sessionKey,
+              revision: snapshot.revision,
+              widget: snapshot.resolvedWidgetName,
+            },
+            { sessionKeys: [boardSession.sessionKey], agentId: boardSession.agentId },
+          );
           respond(true, snapshot);
         } catch (error) {
           respondBoardError(error, respond);
@@ -478,10 +497,14 @@ export function createBoardHandlers(
             ),
             boardSession.agentId,
           );
-          context.broadcast("board.changed", {
-            sessionKey: snapshot.sessionKey,
-            revision: snapshot.revision,
-          });
+          context.broadcast(
+            "board.changed",
+            {
+              sessionKey: snapshot.sessionKey,
+              revision: snapshot.revision,
+            },
+            { sessionKeys: [boardSession.sessionKey], agentId: boardSession.agentId },
+          );
           respond(true, snapshot);
         } catch (error) {
           respondBoardError(error, respond);

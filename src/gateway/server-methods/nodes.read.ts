@@ -21,7 +21,6 @@ import {
 } from "../../infra/node-runner-inventory.js";
 import { resolveLocalNodeId } from "../../node-host/local-id.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
-import { replaceRemoteNodeSkills } from "../../skills/runtime/remote-skills.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../skills/runtime/remote.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import {
@@ -35,7 +34,7 @@ import {
   refreshClientPluginNodeCapability,
 } from "../plugin-node-capability.js";
 import { nodeInvokePolicy } from "./nodes-policy.js";
-import { respondUnavailableOnThrow } from "./nodes.helpers.js";
+import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./shared-types.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -344,11 +343,6 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
       return;
     }
-    replaceRemoteNodeSkills({
-      nodeId,
-      displayName: updated.displayName,
-      skills: updated.nodeSkills,
-    });
     respond(true, { nodeId, skills: updated.nodeSkills }, undefined);
   },
   "node.runnerInventory.update": async ({ params, respond, client, context }) => {

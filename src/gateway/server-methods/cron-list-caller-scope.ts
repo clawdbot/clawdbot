@@ -4,23 +4,21 @@ import type {
   CronListPageResult,
 } from "../../cron/service/list-page-types.js";
 import type { CronJob } from "../../cron/types.js";
-import { cronJobMatchesCallerScope, type CronCallerScope } from "./cron-caller-scope.js";
 
 type CronListCallerScopeContext = {
   cron: {
-    getDefaultAgentId(): string | undefined;
     listPage(opts?: CronListPageOptions): Promise<CronListPageResult>;
   };
 };
 
 const CRON_LIST_SCOPED_SNAPSHOT_MAX_ATTEMPTS = 3;
 
-export async function listCronPageForCallerScope({
-  callerScope,
+export async function listCronPageWithVisibility({
+  matchesJob,
   context,
   options,
 }: {
-  callerScope: CronCallerScope;
+  matchesJob: (job: CronJob) => boolean;
   context: CronListCallerScopeContext;
   options: CronListPageOptions;
 }): Promise<CronListPageResult> {
@@ -34,9 +32,6 @@ export async function listCronPageForCallerScope({
     for (;;) {
       const sourcePage = await context.cron.listPage({
         ...options,
-        // Owner attribution can intentionally differ from a job's execution agent.
-        // Scan source pages, then apply the trusted caller predicate below.
-        agentId: undefined,
         limit: 200,
         offset,
       });
@@ -46,16 +41,7 @@ export async function listCronPageForCallerScope({
       }
       snapshotRevision = sourcePage.snapshotRevision;
 
-      scopedJobs.push(
-        ...sourcePage.jobs.filter((job) =>
-          cronJobMatchesCallerScope({
-            job,
-            callerScope,
-            defaultAgentId: context.cron.getDefaultAgentId(),
-            allowCurrentJob: true,
-          }),
-        ),
-      );
+      scopedJobs.push(...sourcePage.jobs.filter(matchesJob));
 
       if (
         !sourcePage.hasMore ||

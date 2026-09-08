@@ -2,21 +2,24 @@
 summary: "OpenClaw Anthropic Vertex provider plugin for Claude models on Google Vertex AI."
 read_when:
   - You are installing, configuring, or auditing the anthropic-vertex plugin
-title: "Anthropic Vertex plugin"
+title: "Anthropic Vertex plugin reference"
 ---
 
-# Anthropic Vertex plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 OpenClaw Anthropic Vertex provider plugin for Claude models on Google Vertex AI.
 
 ## Distribution
 
 - Package: `@openclaw/anthropic-vertex-provider`
-- Install route: npm; ClawHub
+- Install route: npm or ClawHub
 
 ## Surface
 
-providers: `anthropic-vertex`
+- Providers: `anthropic-vertex`
 
 <!-- openclaw-plugin-reference:manual-start -->
 

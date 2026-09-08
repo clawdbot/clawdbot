@@ -378,7 +378,15 @@ describe("sendMessageIrc cfg threading", () => {
     expect(results).toHaveLength(chunks.length);
   });
 
-  it("does not join after cancellation during transient connection setup", async () => {
+  it.each(
+    [
+      { kind: "formatted", sendMessage: sendFormattedIrcText },
+      { kind: "text", sendMessage: ircMessageAdapter.send.text },
+      { kind: "media", sendMessage: ircMessageAdapter.send.media },
+    ].flatMap(({ kind, sendMessage }) =>
+      ["connect", "dispatch"].map((phase) => ({ kind, sendMessage, phase })),
+    ),
+  )("cancels $kind sends during $phase", async ({ sendMessage, phase }) => {
     const providedCfg = {
       channels: {
         irc: {
@@ -405,14 +413,23 @@ describe("sendMessageIrc cfg threading", () => {
     hoisted.connectIrcClient.mockReturnValue(connect);
     const abortController = new AbortController();
 
-    const send = sendFormattedIrcText({
+    const onPlatformSendDispatch = vi.fn(async () => {
+      await Promise.resolve();
+      abortController.abort();
+    });
+    const send = sendMessage({
       cfg: providedCfg,
       to: "#room",
       text: "hello",
+      mediaUrl: "https://example.com/image.png",
+      signal: abortController.signal,
       abortSignal: abortController.signal,
+      onPlatformSendDispatch,
     });
     await vi.waitFor(() => expect(hoisted.connectIrcClient).toHaveBeenCalledOnce());
-    abortController.abort();
+    if (phase === "connect") {
+      abortController.abort();
+    }
     resolveConnect(client);
 
     await expect(send).rejects.toMatchObject({ name: "AbortError" });
@@ -420,7 +437,8 @@ describe("sendMessageIrc cfg threading", () => {
       expect.anything(),
       expect.objectContaining({ abortSignal: abortController.signal }),
     );
-    expect(client.join).not.toHaveBeenCalled();
+    expect(client.join).toHaveBeenCalledTimes(phase === "connect" ? 0 : 1);
+    expect(onPlatformSendDispatch).toHaveBeenCalledTimes(phase === "connect" ? 0 : 1);
     expect(client.sendPrivmsg).not.toHaveBeenCalled();
     expect(client.quit).toHaveBeenCalledOnce();
   });

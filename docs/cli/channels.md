@@ -48,12 +48,19 @@ Without it, discovery uses the configured System Agent or the existing sole/lega
 An explicit fleet with no such owner requires `--agent`. Selecting a workspace
 does not create account routing bindings; guided setup asks about routing separately.
 
+`add`, `login`, `logout`, and `remove` also take `--account <id>`. Omitting it selects the
+default account. A blank value is rejected instead of falling back to the default, as with
+the dead-letter commands, so an unset shell variable cannot silently select an account you
+did not name.
+
 ## Status / capabilities / resolve / logs
 
 - `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>` (default `10000`), `--json`
 - `channels capabilities`: `--channel <name>`, `--agent <id>`, `--account <id>` (requires `--channel`), `--target <dest>` (requires `--channel`), `--timeout <ms>` (default `10000`, capped at `30000`), `--json`
 - `channels resolve <entries...>`: `--channel <name>`, `--account <id>`, `--agent <id>`, `--kind <auto|user|group|channel>` (default `auto`), `--json`
 - `channels logs`: `--channel <name|all>` (default `all`), `--lines <n>` (default `200`), `--json`
+
+`channels logs --lines` requires a positive integer. Omit `--lines` to use the default of `200`; explicitly empty values are rejected.
 
 `channels logs --channel <name>` matches subsystem or module names rooted at `<name>`
 or `gateway/channels/<name>`, including slash-separated descendants. Similar names

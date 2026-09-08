@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { runUtf8CommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   materializeWindowsSpawnProgram,
@@ -24,10 +24,11 @@ type ClaudeCliAuthStatus =
   | { status: "missing" | "unreadable" };
 
 /** Ask Claude CLI whether its own login is usable without reading token material. */
-export function probeClaudeCliAuthStatus(params?: {
+export async function probeClaudeCliAuthStatus(params?: {
   command?: string;
   env?: NodeJS.ProcessEnv;
-}): ClaudeCliAuthStatus {
+  signal?: AbortSignal;
+}): Promise<ClaudeCliAuthStatus> {
   const env = { ...(params?.env ?? process.env) };
   for (const name of CLAUDE_CLI_CLEAR_ENV) {
     delete env[name];
@@ -39,18 +40,20 @@ export function probeClaudeCliAuthStatus(params?: {
       packageName: "@anthropic-ai/claude-code",
     });
     const invocation = materializeWindowsSpawnProgram(program, ["auth", "status", "--json"]);
-    const result = spawnSync(invocation.command, invocation.argv, {
-      encoding: "utf8",
-      env,
-      maxBuffer: 64 * 1024,
-      timeout: 3_000,
-      shell: invocation.shell,
-      windowsHide: invocation.windowsHide ?? true,
+    const result = await runUtf8CommandWithTimeout([invocation.command, ...invocation.argv], {
+      baseEnv: env,
+      maxOutputBytes: 64 * 1024,
+      maxCombinedOutputBytes: 64 * 1024,
+      terminateOnOutputLimit: true,
+      timeoutMs: 3_000,
+      signal: params?.signal,
+      killProcessTree: true,
     });
-    if (result.error || result.status === null) {
+    params?.signal?.throwIfAborted();
+    if (result.termination !== "exit" || result.code === null) {
       return { status: "unreadable" };
     }
-    if (result.status !== 0) {
+    if (result.code !== 0) {
       return { status: "missing" };
     }
     const parsed: unknown = JSON.parse(result.stdout);
@@ -65,6 +68,7 @@ export function probeClaudeCliAuthStatus(params?: {
       ...(email && email.length <= 320 && !/[\r\n]/u.test(email) ? { email } : {}),
     };
   } catch {
+    params?.signal?.throwIfAborted();
     return { status: "unreadable" };
   }
 }

@@ -74,19 +74,21 @@ export function renderLibraryPinRead(props: {
             )}
           </select></label
         >
-        ${text === null
-          ? html`<p class="muted">${t("skillLibrary.binaryRead")}</p>`
-          : html`<label class="field"
-              ><span>${props.file}</span
-              ><textarea
-                class="settings-input"
-                readonly
-                spellcheck="false"
-                rows="16"
-                style="font-family: var(--mono); min-width: 0; max-width: 100%; box-sizing: border-box; resize: vertical;"
-                .value=${text}
-              ></textarea>
-            </label>`}
+        ${
+          text === null
+            ? html`<p class="muted">${t("skillLibrary.binaryRead")}</p>`
+            : html`<label class="field"
+                ><span>${props.file}</span
+                ><textarea
+                  class="settings-input"
+                  readonly
+                  spellcheck="false"
+                  rows="16"
+                  style="font-family: var(--mono); min-width: 0; max-width: 100%; box-sizing: border-box; resize: vertical;"
+                  .value=${text}
+                ></textarea>
+              </label>`
+        }
         ${renderLibraryIdentity(read.entry)}
       </div>
     </div>

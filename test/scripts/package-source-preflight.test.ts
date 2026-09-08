@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -103,6 +103,11 @@ function runLiveArtifactTupleValidation(packageEnv: Record<string, string>) {
   const summaryPath = path.join(tempDir, "summary");
   const selectedSha = "a".repeat(40);
   mkdirSync(fakeBin);
+  mkdirSync(path.join(tempDir, ".release-harness", "scripts"), { recursive: true });
+  copyFileSync(
+    path.resolve("scripts/resolve-fs-safe-native-contract.mjs"),
+    path.join(tempDir, ".release-harness", "scripts/resolve-fs-safe-native-contract.mjs"),
+  );
   writeFileSync(
     path.join(fakeBin, "git"),
     `#!/usr/bin/env bash
@@ -121,6 +126,7 @@ exit 64
   const stepEnv = Object.fromEntries(Object.keys(step.env ?? {}).map((name) => [name, ""]));
   try {
     const result = spawnSync("bash", ["--noprofile", "--norc", "-c", step.run ?? ""], {
+      cwd: tempDir,
       encoding: "utf8",
       env: {
         ...process.env,
@@ -132,6 +138,7 @@ exit 64
         PROVIDED_BARE_IMAGE: "ghcr.io/openclaw/openclaw:test",
         SELECTED_SHA: selectedSha,
         SHARED_IMAGE_POLICY: "existing-only",
+        TRUSTED_WORKFLOW_SHA: selectedSha,
         ...packageEnv,
       },
     });
@@ -511,9 +518,11 @@ describe("package source preflight", () => {
       release_package_spec: "",
     });
     expect(
-      runReleaseInputCapture({ candidateArtifactJson: '{"packageArtifactId":"1"}' }),
+      runReleaseInputCapture({
+        candidateArtifactJson: '{"packagePublished":false,"packageArtifactId":"1"}',
+      }),
     ).toMatchObject({
-      candidate_artifact_json: '{"packageArtifactId":"1"}',
+      candidate_artifact_json: '{"packagePublished":false,"packageArtifactId":"1"}',
       package_mode: "artifact",
       release_package_spec: "",
     });
@@ -521,6 +530,9 @@ describe("package source preflight", () => {
     expect(preflight.env?.PACKAGE_REF).toBe("${{ needs.resolve_target.outputs.revision }}");
     expect(preflight.run).toContain("node scripts/package-source-preflight.mjs");
     expect(packageStep.env?.PACKAGE_MODE).toBe("${{ needs.resolve_target.outputs.package_mode }}");
+    expect(packageStep.env?.CANDIDATE_PUBLISHED).toBe(
+      "${{ needs.resolve_target.outputs.candidate_published }}",
+    );
     expect(setup.if).toBe("needs.resolve_target.outputs.package_mode != 'artifact'");
     expect(packageStep.if).toBe("needs.resolve_target.outputs.package_mode != 'artifact'");
     expect(packageStep.run).toContain('if [[ "$PACKAGE_MODE" == "published" ]]');
@@ -528,13 +540,13 @@ describe("package source preflight", () => {
     expect(artifactIdentity.if).toBe("needs.resolve_target.outputs.package_mode == 'artifact'");
     expect(workflow.jobs.docker_e2e_release_checks?.with).toMatchObject({
       enable_prepublish_plugin_registry:
-        "${{ needs.resolve_target.outputs.package_mode != 'published' }}",
+        "${{ fromJSON(needs.prepare_release_package.outputs.candidate_artifact_json).packagePublished != true }}",
     });
     expect(workflow.jobs.package_acceptance_release_checks?.with).toMatchObject({
       candidate_artifact_json:
-        "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.candidate_artifact_json || '' }}",
+        "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.candidate_artifact_json || '' }}",
       source:
-        "${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.package_mode == 'published') && 'npm' || 'artifact' }}",
+        "${{ needs.resolve_target.outputs.package_acceptance_package_spec != '' && 'npm' || 'artifact' }}",
     });
     const workflowSource = readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8");
     expect(workflowSource.match(/\$\{\{ inputs\.candidate_artifact_json \}\}/gu)).toHaveLength(1);

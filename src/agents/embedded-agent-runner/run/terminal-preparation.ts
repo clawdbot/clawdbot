@@ -1,6 +1,6 @@
 import { copyReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
-import { estimateAggregateUsageCost, resolveModelCostConfig } from "../../../utils/usage-format.js";
+import { estimateAggregateUsageCost } from "../../../utils/usage-format.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AgentRunTerminalReceipt } from "../../agent-run-terminal-receipt.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
@@ -81,23 +81,23 @@ export function prepareEmbeddedRunTerminal(input: {
     latestUsage: terminalAssistant?.usage as UsageLike | undefined,
     lastRunPromptUsage: input.lastRunPromptUsage,
   });
+  // A runtime can observe its model without emitting message_end. That scoped
+  // attribution is useful here, but is not completed text or usage evidence.
+  const attributionAssistant = terminalAssistant ?? attempt.currentAttemptAssistant;
   const reportedModelRef = resolveReportedModelRef({
-    provider: input.provider,
-    model: input.model,
-    assistant: terminalAssistant,
+    ...(attempt.runtimeModelSelection ?? { provider: input.provider, model: input.model }),
+    assistant: attributionAssistant,
   });
-  const responseModel = terminalAssistant?.responseModel?.trim() || reportedModelRef.model;
+  const responseModel = attributionAssistant?.responseModel?.trim() || reportedModelRef.model;
   const finalAssistantStopReason = (terminalAssistant?.stopReason ?? "").trim().toLowerCase();
   const terminalAssistantCanOwnFinalText =
     finalAssistantStopReason !== "error" && finalAssistantStopReason !== "aborted";
   const costUsd = estimateAggregateUsageCost({
     usage: usageMeta.usage,
-    cost: resolveModelCostConfig({
-      provider: reportedModelRef.provider,
-      model: reportedModelRef.model,
-      config: runParams.config,
-      agentDir: runParams.agentDir,
-    }),
+    provider: reportedModelRef.provider,
+    model: reportedModelRef.model,
+    config: runParams.config,
+    agentDir: runParams.agentDir,
   });
   // Attempt normalization already folded every attempt (terminal included)
   // into the accumulator, so read it directly instead of re-adding the attempt.
@@ -118,6 +118,9 @@ export function prepareEmbeddedRunTerminal(input: {
         }
       : {}),
     agentHarnessId: attempt.agentHarnessId,
+    ...(attempt.runtimeModelSelection
+      ? { runtimeModelSelection: attempt.runtimeModelSelection }
+      : {}),
     credentialSource: attempt.modelAttempt?.credentialSource,
     usage: usageMeta.usage,
     lastCallUsage: usageMeta.lastCallUsage,
@@ -140,9 +143,8 @@ export function prepareEmbeddedRunTerminal(input: {
     ...(costUsd !== undefined ? { costUsd } : {}),
   };
   const attemptFinalText = attempt.assistantTexts
-    .toReversed()
-    .map((text) => text.trim())
-    .find((text) => text.length > 0);
+    .findLast((text) => text.trim().length > 0)
+    ?.trim();
   const finalAssistantVisibleText = terminalAssistantCanOwnFinalText
     ? (resolveFinalAssistantVisibleText(terminalAssistant) ?? attemptFinalText)
     : undefined;
@@ -178,6 +180,7 @@ export function prepareEmbeddedRunTerminal(input: {
         responseModel,
       },
       successfulToolNames,
+      sourceReplyDelivered: attempt.sourceReplyDelivered,
       rerouted:
         reportedModelRef.provider !== input.provider ||
         reportedModelRef.model !== input.model ||
@@ -211,7 +214,6 @@ export function prepareEmbeddedRunTerminal(input: {
     reasoningLevel: runParams.reasoningLevel,
     thinkingLevel: runParams.thinkLevel,
     toolResultFormat: input.resolvedToolResultFormat,
-    suppressToolErrorWarnings: runParams.suppressToolErrorWarnings,
     didSendViaMessagingTool: attempt.didSendViaMessagingTool,
     didDeliverSourceReplyViaMessageTool: attempt.didDeliverSourceReplyViaMessageTool === true,
     messagingToolSentTargets: attempt.messagingToolSentTargets,

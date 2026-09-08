@@ -117,6 +117,7 @@ describe("tools.github handlers", () => {
     expect(oauth.refreshEffectiveIdentity).not.toHaveBeenCalled();
     expect(github.status).toHaveBeenCalledWith({
       config: {},
+      sourceConfig: {},
       agentId: "main",
       selectedScope: "system",
     });

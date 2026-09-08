@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
@@ -169,7 +170,7 @@ export async function prepareQaGatewayChild(
   const gatewayCommand =
     params.command ??
     (params.useRepoCli ? resolveQaGatewayChildCommand(params.repoRoot) : undefined);
-  const usesPackagedCandidate = params.command?.usePackagedPlugins === true;
+  const usesPackagedCandidate = gatewayCommand?.usePackagedPlugins === true;
   const gatewayExecutablePath = gatewayCommand?.executablePath;
   const gatewayArgsPrefix = gatewayCommand?.argsPrefix ?? [];
   const gatewayArgsSuffix = gatewayCommand?.argsSuffix ?? [];
@@ -344,7 +345,7 @@ export async function prepareQaGatewayChild(
               (pluginId): pluginId is string => typeof pluginId === "string" && pluginId.length > 0,
             ),
           );
-          if (!gatewayCommand?.usePackagedPlugins) {
+          if (!usesPackagedCandidate) {
             // Register the external root before staging so one lifecycle owner
             // also cleans partial copies and host-version resolution failures.
             lifetime.stagedBundledPluginsRoot = resolveQaStagedBundledPluginsRoot({
@@ -352,7 +353,7 @@ export async function prepareQaGatewayChild(
               tempRoot,
             });
           }
-          const stagedPluginRuntime = gatewayCommand?.usePackagedPlugins
+          const stagedPluginRuntime = usesPackagedCandidate
             ? { bundledPluginsDir: undefined, runtimeHostVersion: undefined }
             : {
                 ...(await createQaBundledPluginsDir({
@@ -378,6 +379,7 @@ export async function prepareQaGatewayChild(
             bundledPluginsDir: stagedPluginRuntime.bundledPluginsDir,
             stagedBundledPluginsRoot: lifetime.stagedBundledPluginsRoot,
             compatibilityHostVersion: stagedPluginRuntime.runtimeHostVersion,
+            developmentSourceRoot: usesPackagedCandidate ? null : params.repoRoot,
             providerMode,
             runtimeEnvPatch: {
               ...params.runtimeEnvPatch,
@@ -434,6 +436,9 @@ export async function prepareQaGatewayChild(
           packagedMockAuthStaged = true;
         }
         if (usesPackagedCandidate && gatewayCommand) {
+          // Live auth staging opens parent-owned agent stores. Release this
+          // fixture's leases before the child Doctor takes maintenance ownership.
+          await closeQaRuntimeStores(tempRoot);
           const command = {
             lifetime,
             executablePath: gatewayCommand.executablePath,

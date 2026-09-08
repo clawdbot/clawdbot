@@ -3,7 +3,6 @@
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   WEB_PUSH_USER_PREFERENCES_KEY,
@@ -24,7 +23,7 @@ import {
 } from "../infra/push-web.js";
 import { getUserPreferences } from "../state/user-preferences.js";
 import { resolveUserProfileId } from "../state/user-profiles.js";
-import { normalizeControlUiBasePath } from "./control-ui-shared.js";
+import { resolveControlUiWebPushUrl } from "./control-ui-shared.js";
 import type { ExecApprovalRecord } from "./exec-approval-manager.js";
 import { APPROVALS_SCOPE } from "./method-scopes.js";
 import { canAccessOperatorApproval } from "./operator-approval-authorization.js";
@@ -108,19 +107,6 @@ function approvalWebPushTopic(approvalId: string): string {
     .slice(0, 32);
 }
 
-function approvalWebPushUrl(cfg: OpenClawConfig, approvalId: string): string {
-  const controlUiBasePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
-  // The receiving PWA owns the service-worker scope, which may differ from the
-  // remote Gateway's base path. Keep navigation relative to that PWA scope.
-  const approvalPath = `approve/${encodeURIComponent(approvalId)}`;
-  const publicOrigin = resolveGatewayPublicOrigin(cfg);
-  if (!publicOrigin) {
-    return approvalPath;
-  }
-  const gatewayUrl = `${publicOrigin.replace(/^https:/u, "wss:").replace(/^http:/u, "ws:")}${controlUiBasePath}`;
-  return `${approvalPath}#${new URLSearchParams({ gatewayUrl })}`;
-}
-
 async function deliverBoundApprovalWebPush<TPayload>(params: {
   record: ExecApprovalRecord<TPayload>;
   getRuntimeConfig: () => OpenClawConfig;
@@ -199,7 +185,7 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
             ...copy,
             renotify: false,
             tag: approvalWebPushTag(params.record.id),
-            url: approvalWebPushUrl(cfg, params.record.id),
+            url: resolveControlUiWebPushUrl(cfg, `approve/${encodeURIComponent(params.record.id)}`),
           },
           deliveryOptions: {
             TTL: ttlSeconds,
@@ -330,7 +316,7 @@ export function createApprovalWebPushDelivery(params: {
                 ...copy,
                 renotify: false,
                 tag: approvalWebPushTag(approval.id),
-                url: approvalWebPushUrl(cfg, approval.id),
+                url: resolveControlUiWebPushUrl(cfg, `approve/${encodeURIComponent(approval.id)}`),
               },
               deliveryOptions: {
                 TTL: WEB_PUSH_TERMINAL_TTL_SECONDS,

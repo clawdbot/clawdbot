@@ -6,14 +6,14 @@ import {
 import { resolvePluginInstallSourcePlan } from "../../cli/plugin-install-plan.js";
 import { createPluginInstallLogger } from "../../cli/plugins-command-helpers.js";
 import { resolvePendingPluginCapabilityReview } from "../../plugins/capability-consent.js";
-import type { ConfigSnapshotForInstallPersist } from "../../plugins/install-persistence.js";
+import type { ConfigSnapshotForInstallPersist } from "../../plugins/install-config-mutation.js";
 import {
   formatNonClawHubInstallWarning,
   NON_CLAWHUB_INSTALL_FORCE_FLAG,
   type NonClawHubInstallSourceClass,
 } from "../../plugins/install-provenance.js";
+import { installManagedPluginSource } from "../../plugins/management-install.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
-import { installManagedPluginSource } from "../../plugins/management-service.js";
 
 export function formatPluginCommandCapabilityConsentError(
   error: unknown,

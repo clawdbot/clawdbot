@@ -204,6 +204,7 @@ echo "Running Codex npm plugin live Docker E2E..."
 echo "Profile file: $PROFILE_STATUS"
 echo "Codex plugin spec: $CODEX_PLUGIN_SPEC"
 if ! docker_e2e_run_with_harness \
+  -v "$CANDIDATE_ROOT/extensions/codex/package.json:/tmp/openclaw-candidate-codex-package.json:ro" \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_CODEX_NPM_PLUGIN_ALLOW_BETA_COMPAT_DIAGNOSTICS="${OPENCLAW_CODEX_NPM_PLUGIN_ALLOW_BETA_COMPAT_DIAGNOSTICS:-0}" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL="${OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL:-1}" \

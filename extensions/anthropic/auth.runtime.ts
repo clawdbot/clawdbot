@@ -222,7 +222,7 @@ export function buildAnthropicAuthDoctorHint(params: {
 export async function runAnthropicCliMigration(
   ctx: ProviderAuthContext,
 ): Promise<ProviderAuthResult> {
-  const authStatus = claudeCliAuth.probeClaudeCliAuthStatus(
+  const authStatus = await claudeCliAuth.probeClaudeCliAuthStatus(
     resolveAnthropicCliAuthProbe(ctx.env ?? process.env),
   );
   if (authStatus.status !== "available") {
@@ -241,7 +241,7 @@ export async function runAnthropicCliMigrationNonInteractive(ctx: {
   runtime: ProviderAuthContext["runtime"];
   agentDir?: string;
 }): Promise<ProviderAuthContext["config"] | null> {
-  const authStatus = claudeCliAuth.probeClaudeCliAuthStatus(
+  const authStatus = await claudeCliAuth.probeClaudeCliAuthStatus(
     resolveAnthropicCliAuthProbe(process.env),
   );
   if (authStatus.status !== "available") {

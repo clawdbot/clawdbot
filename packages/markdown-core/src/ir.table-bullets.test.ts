@@ -119,4 +119,27 @@ describe("markdownToIR tableMode bullets", () => {
     ).toContain("Row");
     expect(ir.links.map((link) => link.href)).toContain("https://example.com");
   });
+
+  it.each([
+    {
+      name: "one-space code",
+      cell: "` `",
+      expected: {
+        text: "• V:  ",
+        styles: [{ start: 5, end: 6, style: "code" }],
+        links: [],
+      },
+    },
+    {
+      name: "linked code-leading space",
+      cell: "[` a`](https://example.com)",
+      expected: {
+        text: "• V:  a",
+        styles: [{ start: 5, end: 7, style: "code" }],
+        links: [{ start: 5, end: 7, href: "https://example.com" }],
+      },
+    },
+  ])("preserves code-owned cell edges: $name", ({ cell, expected }) => {
+    expect(markdownToIR(`| V |\n| --- |\n| ${cell} |`, { tableMode: "bullets" })).toEqual(expected);
+  });
 });

@@ -791,7 +791,7 @@ describe("SQLite lifecycle cleanup races", () => {
   });
 
   it("reports zero maintenance removals when final compare-and-delete does not commit", async () => {
-    const sessionKey = "agent:main:maintenance-compare-failed";
+    const sessionKey = "agent:main:subagent:maintenance-compare-failed";
     const entry = { sessionId: "maintenance-compare-failed", updatedAt: 1 };
     await replaceSessionEntry({ sessionKey, storePath }, entry);
     const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
@@ -832,7 +832,7 @@ describe("SQLite lifecycle cleanup races", () => {
   });
 
   it("retains committed maintenance counts when archive publication fails", async () => {
-    const sessionKey = "agent:main:maintenance-publication-failed";
+    const sessionKey = "agent:main:subagent:maintenance-publication-failed";
     await replaceSessionEntry(
       { sessionKey, storePath },
       { sessionId: "maintenance-publication-failed", updatedAt: 1 },

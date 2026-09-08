@@ -519,7 +519,9 @@ export class AcpTranslatorPromptStream {
       return;
     }
     if (state === "aborted") {
-      await this.finishPrompt(pending.sessionId, pending, "cancelled");
+      const interruption =
+        typeof payload.errorMessage === "string" ? payload.errorMessage : undefined;
+      await this.finishPrompt(pending.sessionId, pending, "cancelled", { interruption });
       return;
     }
     if (state === "error") {
@@ -574,10 +576,19 @@ export class AcpTranslatorPromptStream {
     sessionId: string,
     pending: AcpPendingPrompt,
     stopReason: StopReason,
-    options: { claimed?: boolean } = {},
+    options: { claimed?: boolean; interruption?: string } = {},
   ): Promise<void> {
     if (!options.claimed && !this.claimPendingPrompt(pending)) {
       return;
+    }
+    if (options.interruption) {
+      // Persist the visible reason before settlement without waiting for client delivery.
+      await this.emitPromptChunk(
+        pending,
+        "agent_message_chunk",
+        `[OpenClaw interruption] ${options.interruption}`,
+        false,
+      );
     }
     const promptKey = this.pendingPromptKey(sessionId, pending.idempotencyKey);
     this.settlingPromptKeys.add(promptKey);

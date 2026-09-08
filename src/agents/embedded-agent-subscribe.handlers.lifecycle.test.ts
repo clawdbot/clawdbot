@@ -90,7 +90,7 @@ function createContext(
     emitBlockReply,
     emitAssistantStreamData: vi.fn(),
     flushAssistantStream: vi.fn(),
-    flushDeferredBlockReplies: vi.fn(),
+    releaseDeferredReplies: vi.fn(),
     clearAssistantStream: vi.fn(),
     clearDeferredBlockReplies: vi.fn(),
     resolveCompactionRetry: vi.fn(),
@@ -230,6 +230,22 @@ describe("handleAgentEnd", () => {
       lifecycleGeneration: "pre-restart-generation",
       stream: "lifecycle",
       data: expect.objectContaining({ phase: "end" }),
+    });
+  });
+
+  it("names storage errors in the terminal event and run log", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      { role: "assistant", stopReason: "error", errorMessage: "database is locked", content: [] },
+      { onAgentEvent },
+    );
+    await handleAgentEnd(ctx);
+    const error =
+      "⚠️ Agent run failed: the Gateway state database was busy (SQLite: database is locked). Retry; if it repeats, check Gateway storage health.";
+    expect(firstWarnMeta(ctx)).toMatchObject({ error, rawErrorPreview: "database is locked" });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: expect.objectContaining({ phase: "error", error }),
     });
   });
 
@@ -1098,8 +1114,7 @@ describe("handleAgentEnd", () => {
       );
       expect(ctx.clearAssistantStream).not.toHaveBeenCalled();
       expect(ctx.clearDeferredBlockReplies).not.toHaveBeenCalled();
-      expect(ctx.flushAssistantStream).toHaveBeenCalledTimes(1);
-      expect(ctx.flushDeferredBlockReplies).toHaveBeenCalledTimes(1);
+      expect(ctx.releaseDeferredReplies).toHaveBeenCalledTimes(1);
       expect(ctx.flushBlockReplyBuffer).toHaveBeenCalledWith({ final: true });
       expect(ctx.resolveCompactionRetry).toHaveBeenCalledTimes(1);
       expect(ctx.maybeResolveCompactionWait).not.toHaveBeenCalled();

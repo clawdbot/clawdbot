@@ -72,7 +72,7 @@ export function resolveMessageActionDetails(params: {
   const expansion = fullMessage?.state;
   const expandedMarkdown = expansion?.status === "loaded" ? expansion.markdown : previewMarkdown;
   const visibleMarkdown =
-    role === "assistant" ? stripThinkingTags(expandedMarkdown).trim() : expandedMarkdown;
+    role === "assistant" ? stripThinkingTags(expandedMarkdown) : expandedMarkdown;
   const markdown = role === "assistant" || pendingInput ? visibleMarkdown : undefined;
   const replyText =
     onReply && !pendingInput
@@ -105,9 +105,11 @@ export function renderMessageActionButtons(
   },
 ) {
   return html`
-    ${details.replyTarget && opts.onReply
-      ? renderReplyButton(details.replyTarget, opts.onReply)
-      : nothing}
+    ${
+      details.replyTarget && opts.onReply
+        ? renderReplyButton(details.replyTarget, opts.onReply)
+        : nothing
+    }
     ${details.markdown ? renderCopyAsMarkdownButton(details.markdown) : nothing}
   `;
 }

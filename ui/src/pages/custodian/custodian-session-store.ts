@@ -5,6 +5,7 @@ import type { CustodianTurnAdmission } from "../../components/custodian-alert-co
 import { t } from "../../i18n/index.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { performCustodianAgentHandoff } from "./custodian-navigation.ts";
+import * as nudgeActions from "./custodian-nudge-actions.ts";
 import {
   createCustodianSessionId,
   CustodianSessionOwner,
@@ -51,13 +52,17 @@ export class CustodianSessionStore {
   wizardSecretVisible = false;
   questionReplyUncertain = false;
   error: string | null = null;
-  transcript = new CustodianTranscriptLoader(() => this.emit());
+  transcript = new CustodianTranscriptLoader(
+    () => this.emit(),
+    () => this.context?.gateway.snapshot,
+  );
   dismissedQuestions = new Set<string>();
   answeredQuestions = new Set<string>();
   activeClient: GatewayBrowserClient | null = null;
   chatAvailable = false;
   eventNudge: eventNudgeState.CustodianEventNudge | null = null;
   eventNudgePending: eventNudgeState.CustodianEventNudge | null = null;
+  eventNudgeClosed = false;
   channelOnboardingNudgeClosed = false;
   earlierBoundaryAfterId: number | null = null;
   abandonedTurnOutcomeUnknown = false;
@@ -82,7 +87,6 @@ export class CustodianSessionStore {
   private readonly sessionOwner = new CustodianSessionOwner();
   private sessionStarted = false;
   private configuredInferenceState: CustodianConfiguredInferenceState = "unresolved";
-  private eventNudgeClosed = false;
   private gatewayCleanup: (() => void) | null = null;
   private agentCleanup: (() => void) | null = null;
   private eventCleanup: (() => void) | null = null;
@@ -104,7 +108,10 @@ export class CustodianSessionStore {
       this.agentCleanup?.();
       this.eventCleanup?.();
       this.context = context;
+      const recover = this.transcript.watchAvailability(() => void this.refreshTranscriptIfIdle());
       this.gatewayCleanup = context.gateway.subscribe(() => {
+        // Reconnect hydration supersedes the queued availability recovery.
+        recover();
         this.synchronizeClient();
         this.emit();
       });
@@ -112,17 +119,9 @@ export class CustodianSessionStore {
         this.synchronizeClient();
         this.emit();
       });
-      this.eventCleanup = context.gateway.subscribeEvents((event) => {
-        if (this.variant !== "caretaker" || this.eventNudgeClosed) {
-          return;
-        }
-        [this.eventNudge, this.eventNudgePending] = eventNudgeState.reconcileCustodianEventNudge(
-          this.eventNudge,
-          this.eventNudgePending,
-          event,
-        );
-        this.emit();
-      });
+      this.eventCleanup = context.gateway.subscribeEvents((event) =>
+        nudgeActions.receiveEventNudge(this, event),
+      );
     }
     this.variant = variant;
     this.synchronizeClient();
@@ -178,9 +177,19 @@ export class CustodianSessionStore {
     );
   }
 
+  private get transcriptBlocked(): boolean {
+    return this.sending || this.hasUnresolvedQuestion() || this.transcript.refreshing;
+  }
+
   async refreshTranscriptIfIdle(): Promise<void> {
     const client = this.activeClient;
-    if (!client || !this.canRefreshTranscript()) {
+    if (!client || !this.sessionStarted || !this.chatAvailable) {
+      return;
+    }
+    if (this.transcriptBlocked) {
+      if (this.transcript.status.awaitingGateway || this.transcript.status.error !== null) {
+        this.transcript.deferRecovery();
+      }
       return;
     }
     const refreshed = await this.refreshTranscriptHistory(client, this.requestEpoch);
@@ -188,12 +197,6 @@ export class CustodianSessionStore {
       this.abandonedTurnOutcomeUnknown = false;
       this.emit();
     }
-  }
-
-  canRefreshTranscript(): boolean {
-    // hasUnresolvedQuestion() also covers a pending wizard step.
-    const blocked = this.sending || this.hasUnresolvedQuestion() || this.transcript.refreshing;
-    return this.activeClient !== null && this.sessionStarted && this.chatAvailable && !blocked;
   }
 
   canRetry(): boolean {
@@ -297,38 +300,28 @@ export class CustodianSessionStore {
     return outcome;
   }
 
-  async sendEventNudge(): Promise<void> {
-    const nudge = this.eventNudge;
-    if (!nudge || this.sensitive || this.hasUnresolvedQuestion()) {
-      return;
-    }
-    this.eventNudgePending = nudge;
+  requestNudgeUpdate(): void {
     this.emit();
-    const outcome = await this.send(nudge.message);
-    if (this.eventNudgePending === nudge) {
-      this.eventNudgePending = null;
-      const consumed = eventNudgeState.shouldConsumeNudge(this.eventNudge, nudge, outcome);
-      [this.eventNudgeClosed, this.eventNudge] = [consumed, consumed ? null : this.eventNudge];
-      this.emit();
-    }
+  }
+
+  sendEventNudge(): Promise<void> {
+    return nudgeActions.sendEventNudge(this);
   }
 
   dismissEventNudge(): void {
-    [this.eventNudge, this.eventNudgeClosed] = [null, true];
-    this.emit();
+    nudgeActions.dismissEventNudge(this);
   }
 
   dismissChannelOnboardingNudge(): void {
-    this.channelOnboardingNudgeClosed = true;
-    this.emit();
-    this.context?.replace("custodian");
+    nudgeActions.dismissChannelOnboardingNudge(this, () => this.context?.replace("custodian"));
   }
 
   openChannelsFromOnboarding(): void {
-    this.channelOnboardingNudgeClosed = true;
-    this.revokeNavigationAuthority();
-    this.emit();
-    this.context?.navigate("channels");
+    nudgeActions.openChannelsFromOnboarding(
+      this,
+      () => this.revokeNavigationAuthority(),
+      () => this.context?.navigate("channels"),
+    );
   }
 
   async dismissQuestion(message: CustodianMessage): Promise<void> {
@@ -402,16 +395,17 @@ export class CustodianSessionStore {
     );
   }
 
-  exitSetup(): void {
+  exitSetup(destination: "chat" | "model-setup" | "profile" = "chat"): void {
     // Leaving setup revokes navigation authority from every in-flight reply.
     // The destination surface separately decides whether to retain or rotate context.
     this.revokeNavigationAuthority();
-    this.context?.navigate("chat");
+    this.context?.navigate(destination);
   }
 
   private revokeNavigationAuthority(): void {
     this.requestAbort?.abort();
     this.requestAbort = null;
+    this.transcript.clearRecovery();
     this.advanceRequestEpoch();
     this.sending = false;
     this.questionReplyUncertain = false;
@@ -424,12 +418,11 @@ export class CustodianSessionStore {
     return ++this.requestEpoch;
   }
 
-  openModelSetup(): void {
-    this.revokeNavigationAuthority();
-    this.context?.navigate("model-setup");
-  }
-
   private emit(): void {
+    this.transcript.settleRecovery(
+      this.transcriptBlocked,
+      () => void this.refreshTranscriptIfIdle(),
+    );
     for (const listener of this.listeners) {
       listener();
     }
@@ -510,6 +503,9 @@ export class CustodianSessionStore {
     }
     const requestWasPending = this.sending && this.retryParams !== null;
     const pendingParams = requestWasPending ? this.retryParams : null;
+    if (client !== this.activeClient || ownershipChanged) {
+      this.transcript.clearRecovery();
+    }
     this.activeClient = client;
     this.advanceRequestEpoch();
     this.sending = false;
@@ -721,7 +717,9 @@ export class CustodianSessionStore {
         this.nextMessageId += 1;
         this.messages = [...this.messages, message];
       }
-      if (result.action === "open-agent") {
+      if (result.handoff?.kind === "model-accounts") {
+        this.exitSetup("profile");
+      } else if (result.action === "open-agent") {
         const handoff = await performCustodianAgentHandoff({
           context,
           ...(result.agentId ? { agentId: result.agentId } : {}),

@@ -14,10 +14,11 @@ import {
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
+import { buildLocalUserMessage } from "../chat/user-message-content.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import { NewSessionComposerTextareaController } from "./composer.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
-import { renderNewSessionDraftComposer } from "./draft-composer.ts";
+import { renderNewSessionBody, renderNewSessionDraftComposer } from "./draft-composer.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
 const attachmentDrafts: NewSessionAttachmentDraft[] = [];
@@ -146,6 +147,45 @@ afterEach(() => {
   replaceSlashCommands(buildFallbackSlashCommands());
 });
 
+describe("new-session submission preview", () => {
+  it.each([
+    { userId: "profile-alex", placement: "gutter" },
+    { userId: null, placement: "footer" },
+  ])("immediately shows the own-user avatar in the $placement", ({ userId, placement }) => {
+    const container = document.createElement("div");
+    const avatarUrl = "/api/users/profile-alex/avatar?v=1";
+    render(
+      renderNewSessionBody({
+        error: null,
+        pendingMessage: buildLocalUserMessage({
+          createdAt: 1,
+          text: "Hello from Alex",
+          sender: {
+            identity: { type: "profile", id: "profile-alex" },
+            name: "Alex",
+            profileAvatarUrl: avatarUrl,
+          },
+        }),
+        userId,
+        submitting: true,
+        renderDraft: () => html``,
+        onOpenImage: () => {},
+      }),
+      container,
+    );
+
+    const group = container.querySelector(".chat-group.user");
+    const avatar = group?.querySelector(
+      placement === "gutter"
+        ? ":scope > .chat-avatar-slot img"
+        : ":scope > .chat-group-footer > .chat-group-footer__meta .chat-author-avatar img",
+    );
+    expect(avatar?.getAttribute("src")).toBe(avatarUrl);
+    expect(group?.classList.contains("chat-group--with-footer")).toBe(true);
+    expect(group?.closest(".chat-thread--direct") !== null).toBe(placement === "footer");
+  });
+});
+
 describe("new-session composer keyboard submission", () => {
   it("opens slash commands and inserts the selected command with Enter", () => {
     replaceSlashCommands([
@@ -190,6 +230,55 @@ describe("new-session composer keyboard submission", () => {
     expect(message).toBe("/test-command ");
     expect(onSubmit).not.toHaveBeenCalled();
   });
+
+  it.each(["keyboard", "pointer"])(
+    "submits a selected non-skill command argument with %s",
+    (selection) => {
+      replaceSlashCommands([
+        {
+          key: "mode",
+          name: "mode",
+          description: "Choose a mode.",
+          args: "<mode>",
+          argOptions: ["fast", "careful"],
+        },
+      ]);
+      const onInput = vi.fn();
+      const onSubmit = vi.fn();
+      const { composer } = renderComposer({ onInput, onSubmit });
+      const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+      if (!textarea) {
+        throw new Error("Expected composer textarea");
+      }
+
+      textarea.value = "/mode";
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+      textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+      if (selection === "keyboard") {
+        textarea.dispatchEvent(
+          new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
+        );
+      } else {
+        composer.querySelector<HTMLElement>(".slash-menu-item")?.click();
+      }
+
+      expect(onInput).toHaveBeenLastCalledWith("/mode ");
+      const fastOption = Array.from(
+        composer.querySelectorAll<HTMLElement>(".slash-menu-item"),
+      ).find((item) => item.querySelector(".slash-menu-name")?.textContent?.trim() === "fast");
+      expect(fastOption).toBeInstanceOf(HTMLElement);
+      if (selection === "keyboard") {
+        textarea.dispatchEvent(
+          new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
+        );
+      } else {
+        fastOption?.click();
+      }
+
+      expect(onInput).toHaveBeenLastCalledWith("/mode fast");
+      expect(onSubmit).toHaveBeenCalledOnce();
+    },
+  );
 
   it("drops a pending skill completion when the selected agent changes", async () => {
     const response = createDeferred<CommandsListResult>();

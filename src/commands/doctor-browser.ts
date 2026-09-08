@@ -35,6 +35,13 @@ export type LegacyClawdBrowserProfileResidue = {
   canonicalUserDataDir: string;
 };
 
+type BrowserNativeHostRepairResult = {
+  status?: "repaired" | "skipped" | "failed";
+  reason?: string;
+  changes: string[];
+  warnings: string[];
+};
+
 type BrowserDoctorSurface = {
   noteChromeMcpBrowserReadiness: (cfg: OpenClawConfig, deps?: BrowserDoctorDeps) => Promise<void>;
   detectLegacyClawdBrowserProfileResidue?: (
@@ -45,10 +52,7 @@ type BrowserDoctorSurface = {
     cfg: OpenClawConfig,
     deps?: BrowserDoctorRepairDeps,
   ) => Promise<{ changes: string[]; warnings: string[] }>;
-  maybeRepairOwnedChromeExtensionNativeHosts?: () => Promise<{
-    changes: string[];
-    warnings: string[];
-  }>;
+  maybeRepairOwnedChromeExtensionNativeHosts?: () => Promise<BrowserNativeHostRepairResult>;
 };
 
 function loadBrowserDoctorSurface(): BrowserDoctorSurface {
@@ -58,11 +62,8 @@ function loadBrowserDoctorSurface(): BrowserDoctorSurface {
   });
 }
 
-/** Repairs only already-owned Chrome native-host registration drift. */
-export async function maybeRepairOwnedChromeExtensionNativeHosts(): Promise<{
-  changes: string[];
-  warnings: string[];
-}> {
+/** Reports the browser plugin's native-host repair outcome, including intentional skips. */
+export async function maybeRepairOwnedChromeExtensionNativeHosts(): Promise<BrowserNativeHostRepairResult> {
   try {
     const repair = loadBrowserDoctorSurface().maybeRepairOwnedChromeExtensionNativeHosts;
     return repair ? await repair() : { changes: [], warnings: [] };

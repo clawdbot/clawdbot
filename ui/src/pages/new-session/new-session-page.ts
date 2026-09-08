@@ -8,6 +8,7 @@ import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
 import "../../components/web-awesome-popover.ts";
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -34,7 +35,6 @@ import {
   closeAgentPicker,
   closeSessionMenus,
   createControllerHost,
-  handleSessionPickerEvent,
   isPlaceTopologyEvent,
   presenceStateSignature,
 } from "./new-session-runtime.ts";
@@ -98,6 +98,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
           recoveryScope: "",
         },
         agentsHydrated: this.place?.agentsHydrated ?? false,
+        runtimeId: this.place?.devicePlacementRuntime()?.id ?? "",
       }),
       {
         requestUpdate: () => this.requestUpdate(),
@@ -196,6 +197,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
             }
             if (isPlaceTopologyEvent(event.event)) {
               void this.gateway.refreshCloudProfiles();
+              this.gateway.handleCatalogRetry();
               return;
             }
             const presence = event.event === "presence" ? readPresenceEntries(event.payload) : null;
@@ -206,6 +208,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
             if (signature !== this.presenceSignature) {
               this.presenceSignature = signature;
               void this.gateway.refreshCloudProfiles();
+              this.gateway.handleCatalogRetry();
             }
           });
         },
@@ -233,19 +236,16 @@ export class NewSessionPage extends OpenClawLightDomElement {
     if (event instanceof KeyboardEvent) {
       focusChatComposerFromPrintableKeydown(this, event);
     }
-    handleSessionPickerEvent(this, event);
   }
 
   override connectedCallback() {
     super.connectedCallback();
     document.addEventListener("keydown", this, true);
-    document.addEventListener("pointerdown", this, true);
     window.addEventListener("beforeunload", this.flushDraft);
   }
 
   override disconnectedCallback() {
     document.removeEventListener("keydown", this, true);
-    document.removeEventListener("pointerdown", this, true);
     window.removeEventListener("beforeunload", this.flushDraft);
     retainDraft(this.context, this.submission, this.openedFor, this.messageOwnerKey);
     this.subscriptions.clear();
@@ -287,12 +287,19 @@ export class NewSessionPage extends OpenClawLightDomElement {
     const groupDefaults = catalog.groupDefaultsKey(this.data);
     if (this.openedFor !== openKey) {
       const ownedMessage = this.messageOwnerKey === openKey ? this.submission.message : "";
+      const ownedMentions = this.messageOwnerKey === openKey ? this.submission.mentions : undefined;
       this.openedFor = openKey;
       this.openedGroupDefaults = groupDefaults;
       this.openedAgentId = resolvedAgentId;
       this.place.setAgentsHydrated(agentsReady);
       this.resetDraft();
-      this.messageOwnerKey = restoreDraft(this.context, this.submission, openKey, ownedMessage);
+      this.messageOwnerKey = restoreDraft(
+        this.context,
+        this.submission,
+        openKey,
+        ownedMessage,
+        ownedMentions,
+      );
       return;
     }
     if (this.openedGroupDefaults !== groupDefaults) {
@@ -311,6 +318,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       });
     }
     this.place.restorePreferenceSelections();
+    this.place.synchronizeTerminalHosts();
     activateDraft(this.submission, openKey);
     this.submission.resumeInterruptedSubmission();
   }
@@ -348,9 +356,9 @@ export class NewSessionPage extends OpenClawLightDomElement {
       : catalog.routeKeyFromSearch(window.location.search);
   }
 
-  private setMessageFromUser(message: string) {
+  private setMessageFromUser(message: string, mentions?: readonly HumanMention[]) {
     if (!this.submission.submitting && !this.submission.pendingPlacement.sessionKey) {
-      this.submission.setMessage(message);
+      this.submission.setMessage(message, mentions);
       this.messageOwnerKey = catalog.routeKeyFromSearch(window.location.search);
     }
   }
@@ -412,7 +420,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       isCatalogTarget: catalog.isTarget(this.data),
       renderTargetBar: () => this.renderTargetBar(),
       requestUpdate: () => this.requestUpdate(),
-      onMessage: (message) => this.setMessageFromUser(message),
+      onMessage: (message, mentions) => this.setMessageFromUser(message, mentions),
       onOpenImage: this.setImageLightbox,
     });
   }
@@ -464,22 +472,26 @@ export class NewSessionPage extends OpenClawLightDomElement {
 
   override render() {
     const pendingMessage = this.submission.pendingMessage;
+    const identity = this.context?.gateway.snapshot.selfUser?.identity;
     const incognito = this.submission.visibility === "incognito";
     return html`
       <div
-        class="new-session-page ${pendingMessage ? "chat" : ""} ${incognito
-          ? "new-session-page--incognito"
-          : ""}"
+        class="new-session-page ${pendingMessage ? "chat" : ""} ${
+          incognito ? "new-session-page--incognito" : ""
+        }"
       >
-        ${catalog.isTarget(this.data)
-          ? nothing
-          : renderNewSessionIncognitoControl(
-              this.submission,
-              this.submission.capabilities.canStartAsDraft(this.context),
-            )}
+        ${
+          catalog.isTarget(this.data)
+            ? nothing
+            : renderNewSessionIncognitoControl(
+                this.submission,
+                this.submission.capabilities.canStartAsDraft(this.context),
+              )
+        }
         ${renderNewSessionBody({
           error: this.submission.error,
           pendingMessage,
+          userId: identity?.type === "profile" ? identity.id : null,
           submitting: this.submission.submitting,
           renderDraft: () => this.renderWelcome(),
           onOpenImage: this.setImageLightbox,

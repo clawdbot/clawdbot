@@ -148,15 +148,13 @@ describe("automatic media selection", () => {
       calls.push(provider);
       return provider === "second";
     });
-    const providers = ["first", "second"].map(
-      (id, priority): MediaUnderstandingProvider => ({
-        id,
-        capabilities: ["audio"],
-        autoPriority: { audio: priority },
-        defaultModels: { audio: `${id}-transcription` },
-        transcribeAudio: async ({ model }) => ({ text: id, model }),
-      }),
-    );
+    const providers = ["first", "second"].map((id, priority): MediaUnderstandingProvider => ({
+      id,
+      capabilities: ["audio"],
+      autoPriority: { audio: priority },
+      defaultModels: { audio: `${id}-transcription` },
+      transcribeAudio: async ({ model }) => ({ text: id, model }),
+    }));
     await withAudioFixture("media-selection-provider-order", async ({ ctx, media, cache }) => {
       const result = await runCapability({
         capability: "audio",

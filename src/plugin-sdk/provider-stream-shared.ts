@@ -29,6 +29,11 @@ import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js"
 import { findCodeRegions } from "../shared/text/code-regions.js";
 import { assertProviderStreamEvent } from "./provider-stream-event-normalization.js";
 export {
+  isGoogleGemini3FlashModel,
+  isGoogleGemini3ProModel,
+  isGoogleGemini3ThinkingLevelModel,
+} from "@openclaw/ai/internal/google-model-family";
+export {
   applyAnthropicRefusal,
   isAnthropicOAuthApiKey,
   resolveAnthropicServerCompactionPlan,
@@ -675,9 +680,6 @@ export function createThinkingOnlyFinalTextWrapper(params: {
 
 export {
   isGoogleGemini25ThinkingBudgetModel,
-  isGoogleGemini3FlashModel,
-  isGoogleGemini3ProModel,
-  isGoogleGemini3ThinkingLevelModel,
   isGoogleThinkingRequiredModel,
   resolveGoogleGemini3ThinkingLevel,
   sanitizeGoogleThinkingPayload,
@@ -721,3 +723,6 @@ export {
 } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 export { streamWithPayloadPatch };
 export { createToolStreamWrapper } from "../llm/providers/stream-wrappers/zai.js";
+
+export { applyCompletionsAnthropicCacheControl } from "@openclaw/ai/transports";
+export { projectCopilotRequestFacts } from "@openclaw/ai/internal/shared";

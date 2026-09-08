@@ -12,6 +12,8 @@ import {
 import { buildServiceEnvironment } from "./service-env.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
+const SYSTEMD_CONTINUATIONS = ["", "\\\n  # continued setting \\\n  ; ignored comment\n  "];
+
 const execSystemctlUser = vi.hoisted(() =>
   vi.fn<
     (
@@ -198,28 +200,28 @@ describe("auditGatewayServiceConfig", () => {
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(false);
   });
 
-  it("flags version-managed node paths", async () => {
+  it.each([
+    [".nvm/versions/node/v22.0.0/bin", true, true],
+    [".NVM/versions/node/v22.0.0/bin", true, false],
+    [".local/share/mise/installs/node/22/bin", true, false],
+    ["Library/Application Support/fnm/aliases/default/bin", true, false],
+    [".nvs/node/22/bin", false, false],
+    [".local/share/pnpm", false, true],
+    [".nvm/../system/bin", false, false],
+    [".local/share/mise/.nvm/bin", true, true],
+  ] as const)("audits runtime and PATH for %s", async (directory, runtime, nonMinimal) => {
+    const bin = `/Users/test/${directory}`;
     const audit = await auditGatewayServiceConfig({
       env: { HOME: "/tmp" },
       platform: "darwin",
       command: {
-        programArguments: ["/Users/test/.nvm/versions/node/v22.0.0/bin/node", "gateway"],
-        environment: {
-          PATH: "/usr/bin:/bin:/Users/test/.nvm/versions/node/v22.0.0/bin",
-        },
+        programArguments: [`${bin}/node`, "gateway"],
+        environment: { PATH: `/usr/bin:/bin:${bin}` },
       },
     });
-    expect(
-      audit.issues.some(
-        (issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeNodeVersionManager,
-      ),
-    ).toBe(true);
-    expect(
-      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayPathNonMinimal),
-    ).toBe(true);
-    expect(
-      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs),
-    ).toBe(true);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeNodeVersionManager)).toBe(runtime);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathNonMinimal)).toBe(nonMinimal);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathMissingDirs)).toBe(true);
   });
 
   it("accepts Linux minimal PATH with user directories", async () => {
@@ -602,6 +604,20 @@ describe("auditGatewayServiceConfig", () => {
 
   it.each([
     {
+      name: "detects a control-group drop-in over a mixed base unit",
+      unit: ["KillMode=mixed"],
+      manager: ["KillMode=control-group"],
+      code: SERVICE_AUDIT_CODES.systemdKillModeControlGroup,
+      expected: true,
+    },
+    {
+      name: "accepts effective mixed mode over an older base unit",
+      unit: ["KillMode=control-group"],
+      manager: ["KillMode=mixed"],
+      code: SERVICE_AUDIT_CODES.systemdKillModeControlGroup,
+      expected: false,
+    },
+    {
       name: "uses manager KillMode instead of the base unit",
       unit: [
         "After=network-online.target",
@@ -697,54 +713,65 @@ describe("auditGatewayServiceConfig", () => {
     }
   });
 
-  it.each(["process", "none"])(
+  it.each(["process", "none", "control-group", ""])(
     `warns when KillMode is %s in explicit unit file`,
     async (killMode) => {
       const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-killmode-"));
-      await writeSystemdUnitForAudit(home, [
-        "After=network-online.target",
-        "Wants=network-online.target",
-        "RestartSec=5",
-        `KillMode=${killMode}`,
-      ]);
+      try {
+        for (const continuation of SYSTEMD_CONTINUATIONS) {
+          await writeSystemdUnitForAudit(home, [
+            "After=network-online.target",
+            "Wants=network-online.target",
+            "RestartSec=5",
+            `KillMode=${continuation}${killMode}`,
+          ]);
 
-      const audit = await auditGatewayServiceConfig({
-        env: { HOME: home },
-        platform: "linux",
-        command: {
-          programArguments: ["/usr/bin/node", "gateway"],
-          environment: { PATH: "/usr/bin:/bin" },
-        },
-      });
-      expect(
-        audit.issues.some(
-          (entry) => entry.code === SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
-        ),
-      ).toBe(true);
-      expect(execSystemctlUser).toHaveBeenCalledWith({ HOME: home }, expect.any(Array), 10_000);
+          const audit = await auditGatewayServiceConfig({
+            env: { HOME: home },
+            platform: "linux",
+            command: {
+              programArguments: ["/usr/bin/node", "gateway"],
+              environment: { PATH: "/usr/bin:/bin" },
+            },
+          });
+          const code =
+            killMode === "process" || killMode === "none"
+              ? SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone
+              : SERVICE_AUDIT_CODES.systemdKillModeControlGroup;
+          expect(hasIssue(audit, code)).toBe(true);
+          expect(execSystemctlUser).toHaveBeenCalledWith({ HOME: home }, expect.any(Array), 10_000);
+        }
+      } finally {
+        await fs.rm(home, { recursive: true, force: true });
+      }
     },
   );
 
-  it("does not warn when KillMode is control-group", async () => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-killmode-"));
-    await writeSystemdUnitForAudit(home, [
-      "After=network-online.target",
-      "Wants=network-online.target",
-      "RestartSec=5",
-      "KillMode=control-group",
-    ]);
-    const audit = await auditGatewayServiceConfig({
-      env: { HOME: home },
-      platform: "linux",
-      command: {
-        programArguments: ["/usr/bin/node", "gateway"],
-        environment: { PATH: "/usr/bin:/bin" },
-      },
-    });
-    expect(
-      audit.issues.some((entry) => entry.code === SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone),
-    ).toBe(false);
-  });
+  it.each(SYSTEMD_CONTINUATIONS)(
+    "accepts resilient unit settings with continuation %j when the manager is unavailable",
+    async (continuation) => {
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-settings-"));
+      try {
+        await writeSystemdUnitForAudit(home, [
+          `After=basic.target ${continuation}network-online.target`,
+          `Wants=basic.target ${continuation}network-online.target`,
+          `RestartSec=${continuation}5s`,
+          `KillMode=${continuation}mixed`,
+        ]);
+        const audit = await auditGatewayServiceConfig({
+          env: { HOME: home },
+          platform: "linux",
+          command: {
+            programArguments: ["/usr/bin/node", "gateway"],
+            environment: { PATH: "/usr/bin:/bin" },
+          },
+        });
+        expect(audit.issues.filter((issue) => issue.code.startsWith("systemd-"))).toEqual([]);
+      } finally {
+        await fs.rm(home, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each([
     {
@@ -827,25 +854,6 @@ describe("auditGatewayServiceConfig", () => {
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }
-  });
-
-  it("accepts systemd RestartSec values with seconds suffixes", async () => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-restartsec-"));
-    await writeSystemdUnitForAudit(home, [
-      "After=network-online.target",
-      "Wants=network-online.target",
-      "RestartSec=5s",
-      "KillMode=control-group",
-    ]);
-    const audit = await auditGatewayServiceConfig({
-      env: { HOME: home },
-      platform: "linux",
-      command: {
-        programArguments: ["/usr/bin/node", "gateway"],
-        environment: { PATH: "/usr/bin:/bin" },
-      },
-    });
-    expect(hasIssue(audit, SERVICE_AUDIT_CODES.systemdRestartSec)).toBe(false);
   });
 
   it("flags embedded service token even when it matches config token", async () => {
@@ -1059,13 +1067,12 @@ describe("checkTokenDrift", () => {
     expect(result).toBeNull();
   });
 
-  it("detects drift when config has token but service has different token", () => {
+  it("detects token drift without choosing an installation action", () => {
     const result = checkTokenDrift({ serviceToken: "old-token", configToken: "new-token" });
     expect(result).toStrictEqual({
       code: SERVICE_AUDIT_CODES.gatewayTokenDrift,
       message:
         "Config token differs from service token. The daemon will use the old token after restart.",
-      detail: "Run `openclaw gateway install --force` to sync the token.",
       level: "recommended",
     });
   });

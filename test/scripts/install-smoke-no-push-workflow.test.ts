@@ -128,6 +128,13 @@ describe("install smoke no-push root image transport", () => {
     );
     expect(workflowIdentity.run).toContain("job.workflow_sha must be a full lowercase commit SHA");
     expect(workflowIdentity.run).not.toContain("EXPECTED_WORKFLOW_SHA");
+    expect(step(preflight, "Materialize selected-source contract resolver").with).toMatchObject({
+      repository: "${{ steps.workflow.outputs.workflow_repository }}",
+      ref: "${{ steps.workflow.outputs.workflow_sha }}",
+      path: ".release-harness",
+      "persist-credentials": false,
+      "sparse-checkout": "scripts/resolve-fs-safe-native-contract.mjs",
+    });
 
     const identityResult = spawnSync(
       "bash",
@@ -137,6 +144,7 @@ describe("install smoke no-push root image transport", () => {
         env: {
           ...process.env,
           EXPECTED_WORKFLOW_REPOSITORY: "openclaw/openclaw",
+          GITHUB_OUTPUT: "/dev/null",
           GITHUB_WORKFLOW_SHA: "a".repeat(40),
           JOB_CONTEXT: JSON.stringify({
             workflow_repository: "openclaw/openclaw",
@@ -227,14 +235,25 @@ describe("install smoke no-push root image transport", () => {
       OPENCLAW_CI_WORKFLOW_BUN_GLOBAL_INSTALL_SMOKE:
         "${{ inputs.run_bun_global_install_smoke || 'false' }}",
     });
-    expect(manifest.run).toContain(
+    const manifestRun = manifest.run;
+    expect(manifestRun).toBeDefined();
+    if (!manifestRun) {
+      throw new Error("Build install-smoke CI manifest must have a run script");
+    }
+    expect(manifestRun).toContain(
       'dockerfile_image="openclaw-dockerfile-smoke-local:${target_sha}"',
     );
-    expect(manifest.run).toContain(
+    expect(manifestRun).toContain(
       'run_bun_global_install_smoke="$workflow_bun_global_install_smoke"',
     );
-    expect(manifest.run).not.toContain("event_name");
-    expect(manifest.run).not.toContain("workflow_call");
+    expect(manifestRun).not.toContain("event_name");
+    expect(manifestRun).not.toContain("workflow_call");
+    expect(manifestRun).toContain(
+      "refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*",
+    );
+    expect(
+      manifestRun.indexOf("git fetch --quiet --unshallow --no-tags --filter=blob:none origin"),
+    ).toBeLessThan(manifestRun.indexOf("resolve-fs-safe-native-contract.mjs"));
 
     const text = readFileSync(INSTALL_SMOKE_REUSABLE, "utf8");
     expect(text).not.toContain("packages: write");

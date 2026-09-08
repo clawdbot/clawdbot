@@ -23,7 +23,7 @@ defineDiscordVoiceTests(
     emitFinalRealtimeUserTranscript,
     flushRealtimeForcedConsultTimers,
     getSessionEntry,
-    lastRealtimeBridgeParams,
+    lastRealtimeBridge,
   }) => {
     const drainConsultWork = () =>
       new Promise<void>((resolve) => {
@@ -38,16 +38,17 @@ defineDiscordVoiceTests(
           ? await createJoinedBidiFixture({ voice: { realtime: { consultPolicy: "always" } } })
           : await createJoinedAgentProxyFixture();
       const submissions: Array<Promise<PromiseSettledResult<void>>> = [];
-      const consult = (callId: string, bridgeParams = fixture.bridgeParams) => {
+      const originalSource = lastRealtimeBridge();
+      const consult = (callId: string, source = originalSource) => {
         const submission = Promise.resolve(
-          bridgeParams.onToolCall!(
+          source.bridgeParams.onToolCall!(
             {
               itemId: `item-${callId}`,
               callId,
               name: "openclaw_agent_consult",
               args: { question: "shared question" },
             },
-            realtimeSessionMock,
+            source.session,
           ),
         ).then(
           (): PromiseFulfilledResult<void> => ({ status: "fulfilled", value: undefined }),
@@ -178,16 +179,17 @@ defineDiscordVoiceTests(
           if (path === "late") {
             agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "guest answer" }] });
             beginSpeakerTurn(entry, { senderIsOwner: false, extraSystemPrompt: "guest context" });
+            const guest = lastRealtimeBridge();
             await flushRealtimeForcedConsultTimers(async () => {
-              bridgeParams.onTranscript?.("user", "shared question", true);
-              await consult("call-guest");
+              guest.bridgeParams.onTranscript?.("user", "shared question", true);
+              await consult("call-guest", guest);
             });
             expect(agentCommandMock).toHaveBeenCalledTimes(2);
             expect(agentCommandArgsAt(1)).toMatchObject({
               senderIsOwner: false,
               extraSystemPrompt: "guest context",
             });
-            expect(realtimeSessionMock.submitToolResult.mock.calls.at(-1)).toEqual([
+            expect(guest.session.submitToolResult.mock.calls.at(-1)).toEqual([
               "call-guest",
               { text: "guest answer" },
             ]);
@@ -253,7 +255,8 @@ defineDiscordVoiceTests(
       async ({ transition, path }) => {
         const fixture = await createPendingConsultFixture();
         const { manager, hostTurn, consult } = fixture;
-        let { bridgeParams, entry } = fixture;
+        const { bridgeParams } = fixture;
+        let { entry } = fixture;
         const freshTurn = createDeferred<AgentResult>();
         agentCommandMock.mockReturnValueOnce(freshTurn.promise);
         realtimeSessionMock.bridge.supportsToolResultSuppression = false;
@@ -269,13 +272,13 @@ defineDiscordVoiceTests(
             entry.stop();
             await manager.join({ guildId: "g1", channelId: "1001" });
             entry = getSessionEntry(manager);
-            bridgeParams = lastRealtimeBridgeParams();
           } else {
             bridgeParams.onEvent?.({ direction: "client", type: "session.continuity.reset" });
             bridgeParams.onReady?.();
           }
           beginSpeakerTurn(entry, { senderIsOwner: false, extraSystemPrompt: "fresh guest" });
-          const freshSubmission = consult("call-fresh", bridgeParams);
+          const fresh = lastRealtimeBridge();
+          const freshSubmission = consult("call-fresh", fresh);
           await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(2));
 
           hostTurn.reject(AbortSignal.abort().reason);
@@ -287,17 +290,17 @@ defineDiscordVoiceTests(
 
           freshTurn.resolve({ payloads: [{ text: "fresh answer" }] });
           await freshSubmission;
-          await consult("call-fresh-deduped", bridgeParams);
+          await consult("call-fresh-deduped", fresh);
           expect(agentCommandMock).toHaveBeenCalledTimes(2);
           expect(agentCommandArgsAt(1)).toMatchObject({
             senderIsOwner: false,
             extraSystemPrompt: "fresh guest",
           });
-          expect(realtimeSessionMock.submitToolResult.mock.calls).toEqual([
+          expect(fresh.session.submitToolResult.mock.calls).toEqual([
             ["call-fresh", { text: "fresh answer" }],
             ["call-fresh-deduped", { text: "fresh answer" }],
           ]);
-          expect(realtimeSessionMock.sendUserMessage).not.toHaveBeenCalled();
+          expect(fresh.session.sendUserMessage).not.toHaveBeenCalled();
           expect(loggerWarnMock).not.toHaveBeenCalled();
         } finally {
           freshTurn.resolve({ payloads: [] });

@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  hasMeaningfulConversationContent,
-  isRealConversationMessage,
-} from "./compaction-real-conversation.js";
+import { isRealConversationMessage } from "./compaction-real-conversation.js";
 import type { AgentMessage } from "./runtime/index.js";
 
 type SummaryRole = "branchSummary" | "compactionSummary";
@@ -24,7 +21,6 @@ describe("compaction real conversation classification", () => {
       } as AgentMessage;
       const messages = [summary, toolResult];
 
-      expect(hasMeaningfulConversationContent(summary)).toBe(true);
       expect(isRealConversationMessage(summary, messages, 0)).toBe(true);
       expect(isRealConversationMessage(toolResult, messages, 1)).toBe(true);
     },
@@ -35,7 +31,6 @@ describe("compaction real conversation classification", () => {
     (role) => {
       const summary = summaryMessage(role, "   ");
 
-      expect(hasMeaningfulConversationContent(summary)).toBe(false);
       expect(isRealConversationMessage(summary, [summary], 0)).toBe(false);
     },
   );
@@ -62,7 +57,6 @@ describe("compaction real conversation classification", () => {
       } as AgentMessage;
       const messages = [custom, toolResult];
 
-      expect(hasMeaningfulConversationContent(custom)).toBe(expected);
       expect(isRealConversationMessage(custom, messages, 0)).toBe(expected);
       expect(isRealConversationMessage(toolResult, messages, 1)).toBe(expected);
     },
@@ -82,5 +76,72 @@ describe("compaction real conversation classification", () => {
 
     expect(isRealConversationMessage(toolCall, [toolCall], 0)).toBe(false);
     expect(isRealConversationMessage(orphanToolResult, [orphanToolResult], 0)).toBe(false);
+  });
+
+  it.each([
+    ["thinking-only blocks", [{ type: "thinking", thinking: "checking" }]],
+    ["reasoning-only blocks", [{ type: "reasoning", summary: [] }]],
+    ["markup-wrapped heartbeat tokens", "<b>HEARTBEAT_OK</b>"],
+  ])("rejects assistant %s as conversation", (_name, content) => {
+    const message = { role: "assistant", content } as AgentMessage;
+
+    expect(isRealConversationMessage(message, [message], 0)).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "heartbeat-only user turn",
+      preceding: [{ role: "user", content: "<b>HEARTBEAT_OK</b>" }],
+      expected: false,
+    },
+    {
+      name: "meaningful first user turn",
+      preceding: [{ role: "user", content: "please inspect the repo" }],
+      expected: true,
+    },
+    {
+      name: "user turn after a silent reply",
+      preceding: [
+        { role: "assistant", content: "NO_REPLY" },
+        { role: "user", content: "please inspect the failing PR" },
+      ],
+      expected: true,
+    },
+  ])("classifies tool output after a $name", ({ preceding, expected }) => {
+    const toolResult = {
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "exec",
+      content: [{ type: "text", text: "checked" }],
+    } as AgentMessage;
+    const messages = [...preceding, toolResult] as AgentMessage[];
+
+    expect(isRealConversationMessage(toolResult, messages, preceding.length)).toBe(expected);
+  });
+
+  it("counts visible custom prompts as anchors across assistant tool calls", () => {
+    const custom = {
+      role: "custom",
+      customType: "cron-request",
+      content: "prepare the daily report",
+      display: true,
+    } as AgentMessage;
+    const toolResult = {
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "read",
+      content: [{ type: "text", text: "report source data" }],
+    } as AgentMessage;
+    const messages = [
+      custom,
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+      },
+      toolResult,
+    ] as AgentMessage[];
+
+    expect(isRealConversationMessage(custom, messages, 0)).toBe(true);
+    expect(isRealConversationMessage(toolResult, messages, 2)).toBe(true);
   });
 });

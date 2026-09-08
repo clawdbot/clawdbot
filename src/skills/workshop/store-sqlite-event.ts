@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
@@ -124,25 +123,9 @@ export function listStoredSkillProposalEvents(
     query = query.where("skill_workshop_proposal_events.proposal_id", "=", input.proposalId);
   }
   if (input.agentId) {
-    query = query.where((eb) =>
-      eb.or([
-        eb("skill_workshop_proposals.owner_agent_id", "=", input.agentId!),
-        ...(input.workspaceDir
-          ? [
-              eb.and([
-                eb("skill_workshop_proposals.owner_agent_id", "is", null),
-                eb("skill_workshop_proposals.workspace_dir", "=", path.resolve(input.workspaceDir)),
-              ]),
-            ]
-          : []),
-      ]),
-    );
-  } else if (input.workspaceDir) {
-    query = query.where(
-      "skill_workshop_proposals.workspace_dir",
-      "=",
-      path.resolve(input.workspaceDir),
-    );
+    query = query.where("skill_workshop_proposals.owner_agent_id", "=", input.agentId);
+  } else {
+    query = query.where("skill_workshop_proposals.owner_agent_id", "is not", null);
   }
   const rows = executeSqliteQuerySync(
     database.db,
