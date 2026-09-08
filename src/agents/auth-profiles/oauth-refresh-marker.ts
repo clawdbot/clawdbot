@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { hash, randomBytes } from "node:crypto";
 import type { OAuthCredential } from "./types.js";
 
 const OAUTH_REFRESH_FENCE_PREFIX = "openclaw-oauth-refresh-fence:v1:";
@@ -30,7 +30,7 @@ function buildOAuthRefreshSecretDigest(params: {
   ]);
   // Refresh markers correlate provider-issued high-entropy OAuth token generations;
   // they are not used for password storage or credential verification.
-  return createHash("sha256").update(generationInput).digest("hex"); // lgtm[js/insufficient-password-hash]
+  return hash("sha256", generationInput, "hex");
 }
 
 function parseOAuthRefreshFence(credential: OAuthRefreshFenceCredential | undefined):
