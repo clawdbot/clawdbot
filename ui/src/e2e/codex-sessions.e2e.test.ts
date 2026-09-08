@@ -5,6 +5,7 @@ import { beforeEach, expect, it } from "vitest";
 import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/index.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
+  assertCatalogCountAlignment,
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
   controlUiSessionPath,
@@ -145,7 +146,7 @@ suite.define(() => {
             {
               id: "codex",
               label: "Codex",
-              capabilities: { continueSession: true, archive: true, createSession: true },
+              capabilities: { continueSession: true, archive: true, startTerminal: true },
               hosts: [
                 {
                   hostId: "gateway:local",
@@ -225,10 +226,8 @@ suite.define(() => {
         liveRows.boundingBox(),
         catalog.boundingBox(),
       ]);
-      expect(liveRowsBox).not.toBeNull();
-      expect(catalogBox).not.toBeNull();
-      // Read the rhythm from the token instead of restating it: the guard is
-      // that catalogs are a separate group, not that the gap is any one number.
+      expect([liveRowsBox, catalogBox]).not.toContain(null);
+      // Guard that catalogs are a separate group without restating the gap token.
       const groupGap = await page.evaluate(() => {
         const sidebar = document.querySelector(".sidebar");
         return sidebar
@@ -243,6 +242,7 @@ suite.define(() => {
           path: path.join(uiProofArtifactDir, "06-coding-catalog-spacing.png"),
         });
       }
+      await assertCatalogCountAlignment(page, ["codex", "claude"]);
     } finally {
       await page.close();
     }

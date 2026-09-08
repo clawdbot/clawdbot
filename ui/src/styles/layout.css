@@ -1363,6 +1363,8 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-recent-sessions__head {
+  --sidebar-session-group-action-size: 22px;
+
   position: relative;
   display: flex;
   align-items: center;
@@ -1608,8 +1610,8 @@ openclaw-settings-save-indicator:empty {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: var(--sidebar-session-group-action-size);
+  height: var(--sidebar-session-group-action-size);
   flex: 0 0 auto;
   border: none;
   border-radius: var(--radius-sm);
@@ -1645,6 +1647,13 @@ openclaw-settings-save-indicator:empty {
   stroke-width: 1.7px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+/* Keep catalog counts on one axis when a provider cannot create sessions. */
+.sidebar-session-catalog-new-spacer {
+  width: var(--sidebar-session-group-action-size);
+  height: var(--sidebar-session-group-action-size);
+  flex: 0 0 var(--sidebar-session-group-action-size);
 }
 
 @media (hover: none), (pointer: coarse) {
