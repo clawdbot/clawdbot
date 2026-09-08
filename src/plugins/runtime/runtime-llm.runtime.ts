@@ -474,7 +474,7 @@ export function createRuntimeLlm(
 
       const [
         {
-          prepareSimpleCompletionModelForAgent,
+          acquireSimpleCompletionModelForAgent,
           completeWithPreparedSimpleCompletionModel,
           resolveSimpleCompletionSelectionForAgent,
         },
@@ -579,7 +579,7 @@ export function createRuntimeLlm(
         });
       }
 
-      const prepared = await prepareSimpleCompletionModelForAgent({
+      const prepared = await acquireSimpleCompletionModelForAgent({
         cfg,
         agentId,
         modelRef: params.model,
@@ -593,52 +593,56 @@ export function createRuntimeLlm(
         throw new Error(`Plugin LLM completion failed: ${prepared.error}`);
       }
 
-      const context = {
-        systemPrompt: buildSystemPrompt(params),
-        messages: buildMessages({
-          request: params,
-          provider: prepared.model.provider,
-          model: prepared.model.id,
-          api: prepared.model.api,
-        }),
-      };
+      try {
+        const context = {
+          systemPrompt: buildSystemPrompt(params),
+          messages: buildMessages({
+            request: params,
+            provider: prepared.model.provider,
+            model: prepared.model.id,
+            api: prepared.model.api,
+          }),
+        };
 
-      const result = await completeWithPreparedSimpleCompletionModel({
-        model: prepared.model,
-        auth: prepared.auth,
-        cfg,
-        context,
-        options: {
-          maxTokens: asFiniteNumber(params.maxTokens),
-          temperature: asFiniteNumber(params.temperature),
-          ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
-          signal: params.signal,
-        },
-      });
-
-      const text = result.content
-        .filter((c): c is { type: "text"; text: string } => c.type === "text")
-        .map((c) => c.text)
-        .join("");
-      return finalizePluginLlmCompletion({
-        cfg,
-        hostPluginId: pluginPolicyId,
-        // Provider failures resolve as messages; only visible successful output owns usage.
-        suppressUsage: !text.trim() || !["stop", "length", "toolUse"].includes(result.stopReason),
-        rawUsage: result.usage,
-        logger,
-        result: {
-          text,
-          provider: prepared.selection.provider,
-          model: prepared.selection.modelId,
-          agentId,
-          execution: {
-            mode: "direct-provider",
-            owner: { kind: "provider", id: prepared.selection.provider },
+        const result = await completeWithPreparedSimpleCompletionModel({
+          model: prepared.model,
+          auth: prepared.auth,
+          cfg,
+          context,
+          options: {
+            maxTokens: asFiniteNumber(params.maxTokens),
+            temperature: asFiniteNumber(params.temperature),
+            ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
+            signal: params.signal,
           },
-          audit,
-        },
-      });
+        });
+
+        const text = result.content
+          .filter((c): c is { type: "text"; text: string } => c.type === "text")
+          .map((c) => c.text)
+          .join("");
+        return finalizePluginLlmCompletion({
+          cfg,
+          hostPluginId: pluginPolicyId,
+          // Provider failures resolve as messages; only visible successful output owns usage.
+          suppressUsage: !text.trim() || !["stop", "length", "toolUse"].includes(result.stopReason),
+          rawUsage: result.usage,
+          logger,
+          result: {
+            text,
+            provider: prepared.selection.provider,
+            model: prepared.selection.modelId,
+            agentId,
+            execution: {
+              mode: "direct-provider",
+              owner: { kind: "provider", id: prepared.selection.provider },
+            },
+            audit,
+          },
+        });
+      } finally {
+        prepared.release();
+      }
     },
   };
 }
