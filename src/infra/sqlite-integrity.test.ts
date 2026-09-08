@@ -1,3 +1,4 @@
+import { fork } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -13,6 +14,11 @@ import {
   confirmSqliteFileIntegrity,
   isTerminalSqliteIntegrityError,
 } from "./sqlite-integrity.js";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, fork: vi.fn(actual.fork) };
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -238,6 +244,52 @@ describe("confirmSqliteFileIntegrity", () => {
 
 describe("SQLite integrity child", () => {
   afterEach(() => vi.restoreAllMocks());
+  it.each([
+    { label: "empty", paddingBytes: null, minimumSize: 0, maximumSize: 0, timeout: 30_000 },
+    {
+      label: "small",
+      paddingBytes: 0,
+      minimumSize: 1,
+      maximumSize: 32 * 1024 * 1024,
+      timeout: 31_000,
+    },
+    {
+      label: "over 64 MiB",
+      paddingBytes: 64 * 1024 * 1024,
+      minimumSize: 64 * 1024 * 1024 + 1,
+      maximumSize: 96 * 1024 * 1024,
+      timeout: 33_000,
+    },
+  ])(
+    "starts the child with the size budget for a $label database",
+    async ({ paddingBytes, minimumSize, maximumSize, timeout }) => {
+      const source = path.join(tempDirs.make("openclaw-integrity-budget-"), "source.sqlite");
+      const db = new (requireNodeSqlite().DatabaseSync)(source);
+      try {
+        if (paddingBytes !== null) {
+          db.exec("CREATE TABLE padding (data BLOB)");
+          db.prepare("INSERT INTO padding VALUES (zeroblob(?))").run(paddingBytes);
+        }
+      } finally {
+        db.close();
+      }
+      const size = fs.statSync(source).size;
+      expect(size).toBeGreaterThanOrEqual(minimumSize);
+      expect(size).toBeLessThanOrEqual(maximumSize);
+      vi.mocked(fork).mockClear();
+
+      await expect(
+        assertSqliteIntegrityInWorker(source, 250, new AbortController().signal),
+      ).resolves.toBeUndefined();
+
+      expect(fork).toHaveBeenCalledExactlyOnceWith(
+        expect.any(URL),
+        [],
+        expect.objectContaining({ timeout, killSignal: "SIGKILL" }),
+      );
+    },
+  );
+
   it("kills a stuck scan at its deadline before releasing ownership", async () => {
     const root = tempDirs.make("openclaw-integrity-timeout-");
     const source = path.join(root, "source.sqlite");
@@ -254,7 +306,7 @@ describe("SQLite integrity child", () => {
     await expect(
       assertSqliteIntegrityInWorker(source, 250, new AbortController().signal),
     ).rejects.toThrow(
-      /integrity check timed out after 30 seconds.*Stop the Gateway service.*lastObservedPhase=checking/,
+      `SQLite integrity check timed out after 31 seconds (budget for 15 B) for ${source}. Stop the Gateway service and other OpenClaw processes using this database, then retry; if already stopped, check storage performance. (lastObservedPhase=checking)`,
     );
     expect(performance.now() - started).toBeLessThan(33_000);
     expect(fs.readFileSync(source, "utf8")).toBe("retained source");

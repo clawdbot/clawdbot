@@ -9,8 +9,19 @@ const SQLITE_READONLY_STDERR_TAIL_CHARS = 4_000;
 // A 300 MiB synthetic database took 1.13–3.15 s to snapshot and <1 s to
 // integrity-check. Leave storage headroom after admission has excluded writers.
 export const SQLITE_INSPECTION_TIMEOUT_MS = 30_000;
+const SQLITE_INTEGRITY_TIMEOUT_MAX_MS = 30 * 60_000;
 
-export function sqliteInspectionTimeoutError(operation: string, pathname: string): Error {
+export function resolveSqliteIntegrityTimeoutMs(sizeBytes: number | bigint): number {
+  // Full integrity_check + foreign_key_check reads the whole file at least once.
+  // 32 MiB/s is a conservative cold-cache floor on cloud block storage; the
+  // fixed 30 seconds covers child startup and shutdown.
+  return Math.min(
+    SQLITE_INSPECTION_TIMEOUT_MS + Math.ceil(Number(sizeBytes) / (32 * 1024 * 1024)) * 1000,
+    SQLITE_INTEGRITY_TIMEOUT_MAX_MS,
+  );
+}
+
+function sqliteInspectionTimeoutError(operation: string, pathname: string): Error {
   return new Error(
     `SQLite ${operation} timed out after 30 seconds for ${pathname}. Stop the Gateway service and other OpenClaw processes using this database, then retry; if already stopped, check storage performance.`,
   );
