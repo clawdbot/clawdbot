@@ -21,14 +21,11 @@ import {
   projectContextEngineAssemblyForCodex,
   type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import type { CodexAttemptContext } from "./run-attempt-context.js";
 import { estimateCodexAppServerProjectedTurnTokens } from "./run-attempt-lifecycle.js";
-import {
-  isNonEmptyString,
-  joinPresentSections,
-  prependCurrentInboundContext,
-} from "./run-attempt-state.js";
+import { isNonEmptyString, prependCurrentInboundContext } from "./run-attempt-state.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
 import {
   buildContextEngineBinding,
@@ -53,7 +50,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     buildActiveContextEngineRuntimeContext,
     baseDeveloperInstructions,
     buildOpenClawPromptContext,
-    skillsCollaborationInstructions,
+    skillsInstructions,
     promptState,
     codexContextProjectionMaxChars,
     codexContinuityProjectionMaxChars,
@@ -370,12 +367,15 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     promptBuild: firstPromptBuild,
     codexTurnPromptText: decorateCodexTurnPromptText(firstPromptBuild),
   };
+  // Observability view of the whole developer surface the model sees (reports,
+  // trajectory, size estimates). The lifecycle receives the generic policy and the
+  // skill catalog separately; joining them here must never feed thread requests.
   const buildRenderedCodexDeveloperInstructions = () =>
     joinPresentSections(
       turnState.promptBuild.developerInstructions,
+      skillsInstructions,
       buildTurnCollaborationMode(params, {
         turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
-        skillsCollaborationInstructions,
         memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
       }).settings.developer_instructions ?? undefined,
     );
@@ -553,7 +553,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       developerInstructions: buildRenderedCodexDeveloperInstructions(),
       workspaceBootstrapContext,
       omitWorkspaceReferences,
-      skillsPrompt: skillsCollaborationInstructions ? (params.skillsSnapshot?.prompt ?? "") : "",
+      skillsPrompt: skillsInstructions ? (params.skillsSnapshot?.prompt ?? "") : "",
       tools: toolBridge.availableSpecs,
     });
   const systemPromptReport = buildSystemPromptReport();

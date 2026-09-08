@@ -1058,9 +1058,22 @@ Codex harness forwards the other bootstrap files as developer instructions:
   collaboration instructions. Native Codex subagents do not inherit them,
   which keeps subagent turns from picking up the parent agent's persona and
   user profile.
-- The compact loaded OpenClaw skills list is also forwarded as turn-scoped
-  collaboration developer instructions, so native Codex subagents do not
-  inherit it either.
+- The compact loaded OpenClaw skills list is forwarded with the thread
+  developer instructions, after the generic policy. Model-owned
+  collaboration-mode messages cannot replace this catalog. The catalog is
+  refreshable context rather than generic policy: a changed catalog resumes a
+  persistent thread through the normal policy handoff, while a live incognito
+  thread receives the complete current catalog as an injected developer
+  message and keeps its conversation. Compaction rebuilds a thread's initial
+  context from its creation-time developer instructions and discards injected
+  developer messages, so an incognito thread whose catalog was refreshed in
+  place is sent the current catalog again as soon as a compaction completes,
+  including a compaction inside a turn. That turn's own continuation request
+  may already have been built, so the model reliably sees the restored catalog
+  from the following request onward. A generic policy change on a live
+  incognito thread still refuses the turn. Native Codex subagents can inherit
+  the catalog with the parent thread's developer instructions; this does not
+  move workspace persona or memory context into that carrier.
 - Heartbeat turns receive generic initiative guidance through collaboration
   mode. Monitor cron scratch is appended to the heartbeat prompt instead of
   injected as workspace context.

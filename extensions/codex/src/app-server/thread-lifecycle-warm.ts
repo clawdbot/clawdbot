@@ -36,7 +36,10 @@ import type {
   CodexThreadFinalConfigPatchResult,
 } from "./thread-lifecycle-types.js";
 import { retainCodexAppServerBindingSubscription } from "./thread-ownership.js";
-import { CodexIncognitoPolicyChangeError } from "./thread-policy.js";
+import {
+  CodexIncognitoPolicyChangeError,
+  refreshCodexThreadSkillsCatalog,
+} from "./thread-policy.js";
 import { buildThreadResumeParams } from "./thread-requests.js";
 
 type CodexWarmThreadReuseParams = CodexThreadRequestContext & {
@@ -278,6 +281,7 @@ export async function tryReuseCodexLiveThread(
         appServer: params.appServer,
         dynamicTools: params.dynamicTools,
         developerInstructions: params.developerInstructions,
+        skillsInstructions: params.skillsInstructions,
         config: applyCodexNativeSkillIsolation(resumeConfig, nativeSkillIsolation),
         nativeCodeModeEnabled: params.nativeCodeModeEnabled,
         nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
@@ -304,7 +308,13 @@ export async function tryReuseCodexLiveThread(
           resumeAuthProfileId,
           dynamicToolsFingerprint,
         );
-    if (incognito && retainedThread.ephemeralPolicy !== resumeParams.developerInstructions) {
+    // Ephemeral threads cannot cold-resume, so only the exact creation policy may
+    // continue. The skill catalog is refreshed in place below, never compared here.
+    const ephemeralPolicy = retainedThread.ephemeralPolicy;
+    if (
+      incognito &&
+      (!ephemeralPolicy || ephemeralPolicy.developerInstructions !== params.developerInstructions)
+    ) {
       preserveSubscription = true;
       throw new CodexIncognitoPolicyChangeError();
     }
@@ -325,6 +335,23 @@ export async function tryReuseCodexLiveThread(
       assertCurrent: assertWarmOwner,
     });
     assertWarmOwner();
+    if (ephemeralPolicy && ephemeralPolicy.skillsInstructions !== params.skillsInstructions) {
+      try {
+        await refreshCodexThreadSkillsCatalog({
+          client: params.client,
+          threadId: binding.threadId,
+          skillsInstructions: params.skillsInstructions,
+          timeoutMs: params.appServer.requestTimeoutMs,
+          signal: params.signal,
+          assertCurrent: assertWarmOwner,
+        });
+      } catch (error) {
+        // The ephemeral conversation survives a failed catalog handoff; the retained
+        // record still names the old catalog, so the next turn delivers it again.
+        preserveSubscription = true;
+        throw error;
+      }
+    }
     const nativeHookRelayGeneration =
       prebuiltFinalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration;
     const model = startModelSelection.model;
@@ -372,7 +399,10 @@ export async function tryReuseCodexLiveThread(
           ? { cwd: params.cwd, model, nativeHookRelayGeneration, environmentSelectionFingerprint }
           : {}),
         liveThreadConfigFingerprint,
-        liveThreadEphemeralPolicy: retainedThread.ephemeralPolicy,
+        liveThreadEphemeralPolicy: ephemeralPolicy && {
+          ...ephemeralPolicy,
+          skillsInstructions: params.skillsInstructions,
+        },
         liveThreadOwnership: retainedThread,
         ...(!incognito && retainedThread.serviceTier && resumeParams.serviceTier === undefined
           ? { clearInheritedServiceTier: true }

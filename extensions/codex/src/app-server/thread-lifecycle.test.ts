@@ -2385,22 +2385,18 @@ describe("Codex app-server turn input image sanitizing", () => {
     );
   });
 
-  it("places memory collaboration instructions before skills", () => {
+  it("places workspace collaboration instructions before memory", () => {
     const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
       cwd: "/repo",
       appServer: createAppServerOptions() as never,
       turnScopedDeveloperInstructions: "SOUL.md turn-only context",
       memoryCollaborationInstructions: "MEMORY.md pointer",
-      skillsCollaborationInstructions: "<available_skills>",
     });
     const developerInstructions = request.collaborationMode?.settings.developer_instructions ?? "";
 
     expect(developerInstructions.indexOf("SOUL.md turn-only context")).toBeLessThan(
       developerInstructions.indexOf("MEMORY.md pointer"),
-    );
-    expect(developerInstructions.indexOf("MEMORY.md pointer")).toBeLessThan(
-      developerInstructions.indexOf("<available_skills>"),
     );
   });
 

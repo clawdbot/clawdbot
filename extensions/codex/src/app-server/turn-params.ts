@@ -69,7 +69,6 @@ export function buildTurnStartParams(
     model?: string | null;
     modelProvider?: string | null;
     turnScopedDeveloperInstructions?: string;
-    skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
     preserveNativeTurnSettings?: boolean;
     clearInheritedServiceTier?: boolean;
@@ -92,7 +91,6 @@ export function buildTurnStartParams(
     ? buildTurnCollaborationMode(params, {
         model: modelSelection.model,
         turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
-        skillsCollaborationInstructions: options.skillsCollaborationInstructions,
         memoryCollaborationInstructions: options.memoryCollaborationInstructions,
       })
     : undefined;
@@ -204,7 +202,6 @@ export function buildTurnCollaborationMode(
   options: {
     model?: string;
     turnScopedDeveloperInstructions?: string;
-    skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
   } = {},
 ): CodexTurnCollaborationMode {
@@ -227,14 +224,12 @@ function buildTurnScopedCollaborationInstructions(
   params: EmbeddedRunAttemptParams,
   options: {
     turnScopedDeveloperInstructions?: string;
-    skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
   } = {},
 ): string | null {
   const contextInstructions = joinPresentSections(
     options.turnScopedDeveloperInstructions,
     options.memoryCollaborationInstructions,
-    options.skillsCollaborationInstructions,
   );
   if (params.trigger === "cron") {
     return joinPresentSections(buildCronCollaborationInstructions(), contextInstructions);

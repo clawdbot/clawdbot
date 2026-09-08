@@ -10,6 +10,7 @@ import { resolveCodexCommandDeps } from "../command-handler-deps.js";
 import {
   claimCodexAppServerLiveThread,
   ensureCodexAppServerClientRuntime,
+  hasCodexAppServerLiveThread,
   isCodexAppServerLiveThreadClaimed,
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
@@ -2488,6 +2489,90 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(resumed.liveThreadConfigFingerprint).not.toBe(started.liveThreadConfigFingerprint);
   });
 
+  it("resumes a retained persistent thread with the refreshed skill catalog", async () => {
+    const sessionFile = path.join(tempDir, "warm-skills-session.jsonl");
+    const workspaceDir = path.join(tempDir, "warm-skills-workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const respond = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-warm-skills");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond,
+    });
+    const { client, request } = fixture;
+    const common = {
+      client,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+      developerInstructions: "generic policy",
+    };
+    const firstSkills = "## OpenClaw Skills\n\nweather";
+    const secondSkills = "## OpenClaw Skills\n\nweather (edited description)";
+    const started = await startOrResumeThread({ ...common, skillsInstructions: firstSkills });
+    // The catalog rides the thread developer carrier, after the generic policy.
+    expect(request.mock.calls.find(([method]) => method === "thread/start")?.[1]).toMatchObject({
+      developerInstructions: `generic policy\n\n${firstSkills}`,
+    });
+    await retainCodexAppServerLiveThread(
+      client,
+      started.threadId,
+      undefined,
+      started.liveThreadConfigFingerprint,
+    );
+
+    // Editing a skill must reach a live persistent conversation. The catalog is part
+    // of the thread carrier, so warm reuse is invalidated and the same thread is
+    // cold-resumed with the new catalog instead of losing the conversation.
+    const resumed = await startOrResumeThread({ ...common, skillsInstructions: secondSkills });
+
+    expect(resumed).toMatchObject({
+      threadId: "thread-warm-skills",
+      lifecycle: { action: "resumed" },
+    });
+    expect(resumed.liveThreadConfigFingerprint).not.toBe(started.liveThreadConfigFingerprint);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+      "config/read",
+      "configRequirements/read",
+      "thread/read",
+      "thread/unsubscribe",
+      "thread/resume",
+      "thread/inject_items",
+    ]);
+    const resumeParams = request.mock.calls.find(([method]) => method === "thread/resume")?.[1];
+    expect(resumeParams).toMatchObject({
+      developerInstructions: `generic policy\n\n${secondSkills}`,
+    });
+    // The refreshed catalog also reaches the live conversation through the existing
+    // generic policy handoff, so the resumed turn is not answered from the old catalog.
+    const injected = request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1];
+    expect(injected).toMatchObject({
+      threadId: "thread-warm-skills",
+      items: [
+        {
+          type: "message",
+          role: "developer",
+          content: [{ type: "input_text", text: expect.stringContaining(secondSkills) }],
+        },
+      ],
+    });
+  });
+
   it("releases and resumes a retained thread when its auth profile changes", async () => {
     const sessionFile = path.join(tempDir, "warm-auth-session.jsonl");
     const workspaceDir = path.join(tempDir, "warm-auth-workspace");
@@ -2836,6 +2921,144 @@ describe("Codex app-server thread lifecycle bindings", () => {
       const threadCalls = request.mock.calls.filter(([method]) => method.startsWith("thread/"));
       expect(threadCalls.map(([method]) => method)).toEqual(["thread/start"]);
       expect(threadCalls[0]?.[1]).toEqual(expect.objectContaining({ ephemeral: true }));
+    },
+  );
+
+  it.each([
+    { change: "skills", policy: "generic policy", skills: "## OpenClaw Skills\n\nedited weather" },
+    { change: "policy", policy: "generic policy v2", skills: "## OpenClaw Skills\n\nweather" },
+    { change: "skills", policy: "generic policy", skills: undefined },
+  ] as const)(
+    "refreshes the live incognito skill catalog but refuses generic policy drift ($change: $skills)",
+    async ({ change, policy, skills }) => {
+      const sessionFile = path.join(tempDir, "incognito-session.jsonl");
+      const workspaceDir = path.join(tempDir, "incognito-workspace");
+      const params = createParams(sessionFile, workspaceDir);
+      params.sessionKey = "agent:main:dashboard:incognito-skill-refresh";
+      const request = vi.fn(async (method: string, _params?: unknown) => {
+        if (method === "config/read") {
+          return { layers: [], config: { mcp_servers: {} } };
+        }
+        if (method === "configRequirements/read") {
+          return { requirements: null };
+        }
+        if (method === "thread/start") {
+          return threadStartResult("thread-incognito");
+        }
+        if (method === "thread/inject_items") {
+          return {};
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const client = {
+        getInstanceId: () => "client-incognito",
+        request,
+        addNotificationHandler: () => () => undefined,
+        addRequestHandler: () => () => undefined,
+        addCloseHandler: () => () => undefined,
+      } as never;
+      ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+      const common = {
+        client,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+        userMcpServersEnabled: false,
+      };
+      const firstSkills = "## OpenClaw Skills\n\nweather";
+      const first = await startOrResumeThread({
+        ...common,
+        developerInstructions: "generic policy",
+        skillsInstructions: firstSkills,
+      });
+      expect(first.liveThreadEphemeralPolicy).toEqual({
+        developerInstructions: "generic policy",
+        skillsInstructions: firstSkills,
+        // Creation carries the catalog natively, so compaction restores this one.
+        nativeSkillsInstructions: firstSkills,
+      });
+      expect(request.mock.calls.find(([method]) => method === "thread/start")?.[1]).toEqual(
+        expect.objectContaining({
+          ephemeral: true,
+          developerInstructions: `generic policy\n\n${firstSkills}`,
+        }),
+      );
+      await retainCodexAppServerLiveThread(
+        client,
+        first.threadId,
+        undefined,
+        first.liveThreadConfigFingerprint,
+        null,
+        first.liveThreadEphemeralPolicy,
+      );
+      const threadCalls = () =>
+        request.mock.calls
+          .filter(([method]) => method.startsWith("thread/"))
+          .map(([method, requestParams]) => [method, requestParams]);
+      const secondTurn = { ...common, developerInstructions: policy, skillsInstructions: skills };
+
+      if (change === "policy") {
+        await expect(startOrResumeThread(secondTurn)).rejects.toBeInstanceOf(
+          CodexIncognitoPolicyChangeError,
+        );
+        expect(threadCalls().map(([method]) => method)).toEqual(["thread/start"]);
+        // The refusal keeps the ephemeral conversation retained for a corrected turn.
+        expect(hasCodexAppServerLiveThread(client, first.threadId)).toBe(true);
+        return;
+      }
+
+      const second = await startOrResumeThread(secondTurn);
+      expect(second).toMatchObject({
+        threadId: first.threadId,
+        lifecycle: { action: "resumed" },
+        liveThreadEphemeralPolicy: {
+          developerInstructions: "generic policy",
+          skillsInstructions: skills,
+          // A refresh never rewrites native instructions, so the creation-time
+          // catalog stays recorded as the one compaction will restore.
+          nativeSkillsInstructions: firstSkills,
+        },
+      });
+      expect(threadCalls()).toEqual([
+        ["thread/start", expect.objectContaining({ ephemeral: true })],
+        [
+          "thread/inject_items",
+          {
+            threadId: first.threadId,
+            items: [
+              {
+                type: "message",
+                role: "developer",
+                content: [
+                  {
+                    type: "input_text",
+                    text: expect.stringContaining(
+                      skills ?? "The current OpenClaw skills catalog is empty",
+                    ),
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      ]);
+      // The delivered catalog travels with the binding so cleanup retains it and
+      // an unchanged catalog on the next turn is not re-delivered.
+      await retainCodexAppServerLiveThread(
+        client,
+        second.threadId,
+        second.liveThreadOwnership?.release,
+        second.liveThreadConfigFingerprint,
+        null,
+        second.liveThreadEphemeralPolicy,
+      );
+      const third = await startOrResumeThread(secondTurn);
+      expect(third.lifecycle).toEqual({ action: "resumed" });
+      expect(threadCalls().map(([method]) => method)).toEqual([
+        "thread/start",
+        "thread/inject_items",
+      ]);
     },
   );
 

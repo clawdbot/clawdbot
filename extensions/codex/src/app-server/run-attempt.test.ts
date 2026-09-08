@@ -1724,7 +1724,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(instructions).not.toContain("Unscoped structured command guidance.");
     expect(instructions).not.toContain("OpenClaw main command guidance.");
   });
-  it("passes OpenClaw skills as turn collaboration developer instructions", async () => {
+  it("passes OpenClaw skills independently of model-owned collaboration instructions", async () => {
     const llmInput = vi.fn();
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "llm_input", handler: llmInput }]),
@@ -1759,7 +1759,7 @@ describe("runCodexAppServerAttempt", () => {
     const result = await run;
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as { developerInstructions?: string };
-    expect(threadStartParams.developerInstructions).not.toContain("<available_skills>");
+    expect(threadStartParams.developerInstructions).toContain(params.skillsSnapshot.prompt);
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as {
       input?: Array<{ text?: string }>;
@@ -1771,8 +1771,8 @@ describe("runCodexAppServerAttempt", () => {
     };
     const collaborationInstructions =
       turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
-    expect(collaborationInstructions).toContain("## OpenClaw Skills");
-    expect(collaborationInstructions).toContain("<available_skills>");
+    expect(collaborationInstructions).not.toContain("## OpenClaw Skills");
+    expect(collaborationInstructions).not.toContain("<available_skills>");
     const inputText = turnStartParams.input?.[0]?.text ?? "";
     expect(inputText).not.toContain("## OpenClaw Skills");
     expect(inputText).not.toContain("<available_skills>");

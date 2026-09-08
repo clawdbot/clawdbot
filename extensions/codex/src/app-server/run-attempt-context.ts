@@ -15,7 +15,7 @@ import {
   buildCodexWorkspaceBootstrapContext,
   getCodexWorkspaceMemoryToolNames,
   readMirroredSessionHistoryMessages,
-  renderCodexSkillsCollaborationInstructions,
+  renderCodexSkillsInstructions,
 } from "./attempt-context.js";
 import {
   resolveCodexContextEngineProjectionMaxChars,
@@ -23,9 +23,9 @@ import {
   resolveCodexContinuityProjectionMaxChars,
   type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
-import { joinPresentSections } from "./run-attempt-state.js";
 import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
 import {
   buildDeveloperInstructions,
@@ -179,6 +179,12 @@ export async function prepareCodexAttemptContext(
     ? (connection.mutable.startupBinding?.agentWorkspaceDeveloperInstructions ??
       workspaceBootstrapContext.threadDeveloperInstructions)
     : undefined;
+  // The catalog joins the thread developer carrier at request build; it stays out
+  // of the generic policy so a catalog refresh never reads as a policy change.
+  const skillsInstructions = renderCodexSkillsInstructions({
+    attempt: runtimeParams,
+    skillsPrompt: params.skillsSnapshot?.prompt,
+  });
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {
       dynamicTools: toolBridge.availableSpecs,
@@ -199,10 +205,6 @@ export async function prepareCodexAttemptContext(
         : undefined,
       watchedSessionsContext,
     });
-  const skillsCollaborationInstructions = renderCodexSkillsCollaborationInstructions({
-    attempt: runtimeParams,
-    skillsPrompt: params.skillsSnapshot?.prompt,
-  });
   const promptState = {
     promptText: params.prompt,
     promptContextRange: undefined as CodexProjectedContextRange | undefined,
@@ -239,7 +241,7 @@ export async function prepareCodexAttemptContext(
     agentWorkspaceDeveloperInstructions,
     baseDeveloperInstructions,
     buildOpenClawPromptContext,
-    skillsCollaborationInstructions,
+    skillsInstructions,
     promptState,
     codexContextProjectionMaxChars,
     codexContinuityProjectionMaxChars,
