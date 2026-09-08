@@ -99,6 +99,7 @@ const PLUGINS_DOCKER_CLAWHUB_PATH = "scripts/e2e/lib/plugins/clawhub.sh";
 const PLUGINS_DOCKER_ASSERTIONS_PATH = "scripts/e2e/lib/plugins/assertions.mjs";
 const PLUGINS_DOCKER_NPM_REGISTRY_PATH = "scripts/e2e/lib/plugins/npm-registry-server.mjs";
 const PLUGIN_UPDATE_DOCKER_E2E_PATH = "scripts/e2e/plugin-update-unchanged-docker.sh";
+const PLUGIN_UPDATE_CORRUPT_DOCKER_E2E_PATH = "scripts/e2e/update-corrupt-plugin-docker.sh";
 const PLUGIN_UPDATE_SCENARIO_PATH = "scripts/e2e/lib/plugin-update/unchanged-scenario.sh";
 const PLUGIN_UPDATE_CORRUPT_SCENARIO_PATH =
   "scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh";
@@ -5899,6 +5900,10 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
         "scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs",
       ],
       [UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "scripts/e2e/lib/upgrade-survivor/assertions.mjs"],
+      [
+        PLUGIN_UPDATE_CORRUPT_DOCKER_E2E_PATH,
+        "scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh",
+      ],
     ]) {
       const runner = readFileSync(runnerPath, "utf8");
       expect(runner).toContain(`openclaw_frozen_target_source_has_path`);
