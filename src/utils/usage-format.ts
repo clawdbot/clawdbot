@@ -29,6 +29,7 @@ import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import type { UsageCacheStatus } from "../infra/session-cost-usage.types.js";
 import {
   modelCatalogPricingFingerprint,
   resolveModelPricing,
@@ -73,6 +74,13 @@ export function formatUsd(value?: number): string | undefined {
     return `$${value.toFixed(2)}`;
   }
   return `$${value.toFixed(4)}`;
+}
+
+/** Prefix aggregate totals with their recorded cache-readiness notice. */
+export function formatCostUsageCachePrefix(cacheStatus?: UsageCacheStatus): string {
+  return cacheStatus && cacheStatus.status !== "fresh"
+    ? `Usage totals may be incomplete (${cacheStatus.status}). Run this command again later.\n`
+    : "";
 }
 
 function normalizeRawModelKey(provider: string, model: string): string {

@@ -191,6 +191,53 @@ describe("handleUsageCommand", () => {
     );
   });
 
+  it.each([
+    ["cold", "refreshing", 0, 2],
+    ["refreshing", "refreshing", 4.56, 2],
+    ["refreshing-current", "refreshing", 4.56, 0],
+    ["partial", "partial", 4.56, 2],
+    ["stale", "stale", 0, 2],
+    ["empty", "fresh", 0, 0],
+    ["fresh", "fresh", 4.56, 0],
+    ["legacy", undefined, 4.56, 0],
+  ] as const)(
+    "qualifies %s aggregate costs without changing the session total",
+    async (_name, status, totalCost, pendingFiles) => {
+      const totals = buildCostTotals({ totalCost });
+      loadCostUsageSummaryMock.mockResolvedValue({
+        updatedAt: 1,
+        days: 30,
+        daily: [],
+        totals,
+        ...(status
+          ? {
+              cacheStatus: {
+                status,
+                cachedFiles: totalCost === 0 ? 0 : 1,
+                pendingFiles,
+                staleFiles: pendingFiles,
+              },
+            }
+          : {}),
+      });
+
+      const result = await handleUsageCommand(buildUsageParams(), true);
+
+      expect(result?.shouldContinue).toBe(false);
+      expect(loadSessionCostSummaryMock).toHaveBeenCalledOnce();
+      expect(loadCostUsageSummaryMock).toHaveBeenCalledOnce();
+      const costLabel = totalCost === 0 ? "$0.0000" : "$4.56";
+      const expectedLines = ["💸 Usage cost", "Session $1.23 · 100 tokens"];
+      if (status && status !== "fresh") {
+        expectedLines.push(
+          `Usage totals may be incomplete (${status}). Run this command again later.`,
+        );
+      }
+      expectedLines.push("Today n/a", `Last 30d ${costLabel}`);
+      expect(result?.reply?.text).toBe(expectedLines.join("\n"));
+    },
+  );
+
   it("keeps the current agent for an unqualified global session key", async () => {
     const params = buildUsageParams();
     params.agentId = "other";

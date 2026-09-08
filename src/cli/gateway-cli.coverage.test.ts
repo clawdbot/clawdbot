@@ -6,6 +6,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvOverride } from "../config/test-helpers.js";
+import type { CostUsageSummary } from "../infra/session-cost-usage.js";
 import { ExpectedCliError } from "./failure-output.js";
 import { registerGatewayCli } from "./gateway-cli.js";
 
@@ -285,26 +286,85 @@ describe("gateway-cli coverage", () => {
     );
   });
 
-  it.each(["refreshing", "partial", "stale"] as const)(
-    "returns the first usage-cost RPC result when the cache is %s",
-    async (status) => {
-      const summary = {
-        totals: { totalTokens: 100, totalCost: 0.1 },
-        cacheStatus: { status, cachedFiles: 0, pendingFiles: 2 },
-      };
-      callGateway.mockResolvedValue(summary);
+  describe.each([false, true])("usage-cost completeness (json=%s)", (json) => {
+    it.each([
+      ["cold", "refreshing", 0, 2],
+      ["refreshing", "refreshing", 100, 2],
+      ["refreshing-current", "refreshing", 100, 0],
+      ["partial", "partial", 100, 2],
+      ["stale", "stale", 0, 2],
+      ["empty", "fresh", 0, 0],
+      ["fresh", "fresh", 100, 0],
+      ["legacy", undefined, 100, 0],
+    ] as const)(
+      "preserves the first %s result",
+      async (_name, status, totalTokens, pendingFiles) => {
+        const totalCost = totalTokens === 0 ? 0 : 0.1;
+        const totals = {
+          input: totalTokens,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens,
+          totalCost,
+          inputCost: totalCost,
+          outputCost: 0,
+          cacheReadCost: 0,
+          cacheWriteCost: 0,
+          missingCostEntries: 0,
+        };
+        const summary: CostUsageSummary = {
+          updatedAt: 1,
+          days: 7,
+          daily: [{ date: "2026-09-01", ...totals }],
+          totals,
+          ...(status
+            ? {
+                cacheStatus: {
+                  status,
+                  cachedFiles: totalTokens === 0 ? 0 : 1,
+                  pendingFiles,
+                  staleFiles: pendingFiles,
+                },
+              }
+            : {}),
+        };
+        callGateway.mockResolvedValue(summary);
 
-      await runGatewayCommand(["gateway", "usage-cost", "--all-agents", "--days", "7", "--json"]);
+        await runGatewayCommand([
+          "gateway",
+          "usage-cost",
+          "--all-agents",
+          "--days",
+          "7",
+          ...(json ? ["--json"] : []),
+        ]);
 
-      expect(callGateway).toHaveBeenCalledOnce();
-      expect(firstMockArg(callGateway)).toMatchObject({
-        method: "usage.cost",
-        params: { days: 7, agentScope: "all" },
-        timeoutMs: 10_000,
-      });
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(summary);
-    },
-  );
+        expect(callGateway).toHaveBeenCalledOnce();
+        expect(firstMockArg(callGateway)).toMatchObject({
+          method: "usage.cost",
+          params: { days: 7, agentScope: "all" },
+          timeoutMs: 10_000,
+        });
+        if (json) {
+          expect(defaultRuntime.writeJson).toHaveBeenCalledWith(summary);
+          return;
+        }
+        const output = runtimeLogs.join("\n");
+        const costLabel = totalTokens === 0 ? "$0.0000" : "$0.10";
+        expect(output).toContain(`Total: ${costLabel} · ${totalTokens} tokens`);
+        expect(output).toContain(`Latest day: 2026-09-01 · ${costLabel} · ${totalTokens} tokens`);
+        if (status && status !== "fresh") {
+          expect(output).toContain(
+            `Usage totals may be incomplete (${status}). Run this command again later.\nTotal: ${costLabel} · ${totalTokens} tokens`,
+          );
+        } else {
+          expect(output).not.toContain("incomplete");
+          expect(output).not.toContain("Run this command again later.");
+        }
+      },
+    );
+  });
 
   it("rejects combining --agent with --all-agents for usage-cost", async () => {
     callGateway.mockClear();
