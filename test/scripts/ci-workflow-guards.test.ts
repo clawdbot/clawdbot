@@ -16045,6 +16045,25 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(ensurePlaywrightStep.run).toContain("scripts/ensure-playwright-chromium.mts");
     expect(ensurePlaywrightStep.run).toContain("scripts/ensure-playwright-chromium.mjs");
+    const prepareSandboxStep = expectDefined(
+      qaShardJob.steps.find(
+        (step: WorkflowStep) => step.name === "Prepare Docker sandbox image when selected",
+      ),
+      "QA sandbox image preparation",
+    );
+    expect(prepareSandboxStep["working-directory"]).toBe("selected");
+    expect(prepareSandboxStep.env?.SCENARIO_IDS_JSON).toBe("${{ toJSON(matrix.scenarioIds) }}");
+    expect(prepareSandboxStep.run).toBe(`set -euo pipefail
+if jq -e '
+  index("openclaw-sandbox-workspace-isolation") != null or
+  index("agent-sandboxed-exec-behavior") != null
+' <<<"$SCENARIO_IDS_JSON" >/dev/null; then
+  scripts/sandbox-setup.sh
+fi
+`);
+    expect(qaShardJob.steps.indexOf(prepareSandboxStep)).toBeLessThan(
+      qaShardJob.steps.findIndex((step: WorkflowStep) => step.name === "Run QA profile shard"),
+    );
     const runProfileStep = qaShardJob.steps.find(
       (step: WorkflowStep) => step.name === "Run QA profile shard",
     );

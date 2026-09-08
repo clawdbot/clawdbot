@@ -621,6 +621,19 @@ jobs:
           [[ -f "$playwright_script" ]] || playwright_script="scripts/ensure-playwright-chromium.mjs"
           node --import tsx "$playwright_script"
 
+      - name: Prepare Docker sandbox image when selected
+        env:
+          SCENARIO_IDS_JSON: ${{ toJSON(matrix.scenarioIds) }}
+        working-directory: selected
+        run: |
+          set -euo pipefail
+          if jq -e '
+            index("openclaw-sandbox-workspace-isolation") != null or
+            index("agent-sandboxed-exec-behavior") != null
+          ' <<<"$SCENARIO_IDS_JSON" >/dev/null; then
+            scripts/sandbox-setup.sh
+          fi
+
       - name: Run QA profile shard
         id: run_profile
         env:
