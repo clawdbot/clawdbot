@@ -2,7 +2,7 @@ import { resolveBundledProviderPolicySurface } from "../../plugins/provider-publ
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { type ListRowModel, toListRowInput } from "./list.model-row.js";
-import type { RowBuilderContext } from "./list.row-context.js";
+import type { ModelListContext } from "./list.rows.js";
 
 type ProviderRuntimeModule = typeof import("../../plugins/provider-runtime.js");
 
@@ -30,7 +30,7 @@ function mergeNormalizedListRow(
 /** Projects one authored provider row while keeping full runtime loading optional. */
 export async function normalizeConfiguredProviderListRow(params: {
   model: ListRowModel;
-  context: RowBuilderContext;
+  context: ModelListContext;
 }): Promise<ListRowModel> {
   const normalizationContext = {
     config: params.context.cfg,
