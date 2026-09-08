@@ -21,6 +21,7 @@ export type PluginMetadataSnapshotPluginIdScope = {
 export type PluginProviderAuthAliasCandidate = {
   plugin: PluginManifestRecord;
   target: string;
+  baseUrls?: readonly string[];
   /** First eligible declaration owns public map order, even if a later candidate wins. */
   order: number;
 };

@@ -61,10 +61,13 @@ export function buildAgentRuntimeAuthPlan(params: {
     ...(metadataSnapshot ? { metadataSnapshot } : {}),
   };
   const providerForAuth = resolveProviderIdForAuth(params.provider, aliasLookupParams);
-  const authProfileProviderForAuth = resolveProviderIdForAuth(
-    params.authProfileProvider ?? params.provider,
-    aliasLookupParams,
-  );
+  const authProfileProviderForAuth =
+    params.authProfileProvider !== undefined
+      ? resolveProviderIdForAuth(params.authProfileProvider, {
+          ...aliasLookupParams,
+          storedCredential: true,
+        })
+      : providerForAuth;
   const harnessAuthProvider = resolveHarnessAuthProvider(params);
   const harnessProviderForAuth = harnessAuthProvider
     ? resolveProviderIdForAuth(harnessAuthProvider, aliasLookupParams)

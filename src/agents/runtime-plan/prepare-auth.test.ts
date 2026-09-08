@@ -126,6 +126,44 @@ function allCooldownOpenAIStore(): AuthProfileStore {
 }
 
 describe("prepareAgentRuntimeAuthPlan", () => {
+  it("keeps a materialized model endpoint on its own credential provider", () => {
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          arcee: { baseUrl: "https://openrouter.ai/api/v1", models: [] },
+        },
+      },
+    };
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "arcee",
+          providers: ["arcee"],
+          providerAuthAliases: {
+            arcee: { provider: "openrouter", baseUrls: ["https://openrouter.ai/api/v1"] },
+          },
+        },
+      ],
+    });
+    const plan = prepareAgentRuntimeAuthPlan({
+      provider: "arcee",
+      modelId: "trinity-large-thinking",
+      modelApi: "openai-completions",
+      modelBaseUrl: "https://api.arcee.ai/api/v1",
+      config,
+      metadataSnapshot,
+      env: {},
+      authProfileStore: authStore({
+        "arcee:direct": apiKeyProfile("arcee", "direct-model-key"),
+        "openrouter:routed": apiKeyProfile("openrouter", "router-model-key"),
+      }),
+    });
+
+    expect(plan.providerForAuth).toBe("arcee");
+    expect(plan.forwardedAuthProfileId).toBe("arcee:direct");
+    expect(config.models?.providers?.arcee?.baseUrl).toBe("https://openrouter.ai/api/v1");
+  });
+
   it("carries prepared provider aliases into generic auth planning", () => {
     const plan = prepareAgentRuntimeAuthPlan({
       provider: "legacy-provider",

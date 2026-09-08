@@ -43,6 +43,9 @@ export function assertPluginMetadataSnapshotConsistency(snapshot: PluginMetadata
       appendOwner(expectedProviderOwners, provider, plugin.id);
     }
     for (const [alias, provider] of Object.entries(plugin.providerAuthAliases ?? {})) {
+      if (typeof provider !== "string") {
+        continue;
+      }
       if (!providers.has(alias) || !providers.has(provider)) {
         throw new Error(`plugin metadata fixture alias ${alias} is outside ${plugin.id} providers`);
       }

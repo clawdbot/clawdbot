@@ -109,6 +109,9 @@ function hasScopedProviderAuthAlias(
   scopedProviderIds: ReadonlySet<string>,
 ): boolean {
   return Object.entries(record.providerAuthAliases ?? {}).some(([rawAlias, rawTarget]) => {
+    if (typeof rawTarget !== "string") {
+      return false;
+    }
     const target = normalizeProviderId(rawTarget);
     return (
       scopedProviderIds.has(normalizeProviderId(rawAlias)) &&

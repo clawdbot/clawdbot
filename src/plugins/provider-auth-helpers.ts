@@ -179,9 +179,12 @@ export function applyAuthProfileConfig(
     return next;
   }
 
-  const normalizedProvider = resolveProviderIdForAuth(params.provider, { config: cfg });
-  const matchesProvider = (provider: string) =>
-    resolveProviderIdForAuth(provider, { config: cfg }) === normalizedProvider;
+  const normalizedProvider = resolveProviderIdForAuth(params.provider, {
+    config: cfg,
+    storedCredential: true,
+  });
+  const matchesProvider = (provider: string, storedCredential = false) =>
+    resolveProviderIdForAuth(provider, { config: cfg, storedCredential }) === normalizedProvider;
   const matchingOrderEntries = orderEntries.filter(([provider]) => matchesProvider(provider));
   let providerOrder: string[] | undefined;
   if (matchingOrderEntries.length > 0) {
@@ -192,7 +195,9 @@ export function applyAuthProfileConfig(
         ? existingOrder
         : [...existingOrder, params.profileId];
   } else if (preferProfileFirst) {
-    const peers = configuredProfiles.filter(([, profile]) => matchesProvider(profile.provider));
+    const peers = configuredProfiles.filter(([, profile]) =>
+      matchesProvider(profile.provider, true),
+    );
     if (
       peers.some(
         ([profileId, profile]) => profileId !== params.profileId && profile.mode !== params.mode,

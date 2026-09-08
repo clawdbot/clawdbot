@@ -522,6 +522,266 @@ test("sessions.create commits the personal default before dispatching its initia
   });
 });
 
+test.each([
+  {
+    endpoint: "direct model override",
+    modelId: "trinity-large-thinking",
+    baseUrl: "https://api.arcee.ai/api/v1",
+    expectedPin: "arcee:work",
+    expectedSource: "user-link",
+  },
+  {
+    endpoint: "inherited OpenRouter endpoint",
+    modelId: "trinity-large-preview",
+    baseUrl: "https://openrouter.ai/api/v1",
+    expectedPin: undefined,
+    expectedSource: undefined,
+  },
+] as const)(
+  "sessions.create applies an admin-linked Arcee default only for the $endpoint",
+  async ({ modelId, baseUrl, expectedPin, expectedSource }) => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "session-arcee-linked-default-" },
+      async (state) => {
+        const { OpenClawSchema } = await import("../config/zod-schema.js");
+        const { ensureAuthProfileStoreWithoutExternalProfiles } =
+          await import("../agents/auth-profiles/store-runtime.js");
+        const { resolveModelWithRegistry } =
+          await import("../agents/embedded-agent-runner/model.registry-resolution.js");
+        const { AuthStorage } = await import("../agents/sessions/auth-storage.js");
+        const { ModelRegistry } = await import("../agents/sessions/model-registry.js");
+        const { createModelAccountConnectService } = await import("./model-account-connect.js");
+        const { storePath } = await createSessionStoreDir();
+        const inputConfig: import("../config/types.openclaw.js").OpenClawConfig = {
+          plugins: { allow: ["arcee"] },
+          agents: { defaults: { workspace: state.workspaceDir }, entries: { main: {} } },
+          session: { store: storePath },
+          auth: { profiles: { "arcee:work": { provider: "arcee", mode: "api_key" } } },
+          models: {
+            providers: {
+              arcee: {
+                baseUrl: "https://openrouter.ai/api/v1",
+                api: "openai-completions",
+                models: [
+                  {
+                    id: "trinity-large-thinking",
+                    name: "Direct Arcee model",
+                    api: "openai-completions",
+                    baseUrl: "https://api.arcee.ai/api/v1",
+                    reasoning: true,
+                    input: ["text"],
+                    contextWindow: 32768,
+                    maxTokens: 2048,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  },
+                  {
+                    id: "trinity-large-preview",
+                    name: "Arcee model through OpenRouter",
+                    api: "openai-completions",
+                    reasoning: true,
+                    input: ["text"],
+                    contextWindow: 32768,
+                    maxTokens: 2048,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  },
+                ],
+              },
+            },
+          },
+        };
+        const parsedConfig = OpenClawSchema.safeParse(inputConfig);
+        expect(parsedConfig.success, JSON.stringify(parsedConfig.error?.issues)).toBe(true);
+        await state.writeConfig(inputConfig);
+        const credential = {
+          type: "api_key",
+          provider: "arcee",
+          key: "synthetic-direct-arcee-key",
+        } as const;
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: { "arcee:work": credential },
+        });
+        const gatewayConfig = await getGatewayConfigModule();
+        // The Gateway fixture reads its own config root; bind this case through the real snapshot.
+        gatewayConfig.setRuntimeConfigSnapshot(inputConfig);
+        const cfg = gatewayConfig.getRuntimeConfig();
+        const { loadPluginMetadataSnapshot } =
+          await import("../plugins/plugin-metadata-snapshot.js");
+        const { getCurrentPluginMetadataSnapshot, withPluginMetadataSnapshotScope } =
+          await import("../plugins/current-plugin-metadata-snapshot.js");
+        const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
+        const { resolveSessionModelRef } = await import("../agents/session-model-ref.js");
+        const bundledRoot = path.resolve(import.meta.dirname, "../../extensions");
+        const metadata = loadPluginMetadataSnapshot({
+          config: cfg,
+          workspaceDir: state.workspaceDir,
+          env: {
+            ...process.env,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
+            OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+          },
+          allowCurrent: false,
+          preferPersisted: false,
+        });
+        await withPluginMetadataSnapshotScope(
+          metadata,
+          async () => {
+            const manifest = metadata.byPluginId.get("arcee");
+            const manifestPath = path.join(bundledRoot, "arcee", "openclaw.plugin.json");
+            const declaredManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+            expect(manifest?.manifestPath).toBe(manifestPath);
+            expect(manifest?.origin).toBe("bundled");
+            expect(manifest?.providerAuthAliases).toEqual(declaredManifest.providerAuthAliases);
+            expect(
+              getCurrentPluginMetadataSnapshot({
+                config: cfg,
+                allowWorkspaceScopedSnapshot: true,
+              }) === metadata,
+            ).toBe(true);
+            const providerDefaultAuth = resolveProviderIdForAuth("arcee", { config: cfg });
+            expect(providerDefaultAuth).toBe("openrouter");
+            expect(resolveProviderIdForAuth("arcee", { config: cfg, storedCredential: true })).toBe(
+              "arcee",
+            );
+            const model = resolveModelWithRegistry({
+              cfg,
+              provider: "arcee",
+              modelId,
+              agentDir: state.agentDir(),
+              modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+            });
+            expect(model?.baseUrl).toBe(baseUrl);
+
+            const owner = ensureProfileForEmail("arcee-session-owner@example.test");
+            const administrator = ensureProfileForEmail("arcee-link-admin@example.test");
+            const client = {
+              ...identifiedClient(owner.id, owner.displayName),
+              connId: "arcee-session-owner-connection",
+            };
+            const adminClient = {
+              ...identifiedClient(administrator.id, administrator.displayName),
+              connId: "arcee-link-admin-connection",
+            };
+            adminClient.connect.scopes = ["operator.admin"];
+            const clients = new Set([client, adminClient]);
+            const service = createModelAccountConnectService({ getConfig: () => cfg });
+            const context = {
+              getRuntimeConfig: () => cfg,
+              modelAccountConnectService: service,
+              loadGatewayModelCatalog: async () => [
+                { id: "trinity-large-thinking", name: "Direct Arcee model", provider: "arcee" },
+                {
+                  id: "trinity-large-preview",
+                  name: "Arcee model through OpenRouter",
+                  provider: "arcee",
+                },
+              ],
+              getClientConnIds: (filter?: (current: GatewayClient) => boolean) =>
+                new Set(
+                  [...clients]
+                    .filter((current) => !filter || filter(current))
+                    .map(({ connId }) => connId),
+                ),
+            };
+            try {
+              const linked = await directSessionReq(
+                "users.linkAuthProfile",
+                { profileId: owner.id, authProfileId: "arcee:work" },
+                { client: adminClient, context },
+              );
+              expect(linked.ok, JSON.stringify(linked.error)).toBe(true);
+              const linksBefore = await directSessionReq(
+                "users.listAuthLinks",
+                { profileId: owner.id },
+                { client, context },
+              );
+              expect(linksBefore.ok, JSON.stringify(linksBefore.error)).toBe(true);
+              expect(linksBefore.payload).toMatchObject({
+                links: [{ provider: "arcee", authProfileId: "arcee:work" }],
+              });
+
+              const key = `agent:main:dashboard:arcee-linked-${modelId}`;
+              expect(loadSessionEntry({ sessionKey: key, storePath })).toBeUndefined();
+              const observedSelections: Array<{
+                provider: string | undefined;
+                model: string | undefined;
+                profile: string | undefined;
+                source: string | undefined;
+              }> = [];
+              const { chatHandlers } = await import("./server-methods/chat.js");
+              const chatSend = vi
+                .spyOn(chatHandlers, "chat.send")
+                .mockImplementation(({ respond }) => {
+                  const entry = loadSessionEntry({
+                    sessionKey: key,
+                    storePath,
+                    readConsistency: "latest",
+                  });
+                  observedSelections.push({
+                    ...resolveSessionModelRef(cfg, entry, "main"),
+                    profile: entry?.authProfileOverride,
+                    source: entry?.authProfileOverrideSource,
+                  });
+                  respond(true, { runId: "arcee-linked-default-first-turn", status: "started" });
+                });
+              try {
+                const created = await directSessionReq<{ runStarted: boolean }>(
+                  "sessions.create",
+                  { key, model: `arcee/${modelId}`, message: "Start the first turn" },
+                  { client, context },
+                );
+
+                expect(created.ok, JSON.stringify(created.error)).toBe(true);
+                expect(created.payload?.runStarted).toBe(true);
+                expect.soft(observedSelections).toEqual([
+                  {
+                    provider: "arcee",
+                    model: modelId,
+                    profile: expectedPin,
+                    source: expectedSource,
+                  },
+                ]);
+                const saved = loadSessionEntry({
+                  sessionKey: key,
+                  storePath,
+                  readConsistency: "latest",
+                });
+                expect
+                  .soft(resolveSessionModelRef(cfg, saved, "main"))
+                  .toEqual({ provider: "arcee", model: modelId });
+                expect.soft(saved?.authProfileOverride).toBe(expectedPin);
+                expect.soft(saved?.authProfileOverrideSource).toBe(expectedSource);
+                expect(
+                  ensureAuthProfileStoreWithoutExternalProfiles(state.agentDir(), {
+                    readOnly: true,
+                  }).profiles["arcee:work"],
+                ).toEqual(credential);
+                const linksAfter = await directSessionReq(
+                  "users.listAuthLinks",
+                  { profileId: owner.id },
+                  { client, context },
+                );
+                expect(linksAfter.ok, JSON.stringify(linksAfter.error)).toBe(true);
+                expect(linksAfter.payload).toEqual(linksBefore.payload);
+                expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toEqual(
+                  inputConfig,
+                );
+              } finally {
+                chatSend.mockRestore();
+              }
+            } finally {
+              clients.clear();
+              await service.stop();
+              gatewayConfig.clearRuntimeConfigSnapshot();
+            }
+          },
+          { config: cfg, env: process.env, workspaceDir: state.workspaceDir },
+        );
+      },
+    );
+  },
+);
+
 test("sessions.create does not donate a personal default to an unpinned adoption or fork", async () => {
   await withOpenClawTestState({ layout: "state-only" }, async () => {
     const { storePath, client, context } = await createPersonalAccountSessionFixture();

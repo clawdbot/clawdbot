@@ -3,6 +3,7 @@ import {
   formatAgentRunRouteChange,
   type AgentRunTerminalReceipt,
 } from "./agent-run-terminal-receipt.js";
+import { isProviderModelRerouted } from "./provider-model-route.js";
 
 const visibleRerouteReceipt: AgentRunTerminalReceipt = {
   runId: "run-1",
@@ -14,6 +15,47 @@ const visibleRerouteReceipt: AgentRunTerminalReceipt = {
   rerouted: true,
   terminalDisposition: "visible",
 };
+
+describe("isProviderModelRerouted", () => {
+  it("keeps an equivalent vendor wire id from producing a model-switch fact", () => {
+    const requested = { provider: "arcee", model: "trinity-large-thinking" };
+    const effective = {
+      provider: "arcee",
+      model: "arcee-ai/trinity-large-thinking",
+      responseModel: "arcee-ai/trinity-large-thinking",
+    };
+    const rerouted = isProviderModelRerouted(requested, effective);
+    expect(rerouted).toBe(false);
+    expect(
+      formatAgentRunRouteChange(
+        { ...visibleRerouteReceipt, requested, effective, rerouted },
+        "run-1",
+      ),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    {
+      provider: "arcee",
+      model: "arcee-ai/trinity-large-preview",
+      responseModel: "arcee-ai/trinity-large-preview",
+    },
+    {
+      provider: "openrouter",
+      model: "arcee-ai/trinity-large-thinking",
+      responseModel: "arcee-ai/trinity-large-thinking",
+    },
+    {
+      provider: "arcee",
+      model: "arcee-ai/trinity-large-thinking",
+      responseModel: "arcee-ai/trinity-large-preview",
+    },
+  ])("retains a real change to $provider/$model with response $responseModel", (effective) => {
+    expect(
+      isProviderModelRerouted({ provider: "arcee", model: "trinity-large-thinking" }, effective),
+    ).toBe(true);
+  });
+});
 
 describe("formatAgentRunRouteChange", () => {
   it("uses the producer response model", () => {

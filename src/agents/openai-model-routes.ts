@@ -8,7 +8,10 @@ import type {
   ProviderModelRouteSource,
   ProviderRouteOverridePresence,
 } from "../plugin-sdk/provider-model-types.js";
-import { createProviderModelRoutesResolver } from "../plugins/provider-model-routes.js";
+import {
+  createProviderModelRoutesResolver,
+  resolveProviderModelCatalogId,
+} from "../plugins/provider-model-routes.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import type { ProviderModelAuthSourcePlan } from "./provider-model-auth-source-plan.js";
@@ -71,8 +74,13 @@ export const openAIModelCatalogRoutePolicy =
 export function resolveModelCatalogIdentityKey(
   entry: Pick<ModelCatalogEntry, "provider" | "id">,
 ): string {
-  const id = openAIModelCatalogRoutePolicy.resolveIdentity(entry)?.id ?? entry.id;
-  return JSON.stringify([normalizeProviderId(entry.provider), id]);
+  const provider = normalizeProviderId(entry.provider);
+  const id =
+    resolveProviderModelCatalogId({
+      provider,
+      modelId: splitTrailingAuthProfile(entry.id).model,
+    }) ?? entry.id;
+  return JSON.stringify([provider, id]);
 }
 
 /** Resolves provider-owned OpenAI route state without loading the full provider runtime. */

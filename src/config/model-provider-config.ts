@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ProviderRouteOverridePresence } from "../plugin-sdk/provider-model-types.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "./types.models.js";
@@ -8,6 +9,58 @@ type MergedModelProviderEntry = {
   providerKey: string;
   providerConfig: ModelProviderConfig;
 };
+
+export function matchesProviderScopedModelId(params: {
+  candidateId?: string;
+  provider: string;
+  modelId: string;
+  normalizeModelId?: (modelId: string) => string;
+}): boolean {
+  const { candidateId, provider, modelId } = params;
+  if (candidateId === modelId) {
+    return true;
+  }
+  const slashIndex = candidateId?.indexOf("/") ?? -1;
+  if (!candidateId) {
+    return false;
+  }
+  if (
+    slashIndex > 0 &&
+    candidateId.slice(slashIndex + 1) === modelId &&
+    normalizeProviderId(candidateId.slice(0, slashIndex)) === normalizeProviderId(provider)
+  ) {
+    return true;
+  }
+  return params.normalizeModelId
+    ? params.normalizeModelId(stripSelfProviderModelPrefix(provider, candidateId)) ===
+        params.normalizeModelId(stripSelfProviderModelPrefix(provider, modelId))
+    : false;
+}
+
+/** Uses the same authored row for transport materialization and early auth selection. */
+export function findConfiguredProviderModel(
+  providerConfig: { models?: ModelDefinitionConfig[] } | undefined,
+  provider: string,
+  modelId: string,
+  canonicalizeModelId?: (modelId: string) => string,
+) {
+  const exact = providerConfig?.models?.find((candidate) =>
+    matchesProviderScopedModelId({ candidateId: candidate.id, provider, modelId }),
+  );
+  return (
+    exact ??
+    (canonicalizeModelId
+      ? providerConfig?.models?.find((candidate) =>
+          matchesProviderScopedModelId({
+            candidateId: candidate.id,
+            provider,
+            modelId,
+            normalizeModelId: canonicalizeModelId,
+          }),
+        )
+      : undefined)
+  );
+}
 
 const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "amazon-bedrock",
@@ -241,4 +294,31 @@ export function resolveMergedModelProviderConfig(
   provider: string,
 ): ModelProviderConfig | undefined {
   return resolveMergedModelProviderEntry(config, provider)?.providerConfig;
+}
+
+/** Projects a resolved request onto one transient canonical provider entry. */
+export function projectModelProviderConfig(
+  config: OpenClawConfig | undefined,
+  providerId: string,
+  overrides: Pick<ModelProviderConfig, "baseUrl"> &
+    Partial<Pick<ModelProviderConfig, "api" | "auth">>,
+): OpenClawConfig {
+  const provider = normalizeProviderId(providerId);
+  const entry = resolveMergedModelProviderEntry(config, provider);
+  const providerKey = entry?.providerKey ?? provider;
+  const providers = Object.fromEntries(
+    Object.entries(config?.models?.providers ?? {}).filter(
+      ([candidate]) => normalizeProviderId(candidate) !== provider || candidate === providerKey,
+    ),
+  );
+  return {
+    ...config,
+    models: {
+      ...config?.models,
+      providers: {
+        ...providers,
+        [providerKey]: { ...(entry?.providerConfig ?? { models: [] }), ...overrides },
+      },
+    },
+  };
 }

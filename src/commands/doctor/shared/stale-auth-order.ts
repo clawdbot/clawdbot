@@ -423,7 +423,8 @@ function scanUndeclaredConfiguredAuthOrders(
     const declaredProviderProfileIds = Object.entries(cfg.auth?.profiles ?? {})
       .filter(
         ([, profile]) =>
-          resolveProviderIdForAuth(profile.provider, { config: cfg }) === canonicalProvider,
+          resolveProviderIdForAuth(profile.provider, { config: cfg, storedCredential: true }) ===
+          canonicalProvider,
       )
       .map(([profileId]) => profileId);
     return [{ provider, undeclaredProfileIds, declaredProviderProfileIds }];

@@ -142,7 +142,10 @@ export async function modelsAuthOrderSetCommand(
         `Auth profile "${profileId}" not found in ${shortenHomePath(agentDir)}. Run ${formatCliCommand("openclaw models auth list --provider " + provider)} to see saved profiles.`,
       );
     }
-    if (resolveProviderIdForAuth(cred.provider, { config: cfg }) !== providerKey) {
+    if (
+      resolveProviderIdForAuth(cred.provider, { config: cfg, storedCredential: true }) !==
+      providerKey
+    ) {
       throw new Error(`Auth profile "${profileId}" is for ${cred.provider}, not ${provider}.`);
     }
   }

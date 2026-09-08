@@ -191,7 +191,10 @@ function resolveExternalCliProviderIdForCompatibleAuthProfile(params: {
     workspaceDir: params.workspaceDir,
   };
   const providerAuthKey = resolveProviderIdForAuth(params.provider, authAliasParams);
-  const profileAuthKey = resolveProviderIdForAuth(profileProvider, authAliasParams);
+  const profileAuthKey = resolveProviderIdForAuth(profileProvider, {
+    ...authAliasParams,
+    storedCredential: true,
+  });
   if (!providerAuthKey || profileAuthKey !== providerAuthKey) {
     return { compatible: false };
   }

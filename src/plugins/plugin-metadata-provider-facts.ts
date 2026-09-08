@@ -95,12 +95,19 @@ export function buildPluginMetadataProviderAuthAliases(plugins: readonly PluginM
     ];
     for (const [rawAlias, rawTarget] of entries) {
       const alias = normalizeProviderId(rawAlias);
-      const target = normalizeProviderId(rawTarget);
+      const target = normalizeProviderId(
+        typeof rawTarget === "string" ? rawTarget : rawTarget.provider,
+      );
       if (!alias || !target) {
         continue;
       }
       const candidates = aliases.get(alias) ?? [];
-      candidates.push({ plugin, target, order: order++ });
+      candidates.push({
+        plugin,
+        target,
+        ...(typeof rawTarget === "string" ? {} : { baseUrls: rawTarget.baseUrls }),
+        order: order++,
+      });
       aliases.set(alias, candidates);
     }
   }

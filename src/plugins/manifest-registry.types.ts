@@ -99,7 +99,7 @@ export type PluginManifestRecord = {
   commandAliases?: PluginManifestCommandAlias[];
   cliCommands?: PluginManifest["cliCommands"];
   providerUsageAuthEnvVars?: Record<string, string[]>;
-  providerAuthAliases?: Record<string, string>;
+  providerAuthAliases?: PluginManifest["providerAuthAliases"];
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
   activation?: PluginManifestActivation;
   setup?: PluginManifestSetup;

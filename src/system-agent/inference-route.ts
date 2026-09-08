@@ -261,7 +261,9 @@ export async function projectInferenceRoute(
   );
   const authProfiles = Object.fromEntries(
     Object.entries(config.auth?.profiles ?? {}).filter(([, profile]) =>
-      authProviderIds.has(resolveProviderIdForAuth(profile.provider, authAliasParams)),
+      authProviderIds.has(
+        resolveProviderIdForAuth(profile.provider, { ...authAliasParams, storedCredential: true }),
+      ),
     ),
   );
   const authOrder = Object.fromEntries(

@@ -39,6 +39,7 @@ import { clearSessionAuthProfileOverride } from "../auth-profiles/session-overri
 import { ensureAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
+import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js";
 import { loadManifestModelCatalog } from "../model-catalog.js";
 import type { ModelFallbackRouteResolution } from "../model-fallback.types.js";
 import { splitTrailingAuthProfile } from "../model-ref-profile.js";
@@ -437,6 +438,13 @@ export async function resolveEmbeddedModelSelection(params: {
   const authProfileId = sessionEntryForAttempt?.authProfileOverride;
   if (sessionEntryForAttempt && authProfileId) {
     const entry = sessionEntryForAttempt;
+    const authConfig = resolveModelProviderAuthConfig({
+      config: params.cfg,
+      provider: providerForAuthProfileValidation,
+      modelId: model,
+      workspaceDir: params.workspaceDir,
+      metadataSnapshot: params.pluginsEnabled ? params.manifestMetadataSnapshot : { plugins: [] },
+    });
     const agentDir = resolveAgentDir(params.cfg, params.sessionAgentId);
     const store = ensureAuthProfileStore(agentDir, {
       profileId: authProfileId,
@@ -458,7 +466,7 @@ export async function resolveEmbeddedModelSelection(params: {
     }).map((candidateProvider) =>
       params.pluginsEnabled
         ? resolveProviderIdForAuth(candidateProvider, {
-            config: params.cfg,
+            config: authConfig,
             workspaceDir: params.workspaceDir,
             ...(params.manifestMetadataSnapshot
               ? { metadataSnapshot: params.manifestMetadataSnapshot }
@@ -468,14 +476,14 @@ export async function resolveEmbeddedModelSelection(params: {
     );
     const authAliasLookupParams = params.pluginsEnabled
       ? {
-          config: params.cfg,
+          config: authConfig,
           workspaceDir: params.workspaceDir,
           ...(params.manifestMetadataSnapshot
             ? { metadataSnapshot: params.manifestMetadataSnapshot }
             : {}),
         }
       : {
-          config: params.cfg,
+          config: authConfig,
           workspaceDir: params.workspaceDir,
           metadataSnapshot: { plugins: [] },
         };
@@ -483,7 +491,7 @@ export async function resolveEmbeddedModelSelection(params: {
       profile &&
       acceptedAuthProviders.some((candidateProvider) =>
         isStoredCredentialCompatibleWithAuthProvider({
-          cfg: params.cfg,
+          cfg: authConfig,
           authAliasLookupParams,
           provider: candidateProvider,
           credential: profile,
@@ -491,7 +499,7 @@ export async function resolveEmbeddedModelSelection(params: {
       );
     const preserveUnavailableSelection = shouldPreserveUnavailableSessionAuthProfileOverride({
       store,
-      cfg: params.cfg,
+      cfg: authConfig,
       agentDir,
       entry,
       currentProvider: entry.providerOverride ?? defaultProvider,

@@ -5,6 +5,12 @@
   },
   "enabledByDefault": true,
   "providers": ["arcee"],
+  "providerAuthAliases": {
+    "arcee": {
+      "provider": "openrouter",
+      "baseUrls": ["https://openrouter.ai/api/v1", "https://openrouter.ai/v1"]
+    }
+  },
   "modelCatalog": {
     "discovery": {
       "arcee": "runtime"
