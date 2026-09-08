@@ -1505,20 +1505,17 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("token=abcdef…ghij");
   });
 
-  it("keeps single-capture custom patterns focused on the captured occurrence", () => {
+  it.each([
+    ["a backreference", String.raw`password=([^&]+)&confirm=\1`],
+    ["repeated text", String.raw`password=([^&]+)&confirm=[^&]+`],
+    ["an unmatched group", String.raw`(unused)?password=([^&]+)&confirm=\2`],
+    ["an empty last group", String.raw`password=([^&]+)()&confirm=\1`],
+    ["a named backreference", String.raw`password=(?<secret>[^&]+)&confirm=\k<secret>`],
+  ])("locates the secret capture with %s", (_name, pattern) => {
     const input = "password=abc123456789012345&confirm=abc123456789012345";
     const output = redactSensitiveText(input, {
       mode: "tools",
-      patterns: [String.raw`password=([^&]+)&confirm=\1`],
-    });
-    expect(output).toBe("password=abc123…2345&confirm=abc123456789012345");
-  });
-
-  it("masks captured custom-pattern values even when the value repeats later", () => {
-    const input = "password=abc123456789012345&confirm=abc123456789012345";
-    const output = redactSensitiveText(input, {
-      mode: "tools",
-      patterns: [String.raw`password=([^&]+)&confirm=[^&]+`],
+      patterns: [pattern],
     });
     expect(output).toBe("password=abc123…2345&confirm=abc123456789012345");
   });
