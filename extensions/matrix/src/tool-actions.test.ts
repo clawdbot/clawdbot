@@ -256,13 +256,23 @@ describe("handleMatrixAction pollVote", () => {
         threadId: "$thread",
       },
       cfg,
-      { mediaLocalRoots: ["/tmp/openclaw-matrix-test"] },
+      {
+        mediaAccess: {
+          localRoots: ["/tmp/openclaw-matrix-test"],
+          workspaceDir: "/tmp/openclaw-matrix-test/workspace",
+        },
+        mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
+      },
     );
 
     expect(mocks.sendMatrixMessage).toHaveBeenCalledWith("room:!room:example", "hello", {
       cfg,
       accountId: "ops",
       mediaUrl: undefined,
+      mediaAccess: {
+        localRoots: ["/tmp/openclaw-matrix-test"],
+        workspaceDir: "/tmp/openclaw-matrix-test/workspace",
+      },
       mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
       replyToId: undefined,
       threadId: "$thread",

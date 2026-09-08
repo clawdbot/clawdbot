@@ -33,6 +33,7 @@ import {
   voteMatrixPoll,
   verifyMatrixRecoveryKey,
 } from "./matrix/actions.js";
+import type { MatrixActionClientOpts } from "./matrix/actions/types.js";
 import { reactMatrixMessage } from "./matrix/send.js";
 import { applyMatrixProfileUpdate } from "./profile-update.js";
 import {
@@ -147,7 +148,7 @@ function readPositiveIntegerArrayParam(params: Record<string, unknown>, key: str
 export async function handleMatrixAction(
   params: Record<string, unknown>,
   cfg: CoreConfig,
-  opts: { mediaLocalRoots?: readonly string[] } = {},
+  opts: Pick<MatrixActionClientOpts, "mediaAccess" | "mediaLocalRoots"> = {},
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId") ?? undefined;
@@ -240,6 +241,7 @@ export async function handleMatrixAction(
               : undefined;
         const result = await sendMatrixMessage(to, content, {
           mediaUrl: mediaUrl ?? undefined,
+          ...(opts.mediaAccess ? { mediaAccess: opts.mediaAccess } : {}),
           mediaLocalRoots: opts.mediaLocalRoots,
           replyToId: replyToId ?? undefined,
           threadId: threadId ?? undefined,

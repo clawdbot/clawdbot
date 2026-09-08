@@ -7,6 +7,7 @@ import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-
 import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { createTelegramRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
@@ -101,6 +102,7 @@ type TelegramSendOpts = {
   accountId?: string;
   verbose?: boolean;
   mediaUrl?: string;
+  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   gatewayClientScopes?: readonly string[];
@@ -1040,6 +1042,7 @@ export async function sendMessageTelegram(
       mediaUrl,
       buildOutboundMediaLoadOptions({
         maxBytes: mediaMaxBytes,
+        mediaAccess: opts.mediaAccess,
         mediaLocalRoots: opts.mediaLocalRoots,
         mediaReadFile: opts.mediaReadFile,
         optimizeImages: opts.forceDocument ? false : undefined,

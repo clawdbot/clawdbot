@@ -175,6 +175,10 @@ describe("matrixMessageActions account propagation", () => {
       createContext({
         action: "send",
         accountId: "ops",
+        mediaAccess: {
+          localRoots: ["/tmp/openclaw-matrix-test"],
+          workspaceDir: "/tmp/openclaw-matrix-test/workspace",
+        },
         mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
         params: {
           to: "room:!room:example",
@@ -189,7 +193,13 @@ describe("matrixMessageActions account propagation", () => {
     expect(call.input.accountId).toBe("ops");
     expect(call.input.mediaUrl).toBe("file:///tmp/photo.png");
     expect(call.cfg).toBeTypeOf("object");
-    expect(call.options).toEqual({ mediaLocalRoots: ["/tmp/openclaw-matrix-test"] });
+    expect(call.options).toEqual({
+      mediaAccess: {
+        localRoots: ["/tmp/openclaw-matrix-test"],
+        workspaceDir: "/tmp/openclaw-matrix-test/workspace",
+      },
+      mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
+    });
   });
 
   it("allows media-only sends without requiring a message body", async () => {

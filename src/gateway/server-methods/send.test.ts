@@ -84,6 +84,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
     agentId?: string;
   }) => resolveAgentIdFromSessionKeyForTests({ sessionKey }),
   resolveDefaultAgentId: () => "main",
+  resolveAgentConfig: () => undefined,
   resolveAgentWorkspaceDir: () => TEST_AGENT_WORKSPACE,
 }));
 
@@ -2579,8 +2580,8 @@ describe("gateway send mirroring", () => {
         isConfigured: () => true,
       },
       actions: {
-        describeMessageTool: () => ({ actions: ["sendAttachment"] }),
-        supportsAction: ({ action }) => action === "sendAttachment",
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
         handleAction: async () => jsonResult({ ok: true }),
       },
     };
@@ -2593,7 +2594,7 @@ describe("gateway send mirroring", () => {
     const { respond } = await runMessageActionRequest(
       {
         channel: "telegram",
-        action: "sendAttachment",
+        action: "send",
         params: { chatId: "123", mediaUrl: `${TEST_AGENT_WORKSPACE}/render.png` },
         agentId: "work",
         idempotencyKey: "idem-message-action-media-roots",
@@ -2604,6 +2605,10 @@ describe("gateway send mirroring", () => {
     expect(firstRespondCall(respond)[0]).toBe(true);
     const actionCall = lastDispatchChannelMessageActionCall();
     expect(actionCall?.mediaLocalRoots).toContain(TEST_AGENT_WORKSPACE);
+    expect(actionCall?.mediaAccess).toMatchObject({
+      localRoots: expect.arrayContaining([TEST_AGENT_WORKSPACE]),
+      workspaceDir: TEST_AGENT_WORKSPACE,
+    });
     expect(actionCall?.gatewayClientScopes).toEqual(["operator.write"]);
   });
 

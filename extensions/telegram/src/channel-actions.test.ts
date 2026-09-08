@@ -52,6 +52,7 @@ describe("telegramMessageActions", () => {
       },
       cfg: {} as never,
       accountId: "default",
+      mediaAccess: { localRoots: [], workspaceDir: "/tmp/workspace" },
       mediaLocalRoots: [],
       sessionKey: "telegram-session",
     } as never);
@@ -72,6 +73,7 @@ describe("telegramMessageActions", () => {
       },
       {},
       {
+        mediaAccess: { localRoots: [], workspaceDir: "/tmp/workspace" },
         mediaLocalRoots: [],
         mediaReadFile: undefined,
         sessionKey: "telegram-session",

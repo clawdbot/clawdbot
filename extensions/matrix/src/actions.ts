@@ -152,7 +152,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
   },
   handleAction: async (ctx: ChannelMessageActionContext) => {
     const { handleMatrixAction } = await import("./tool-actions.runtime.js");
-    const { action, params, cfg, accountId, mediaLocalRoots } = ctx;
+    const { action, params, cfg, accountId, mediaAccess, mediaLocalRoots } = ctx;
     const dispatch = async (actionParams: Record<string, unknown>) =>
       await handleMatrixAction(
         {
@@ -160,7 +160,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           ...(accountId ? { accountId } : {}),
         },
         cfg as CoreConfig,
-        { mediaLocalRoots },
+        { ...(mediaAccess ? { mediaAccess } : {}), mediaLocalRoots },
       );
     const resolveRoomId = () =>
       readStringParam(params, "roomId") ??

@@ -69,12 +69,17 @@ describe("telegramOutbound", () => {
 
   it("forwards mediaLocalRoots in direct media sends", async () => {
     sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-media" });
+    const mediaAccess = {
+      localRoots: ["/tmp/agent-root"],
+      workspaceDir: "/tmp/agent-root/workspace",
+    };
 
     const result = await telegramOutbound.sendMedia!({
       cfg: {} as never,
       to: "12345",
       text: "hello",
       mediaUrl: "/tmp/image.png",
+      mediaAccess,
       mediaLocalRoots: ["/tmp/agent-root"],
       accountId: "ops",
       replyToId: "900",
@@ -91,6 +96,7 @@ describe("telegramOutbound", () => {
       silent: undefined,
       gatewayClientScopes: undefined,
       mediaUrl: "/tmp/image.png",
+      mediaAccess,
       mediaLocalRoots: ["/tmp/agent-root"],
       mediaReadFile: undefined,
       forceDocument: false,
