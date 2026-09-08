@@ -7,6 +7,7 @@ const allowedDecisions = ["allow-once", "deny"] as const;
 
 function buildExecPresentation(request: {
   command: string;
+  purpose?: string | null;
   host?: string | null;
   nodeId?: string | null;
   agentId?: string | null;
@@ -87,6 +88,20 @@ describe("buildApprovalPresentation", () => {
         agentId: "\t",
       }),
     ).toMatchObject({ kind: "exec", host: null, nodeId: null, agentId: null });
+  });
+
+  it("sanitizes the exec purpose before exposing it to reviewers", () => {
+    const githubToken = `ghp_${"a".repeat(100)}`;
+    const presentation = buildExecPresentation({
+      command: "printf safe",
+      purpose: `Check status\nwithout changing files ${githubToken}`,
+    });
+
+    expect(presentation).toMatchObject({
+      kind: "exec",
+      purpose: expect.stringMatching(/^Check status without changing files /),
+    });
+    expect(JSON.stringify(presentation)).not.toContain(githubToken);
   });
 
   it("escapes control and bidi spoofing while preserving description line breaks", () => {

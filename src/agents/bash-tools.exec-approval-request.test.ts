@@ -61,6 +61,7 @@ function restoreProcessPlatformForTest(): void {
 type ApprovalRequestPayload = {
   approvalReviewerDeviceIds?: string[];
   commandSpans?: Array<{ startIndex: number; endIndex: number }>;
+  purpose?: string;
   sessionId?: string;
   runId?: string;
   toolCallId?: string;
@@ -107,6 +108,7 @@ describe("exec approval requests", () => {
     await registerExecApprovalRequestForHostOrThrow({
       approvalId: "approval-id",
       command: "echo hi",
+      purpose: "Checks that the shell is responding.",
       workdir: "/tmp",
       host: "gateway",
       security: "allowlist",
@@ -117,6 +119,7 @@ describe("exec approval requests", () => {
     });
 
     expect(requireApprovalRequestPayload(0)).toMatchObject({
+      purpose: "Checks that the shell is responding.",
       sessionId: "session-1",
       runId: "run-1",
       toolCallId: "tool-1",

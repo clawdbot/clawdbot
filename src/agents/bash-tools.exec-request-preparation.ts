@@ -35,6 +35,7 @@ import { ToolInputError } from "./tools/common.js";
 
 export type ExecToolArgs = Record<string, unknown> & {
   command: string;
+  purpose?: string;
   workdir?: string;
   env?: Record<string, string>;
   yieldMs?: number;
@@ -64,7 +65,14 @@ const resolvedExecWorkdirPreparedStates = new WeakMap<
   ExecToolArgs,
   ResolvedExecWorkdirPreparedState
 >();
-const XML_ARG_VALUE_EXEC_PARAM_KEYS = ["command", "workdir", "host", "ask", "node"] as const;
+const XML_ARG_VALUE_EXEC_PARAM_KEYS = [
+  "command",
+  "purpose",
+  "workdir",
+  "host",
+  "ask",
+  "node",
+] as const;
 
 export function assertSupportedExecParams(args: unknown): void {
   if (isRecord(args) && Object.hasOwn(args, "timeout")) {

@@ -105,7 +105,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
 
       expect(exec.toolNames).toEqual(["exec", "process", schedulerToolName]);
       expect(exec.description).toBe(
-        "Run shell now; background continuation supported. Use yieldMs/background, then process for logs/status/input/intervention. Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion. No sleep loops for reminders/follow-ups; use automations. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
+        "Run shell now; background continuation supported. Use yieldMs/background, then process for logs/status/input/intervention. Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion. No sleep loops for reminders/follow-ups; use automations. Always set purpose: one plain-English sentence on what the command achieves, shown to the human when approval is requested. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
       );
       expect(process.description).toBe(
         "Control existing exec: list, poll, log, write, send-keys, submit, paste, kill. poll/log: status, output, quiet success, completion without auto-wake, input hints. Others: input/intervention. No polling as timer/reminder; scheduled follow-up uses automations.",
@@ -119,7 +119,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
 
     expect(exec.toolNames).toEqual(["exec", "process"]);
     expect(exec.description).toBe(
-      "Run shell now; background continuation supported. Use yieldMs/background, then process for logs/status/input/intervention. Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
+      "Run shell now; background continuation supported. Use yieldMs/background, then process for logs/status/input/intervention. Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion. Always set purpose: one plain-English sentence on what the command achieves, shown to the human when approval is requested. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
     );
     expect(process.description).toBe(
       "Control existing exec: list, poll, log, write, send-keys, submit, paste, kill. poll/log: status, output, quiet success, completion without auto-wake, input hints. Others: input/intervention.",
@@ -133,8 +133,8 @@ describe("createOpenClawCodingTools availability guidance", () => {
 
       expect(exec.description).toBe(
         schedulerToolName
-          ? "Run shell and wait for completion. No sleep loops for reminders/follow-ups; use automations. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`."
-          : "Run shell and wait for completion. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
+          ? "Run shell and wait for completion. No sleep loops for reminders/follow-ups; use automations. Always set purpose: one plain-English sentence on what the command achieves, shown to the human when approval is requested. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`."
+          : "Run shell and wait for completion. Always set purpose: one plain-English sentence on what the command achieves, shown to the human when approval is requested. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
       );
     },
   );

@@ -16,4 +16,13 @@ describe("exec environment guidance", () => {
       description: expect.stringMatching(/literal.*no expansion.*omit to inherit/i),
     });
   });
+
+  it("offers a bounded plain-English purpose for approval prompts", () => {
+    expect(execSchema.properties.purpose).toMatchObject({
+      maxLength: 240,
+      description: expect.stringMatching(/plain-English.*approval prompts/i),
+    });
+    expect(execCompletionSchema.properties.purpose).toBeDefined();
+    expect(nodeExecSchema.properties.purpose).toBeDefined();
+  });
 });

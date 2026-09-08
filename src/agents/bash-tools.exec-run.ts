@@ -451,6 +451,7 @@ export function createExecTool(
         if (host === "node") {
           return executeNodeHostCommand({
             command: params.command,
+            purpose: params.purpose,
             toolCallId,
             workdir,
             env,
@@ -503,6 +504,7 @@ export function createExecTool(
         if (host === "gateway" && !bypassApprovals) {
           const gatewayResult = await processGatewayAllowlist({
             command: params.command,
+            purpose: params.purpose,
             workdir,
             env,
             githubProfileDir,

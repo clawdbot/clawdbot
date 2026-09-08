@@ -240,6 +240,7 @@ describe("whatsapp approval capability", () => {
       ask: "always",
       cwd: "/tmp/work",
       host: "gateway",
+      purpose: "Checks whether the project is ready to ship.",
     });
 
     const payload = whatsappApprovalCapability.render?.exec?.buildPendingPayload?.({
@@ -251,6 +252,7 @@ describe("whatsapp approval capability", () => {
     const text = payload?.text ?? "";
 
     expect(text).toContain("/approve exec-1 allow-once");
+    expect(text).toContain("**What this does:** Checks whether the project is ready to ship.");
     expect(text).toContain("React with:");
     expect(text).toContain("👍 Allow Once");
     expect(text).toContain("👎 Deny");

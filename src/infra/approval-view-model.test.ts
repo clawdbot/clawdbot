@@ -13,6 +13,7 @@ describe("buildPendingApprovalView", () => {
       expiresAtMs: 2,
       request: {
         command: 'ls | grep "stuff" | python -c \'print("hi")\'',
+        purpose: "Searches a file listing and prints the matching result.",
         host: "node",
         ask: "always",
         commandAnalysis: {
@@ -38,6 +39,7 @@ describe("buildPendingApprovalView", () => {
       throw new Error("expected exec approval view");
     }
     expect(view.commandAnalysis?.warningLines).toEqual(["Contains inline-eval: python -c"]);
+    expect(view.purpose).toBe("Searches a file listing and prints the matching result.");
     expect(view.scope).toEqual(request.request.scope);
     expect(view.metadata).toContainEqual({
       label: "Scope",

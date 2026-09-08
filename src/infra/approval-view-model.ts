@@ -85,6 +85,7 @@ function buildExecViewBase<TPhase extends ApprovalPhase>(
     warningText: request.request.warningText ?? null,
     commandAnalysis: request.request.commandAnalysis ?? null,
     commandText,
+    purpose: request.request.purpose ?? null,
     commandPreview,
     cwd: request.request.cwd ?? null,
     envKeys: request.request.envKeys ?? undefined,
