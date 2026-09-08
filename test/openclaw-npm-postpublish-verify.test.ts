@@ -3,9 +3,10 @@ import { generateKeyPairSync, sign } from "node:crypto";
 // OpenClaw npm postpublish tests validate postpublish verification behavior.
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
+import { collectRuntimeDependencyOwnership } from "../scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import { RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH } from "../scripts/lib/runtime-dependency-ownership-contract.mts";
 import {
   buildPublishedInstallCommandArgs,
@@ -34,6 +35,65 @@ import { withEnv } from "../src/test-utils/env.js";
 
 const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
+
+function collectBuildOwnership(sources: Record<string, string>) {
+  const rootDir = resolve("/repo");
+  const resolved = new Map(
+    Object.entries(sources).map(([relativePath, source]) => [
+      resolve(rootDir, relativePath),
+      source,
+    ]),
+  );
+  return collectRuntimeDependencyOwnership({
+    rootDir,
+    moduleIds: [...resolved.keys()],
+    readSource: (moduleId) => resolved.get(moduleId) ?? "",
+  });
+}
+
+describe("runtime dependency ownership build contract", () => {
+  it("records static, dynamic, and CommonJS dependencies from extension sources", () => {
+    expect(
+      collectBuildOwnership({
+        "extensions/discord/src/voice.ts": 'require("@discordjs/voice");',
+        "extensions/msteams/src/graph.ts": 'import("@microsoft/teams.apps");',
+      }),
+    ).toEqual({
+      formatVersion: 1,
+      dependencies: {
+        "@discordjs/voice": { root: false, extensions: ["discord"] },
+        "@microsoft/teams.apps": { root: false, extensions: ["msteams"] },
+      },
+    });
+  });
+
+  it("does not authorize dependencies also imported by root source", () => {
+    expect(
+      collectBuildOwnership({
+        "extensions/discord/src/voice.ts": 'import "@discordjs/voice";',
+        "src/root.ts": 'require("@discordjs/voice");',
+      }),
+    ).toEqual({ formatVersion: 1, dependencies: {} });
+  });
+
+  it("ignores relative, builtin, external, and unreadable modules", () => {
+    const rootDir = resolve("/repo");
+    expect(
+      collectRuntimeDependencyOwnership({
+        rootDir,
+        moduleIds: [
+          resolve(rootDir, "extensions/discord/src/voice.ts"),
+          resolve(rootDir, "node_modules/vendor/index.js"),
+          resolve("/outside/source.ts"),
+        ],
+        readSource: (moduleId) => {
+          if (moduleId.endsWith("voice.ts")) return 'import "./local.js"; import "node:path";';
+          throw new Error("unreadable");
+        },
+      }),
+    ).toEqual({ formatVersion: 1, dependencies: {} });
+  });
+});
 
 describe("parseOpenClawNpmPostpublishVerifyArgs", () => {
   it("keeps trusted release verification independent from target app dependencies", () => {
