@@ -1011,7 +1011,12 @@ describe("dispatchAndStartWorkboardCards", () => {
     });
   });
 
-  it("keeps claimed review cards in the owner running slot", async () => {
+  it("does not keep claimed review cards in the owner running slot", async () => {
+    // Review is terminal for dispatch: the worker has finished, so a lingering
+    // claim must not hold the owner's slot. This is the ClawSweeper P1 fix for
+    // #122911 — lifecycle success maps the card to review, and the claim must
+    // be released (or ignored by the capacity predicate) so the next ready
+    // card for the same owner can dispatch.
     const store = new WorkboardStore(createMemoryStore());
     const review = await store.create({
       title: "Claimed operator review",
@@ -1020,11 +1025,12 @@ describe("dispatchAndStartWorkboardCards", () => {
       agentId: "codex-main",
     });
     await store.claim(review.id, { ownerId: "codex-main", token: "review-token" });
-    await store.create({
+    const ready = await store.create({
       title: "Next ready card",
       status: "ready",
       priority: "high",
       agentId: "codex-main",
+      workspaceAccess: { unrestricted: true },
     });
     const run = vi.fn().mockResolvedValue({ runId: "run-next" });
 
@@ -1034,8 +1040,10 @@ describe("dispatchAndStartWorkboardCards", () => {
       options: { now: 10, maxStarts: 3 },
     });
 
-    expect(result.started).toEqual([]);
-    expect(run).not.toHaveBeenCalled();
+    expect(result.started).toEqual([
+      expect.objectContaining({ cardId: ready.id, runId: "run-next" }),
+    ]);
+    expect(run).toHaveBeenCalledOnce();
   });
 
   it("blocks a card when worker start fails after claim", async () => {
