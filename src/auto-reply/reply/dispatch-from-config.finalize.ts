@@ -14,6 +14,7 @@ import {
 } from "../reply-payload.js";
 import { isDispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
 import type { executeDispatch } from "./dispatch-from-config.execute.js";
+import { claimInboundFinalDelivery } from "./inbound-dedupe.js";
 import {
   createFinalDispatchPayloadDedupeKey,
   formatSuppressedReplyPayloadForLog,
@@ -91,6 +92,21 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   let channelTransformSuppressedFinal = false;
   const finalDeliveries: Array<Awaited<ReturnType<typeof state.sendFinalPayload>>> = [];
   const sentFinalPayloadDedupeKeys = new Set<string>();
+  // Per-INBOUND final-delivery idempotency (defense-in-depth over the
+  // per-attempt payload dedupe below). A hard agent-harness failure mid-turn
+  // re-runs the same inbound on a fallback model; the per-attempt closures
+  // reset, so the fallback attempt would re-emit an already-delivered final.
+  // This claim is keyed on the inbound identity and survives across attempts,
+  // so the second attempt logs-not-sends. Fail-open when the inbound cannot be
+  // keyed (claim === undefined): never withhold a genuine reply.
+  const inboundFinalClaim = claimInboundFinalDelivery(ctx);
+  let inboundFinalClaimCommitted = false;
+  const commitInboundFinalClaimOnce = () => {
+    if (!inboundFinalClaimCommitted) {
+      inboundFinalClaimCommitted = true;
+      inboundFinalClaim.claim?.();
+    }
+  };
   let deferredTtsTextPending = state.progressState.accumulatedBlockTtsText;
   let continuationSettlementAttempted = false;
   let continuationSettlementRegistered = false;
@@ -160,6 +176,25 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         await heartbeatReply?.settle?.("cancelled");
         continue;
       }
+      // A final for this inbound was already delivered by an earlier attempt
+      // (typically the pre-fallback attempt). Log-not-send so a fallback re-run
+      // cannot deliver a duplicate visible reply to the channel.
+      if (inboundFinalClaim.delivered && hasOutboundReplyContent(reply, { trimText: true })) {
+        logVerbose(
+          [
+            "dispatch-from-config: final reply suppressed by inbound final-delivery idempotency",
+            `(session=${state.acpDispatchSessionKey ?? sessionKey ?? "unknown"}`,
+            `provider=${ctx.Provider ?? "unknown"}`,
+            `surface=${ctx.Surface ?? "unknown"}`,
+            `chatType=${chatType ?? "unknown"}`,
+            `message=${ctx.MessageSidFull ?? ctx.MessageSid ?? "unknown"}`,
+            `${formatSuppressedReplyPayloadForLog(reply)})`,
+          ].join(" "),
+        );
+        await suppressPendingFinalDelivery(reply, pendingFinalOptions);
+        await heartbeatReply?.settle?.("cancelled");
+        continue;
+      }
       sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
       const shouldAttachDeferredText = deferFinalTtsText && isReplyPayloadTerminalContent(reply);
       const finalReply = await state.sendFinalPayload(reply, {
@@ -190,6 +225,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       }
       finalDeliveries.push(finalReply);
       acceptedFinal = true;
+      // A final for this inbound was genuinely accepted for delivery; claim the
+      // inbound's final-delivery slot so a later fallback re-run of the same
+      // inbound observes it as delivered and suppresses its duplicate final.
+      commitInboundFinalClaimOnce();
       if (shouldAttachDeferredText) {
         deferredTtsTextPending = "";
       }

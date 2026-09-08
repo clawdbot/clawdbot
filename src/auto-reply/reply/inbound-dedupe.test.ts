@@ -2,7 +2,11 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../templating.js";
-import { claimInboundDedupe, resetInboundDedupe } from "./inbound-dedupe.js";
+import {
+  claimInboundDedupe,
+  claimInboundFinalDelivery,
+  resetInboundDedupe,
+} from "./inbound-dedupe.js";
 
 const sharedInboundContext: MsgContext = {
   Provider: "discord",
@@ -28,6 +32,50 @@ describe("inbound dedupe", () => {
   afterEach(() => {
     resetInboundDedupe();
     vi.useRealTimers();
+  });
+
+  describe("per-inbound final delivery idempotency", () => {
+    it("lets the first attempt deliver, then reports the same inbound as already delivered", () => {
+      // First attempt: not yet delivered, hands back a claim to commit on send.
+      const first = claimInboundFinalDelivery(sharedInboundContext);
+      expect(first.delivered).toBe(false);
+      expect(typeof first.claim).toBe("function");
+      first.claim?.();
+
+      // A model-fallback re-run of the SAME inbound must see it as delivered so
+      // its duplicate final is suppressed (log-not-send).
+      const fallbackAttempt = claimInboundFinalDelivery(sharedInboundContext);
+      expect(fallbackAttempt.delivered).toBe(true);
+      expect(fallbackAttempt.claim).toBeUndefined();
+    });
+
+    it("does not suppress a DIFFERENT inbound message", () => {
+      const first = claimInboundFinalDelivery(sharedInboundContext);
+      first.claim?.();
+      const other = claimInboundFinalDelivery({
+        ...sharedInboundContext,
+        MessageSid: "msg-2",
+      });
+      expect(other.delivered).toBe(false);
+    });
+
+    it("fails open when the inbound identity cannot be keyed", () => {
+      // No provider/messageId => cannot build a key => never withhold a reply.
+      const unkeyable = claimInboundFinalDelivery({} as MsgContext);
+      expect(unkeyable.delivered).toBe(false);
+      expect(unkeyable.claim).toBeUndefined();
+      // A second unkeyable attempt is likewise never suppressed.
+      expect(claimInboundFinalDelivery({} as MsgContext).delivered).toBe(false);
+    });
+
+    it("does not claim until the first attempt commits (attempt aborted before send)", () => {
+      // First attempt gets a claim but is aborted before delivery (never commits).
+      const aborted = claimInboundFinalDelivery(sharedInboundContext);
+      expect(aborted.delivered).toBe(false);
+      // The retry must still be allowed to deliver — nothing was delivered yet.
+      const retry = claimInboundFinalDelivery(sharedInboundContext);
+      expect(retry.delivered).toBe(false);
+    });
   });
 
   it("deduplicates inbound messages with equivalent numeric and string thread ids", () => {
