@@ -423,11 +423,25 @@ describe("cron runs query options", () => {
   });
 
   it.each([
-    ["--status", "failed"],
-    ["--delivery-status", "failed"],
-    ["--sort", "newest"],
-  ])("rejects invalid enum %s=%s", async (flag, value) => {
-    await expect(runCronRuns(["job-1", flag, value])).rejects.toThrow("allowed choices");
+    [
+      "--status",
+      "failed",
+      "error: option '--status <status>' argument 'failed' is invalid. Allowed choices are all, ok, error, skipped.",
+    ],
+    [
+      "--delivery-status",
+      "failed",
+      "error: option '--delivery-status <status>' argument 'failed' is invalid. Allowed choices are delivered, not-delivered, unknown, not-requested.",
+    ],
+    [
+      "--sort",
+      "newest",
+      "error: option '--sort <direction>' argument 'newest' is invalid. Allowed choices are asc, desc.",
+    ],
+  ])("rejects invalid enum %s=%s", async (flag, value, expectedError) => {
+    await expect(runCronRuns(["job-1", flag, value])).rejects.toMatchObject({
+      message: expectedError,
+    });
     expect(callGatewayFromCli).not.toHaveBeenCalled();
   });
 });
