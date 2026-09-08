@@ -1,5 +1,5 @@
 // Terminal progress reporter used by long-running CLI commands.
-import { spinner } from "@clack/prompts";
+import { log, spinner, symbol } from "@clack/prompts";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { truncateToVisibleWidth, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import {
@@ -13,23 +13,67 @@ import {
 } from "../../packages/terminal-core/src/progress-line.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 
+/** Keep animated labels inside Clack's captured erase width. */
+export function createProgressSpinner(
+  options: Parameters<typeof spinner>[0] & { output: NodeJS.WriteStream },
+  decorationColumns: number,
+) {
+  const { output } = options;
+  const readColumns = () =>
+    Number.isFinite(output.columns) && output.columns > 0 ? Math.floor(output.columns) : undefined;
+  let columns = readColumns();
+  let label = "";
+  let finished = false;
+  const spin = spinner(options);
+  const render = (message: string) => {
+    label = message;
+    const width = columns === undefined ? undefined : columns - decorationColumns;
+    return theme.accent(
+      width === undefined || visibleWidth(label) <= width
+        ? label
+        : width <= 0
+          ? ""
+          : `${truncateToVisibleWidth(label, width - 1)}…`,
+    );
+  };
+  const resize = () => {
+    const next = readColumns();
+    if (columns === undefined || next === undefined || next >= columns) {
+      return;
+    }
+    columns = next;
+    if (columns <= decorationColumns) {
+      spin.clear();
+    } else {
+      spin.message(render(label));
+    }
+  };
+  return {
+    start: (message: string) => {
+      resize();
+      if (columns === undefined || columns > decorationColumns) {
+        if (columns !== undefined) {
+          output.on("resize", resize);
+        }
+        spin.start(render(message));
+      }
+    },
+    message: (message: string) => spin.message(render(message)),
+    stop: (message?: string) => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      output.off("resize", resize);
+      spin.clear();
+      if (message !== undefined) {
+        log.message([`${symbol("submit")}  ${message}`], { output, spacing: 0, withGuide: false });
+      }
+    },
+  };
+}
+
 const DEFAULT_DELAY_MS = 0;
-// Clack adds a frame, two spaces and up to three dots; leave one spare column.
-const SPINNER_DECORATION_COLUMNS = 7;
-
-function readProgressColumns(stream: NodeJS.WriteStream): number | undefined {
-  return Number.isFinite(stream.columns) && stream.columns > 0
-    ? Math.floor(stream.columns)
-    : undefined;
-}
-
-function clampSpinnerLabel(label: string, columns: number | undefined): string {
-  if (columns === undefined) {
-    return label;
-  }
-  const width = columns - SPINNER_DECORATION_COLUMNS;
-  return visibleWidth(label) <= width ? label : `${truncateToVisibleWidth(label, width - 1)}…`;
-}
 // Only one active progress renderer may own the terminal line at a time.
 let activeProgress = 0;
 
@@ -127,11 +171,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
       })
     : null;
 
-  let spinnerColumns = readProgressColumns(stream);
-  let spin =
-    allowSpinner && (spinnerColumns === undefined || spinnerColumns > SPINNER_DECORATION_COLUMNS)
-      ? spinner({ output: stream })
-      : null;
+  const spin = allowSpinner ? createProgressSpinner({ output: stream }, 7) : null;
   const renderLine = allowLine
     ? () => {
         if (!started) {
@@ -176,9 +216,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
         controller.setPercent(label, percent);
       }
     }
-    if (spin) {
-      spin.message(theme.accent(clampSpinnerLabel(label, spinnerColumns)));
-    }
+    spin?.message(label);
     if (renderLine) {
       renderLine();
     }
@@ -187,33 +225,12 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
     }
   };
 
-  const onResize = () => {
-    const columns = readProgressColumns(stream);
-    if (columns === undefined || spinnerColumns === undefined) {
-      return;
-    }
-    // Clack captures its cleanup width at construction, so never expand past it.
-    spinnerColumns = Math.min(spinnerColumns, columns);
-    if (spinnerColumns <= SPINNER_DECORATION_COLUMNS) {
-      spin?.clear();
-      spin = null;
-      stream.off("resize", onResize);
-      return;
-    }
-    applyState();
-  };
-  if (spin && spinnerColumns !== undefined) {
-    stream.on("resize", onResize);
-  }
-
   const start = () => {
     if (started) {
       return;
     }
     started = true;
-    if (spin) {
-      spin.start(theme.accent(clampSpinnerLabel(label, spinnerColumns)));
-    }
+    spin?.start(label);
     applyState();
   };
 
@@ -249,9 +266,6 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
       return;
     }
     finished = true;
-    if (spinnerColumns !== undefined && allowSpinner) {
-      stream.off("resize", onResize);
-    }
     if (timer) {
       clearTimeout(timer);
       timer = null;
@@ -266,9 +280,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
     if (controller) {
       controller.clear();
     }
-    if (spin) {
-      spin.stop();
-    }
+    spin?.stop("");
     clearActiveProgressLine();
     if (isTty) {
       unregisterActiveProgressLine(stream);
