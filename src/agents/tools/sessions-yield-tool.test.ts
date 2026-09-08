@@ -111,6 +111,23 @@ describe("sessions_yield tool", () => {
     expect(onYield).not.toHaveBeenCalled();
   });
 
+  it("surfaces a claim rejection reason instead of the generic error", async () => {
+    const onYield = vi.fn();
+    const tool = createSessionsYieldTool({
+      sessionId: "test-session",
+      claimYield: () => ({ error: "Yield unsupported for this session kind" }),
+      onYield,
+    });
+
+    const result = await tool.execute("call-1", {});
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "Yield unsupported for this session kind",
+    });
+    expect(onYield).not.toHaveBeenCalled();
+  });
+
   it("returns error without onYield callback", async () => {
     const tool = createSessionsYieldTool({ sessionId: "test-session" });
     const result = await tool.execute("call-1", {});

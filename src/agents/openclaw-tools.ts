@@ -6,7 +6,7 @@ import { resolveControlUiSessionLinkBase } from "../config/control-ui-link-base.
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
-import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { bindAssembledAgentToolActionDescriptor } from "./agent-tool-metadata.js";
@@ -143,6 +143,13 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     preparedModelRuntime: options?.preparedModelRuntime,
   });
   const trimmedRunSessionKey = options?.runSessionKey?.trim();
+  // Isolated automation (cron) requesters have no continuation owner for a
+  // yield (requester-settle wake skips cron requesters), so sessions_yield is
+  // not assembled at all: the documented effective-tool contract stays truthful
+  // and spawned descendants deliver output through the scheduler-owned wait.
+  const isolatedAutomationRequester = isCronSessionKey(
+    trimmedRunSessionKey || options?.agentSessionKey,
+  );
   const mediaGenerationAgentSessionKey =
     trimmedRunSessionKey && isCronRunSessionKey(trimmedRunSessionKey)
       ? trimmedRunSessionKey
@@ -599,16 +606,20 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
         ]
       : []),
     ...swarmToolGroups.agentsWait,
-    createSessionsYieldTool({
-      sessionId: options?.sessionId,
-      claimYield: createRequesterYieldCallback({
-        requesterSessionKey: trimmedRunSessionKey || options?.agentSessionKey,
-        requesterAgentId: sessionAgentId,
-        requesterTurnRunId: options?.runId,
-        claimYieldCompletion: options?.claimYieldCompletion,
-      }),
-      onYield: options?.onYield,
-    }),
+    ...(isolatedAutomationRequester
+      ? []
+      : [
+          createSessionsYieldTool({
+            sessionId: options?.sessionId,
+            claimYield: createRequesterYieldCallback({
+              requesterSessionKey: trimmedRunSessionKey || options?.agentSessionKey,
+              requesterAgentId: sessionAgentId,
+              requesterTurnRunId: options?.runId,
+              claimYieldCompletion: options?.claimYieldCompletion,
+            }),
+            onYield: options?.onYield,
+          }),
+        ]),
     createSubagentsTool({
       // Match the durable controller key the spawn tool registers runs under, so split-key
       // callers (e.g. Telegram DM with a policy key distinct from the durable run key) still
