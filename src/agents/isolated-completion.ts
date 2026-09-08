@@ -560,6 +560,7 @@ export async function runIsolatedCompletion(
             harnessId: harness.id,
             harnessRuntime: harness.id,
             harnessAuthBootstrap: harness.authBootstrap,
+            harnessRequiresHostApiKey: harness.requiresHostApiKey?.(runtimeModel.provider),
           }).attempts;
           harnessAuth = { model: runtimeModel, store: authProfileStore, attempts: authAttempts };
         }

@@ -204,6 +204,8 @@ export type AgentRuntimeAuthPlan = {
   modelId?: string;
   authProfileProviderForAuth: string;
   harnessAuthProvider?: string;
+  /** Selected harness requires the host's key even without a provider-owned route. */
+  requiresHostApiKey?: true;
   /** Preferred or user-locked profile; automatic selection may not have resolved its secret yet. */
   forwardedAuthProfileId?: string;
   forwardedAuthProfileSource?: "auto" | "user";
@@ -348,6 +350,7 @@ export type BuildAgentRuntimePlanParams = {
   modelApi?: string | null;
   harnessId?: string;
   harnessRuntime?: string;
+  harnessRequiresHostApiKey?: boolean;
   allowHarnessAuthProfileForwarding?: boolean;
   /** Canonical route/auth decision prepared before attempt orchestration. */
   preparedAuthPlan?: AgentRuntimeAuthPlan;

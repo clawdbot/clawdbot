@@ -33,12 +33,14 @@ import {
   type CodexAppServerClient,
 } from "./client.js";
 import { persistCodexContextCompactionActivity } from "./context-compaction-activity.js";
+import { resolveCodexCustomProviderBinding } from "./custom-provider-policy.js";
 import { readCodexThreadContextSnapshot } from "./event-projector-usage.js";
 import {
   readCodexNotificationThreadId,
   readCodexNotificationTurnId,
 } from "./notification-correlation.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
+import { CodexAppServerScopedRequestRejectedError } from "./request.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import {
   CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS,
@@ -553,21 +555,30 @@ async function compactCodexNativeThread(
   const shouldReleaseDefaultLease = !options.clientFactory;
   const clientFactory = options.clientFactory ?? getLeasedSharedCodexAppServerClient;
   const runtimeAuthPlan = params.runtimeAuthPlan ?? params.runtimePlan?.auth;
-  // A user-home app-server keeps its native Codex account; injecting a prepared key
-  // would rewrite the CODEX_HOME auth that Codex CLI and Desktop share.
-  const usesPreparedApiKey =
-    !usesSupervisionConnection &&
-    appServer.start.homeScope !== "user" &&
-    runtimeAuthPlan?.modelRoute?.authRequirement === "api-key";
-  const preparedApiKey = usesPreparedApiKey ? params.resolvedApiKey?.trim() : undefined;
-  if (usesPreparedApiKey && !preparedApiKey) {
-    return {
-      ok: false,
-      compacted: false,
-      reason: "Prepared Codex Platform compaction route is missing its resolved API key.",
-    };
-  }
   try {
+    const customProvider = usesSupervisionConnection
+      ? undefined
+      : resolveCodexCustomProviderBinding({
+          provider: params.provider ?? "codex",
+          route: runtimeAuthPlan?.modelRoute,
+          preparedModel: params.runtimeModel,
+          preparedAuthMode: runtimeAuthPlan?.selectedAuthMode,
+          pluginConfig: options.pluginConfig,
+        });
+    // A user-home app-server keeps its native Codex account; injecting a prepared key
+    // would rewrite the CODEX_HOME auth that Codex CLI and Desktop share.
+    const usesPreparedApiKey =
+      !usesSupervisionConnection &&
+      appServer.start.homeScope !== "user" &&
+      (runtimeAuthPlan?.modelRoute?.authRequirement === "api-key" || customProvider !== undefined);
+    const preparedApiKey = usesPreparedApiKey ? params.resolvedApiKey?.trim() : undefined;
+    if (usesPreparedApiKey && !preparedApiKey) {
+      return {
+        ok: false,
+        compacted: false,
+        reason: "Prepared Codex Platform compaction route is missing its resolved API key.",
+      };
+    }
     return await runExclusiveCodexNativeCompaction(
       binding.threadId,
       params.abortSignal,
@@ -576,7 +587,13 @@ async function compactCodexNativeThread(
         const client = await clientFactory({
           startOptions: appServer.start,
           ...(preparedApiKey
-            ? { preparedAuth: { kind: "api-key" as const, apiKey: preparedApiKey } }
+            ? {
+                preparedAuth: {
+                  kind: "api-key" as const,
+                  apiKey: preparedApiKey,
+                  ...(customProvider ? { customProvider } : {}),
+                },
+              }
             : { authProfileId: connection.clientAuthProfileId }),
           agentDir: params.agentDir,
           config: params.config,
@@ -778,7 +795,8 @@ async function compactCodexNativeThread(
               return { started: true as const, accepted: true as const };
             } catch (error) {
               compactionRequestDefinitelyRejected ||=
-                isCodexAppServerPrewriteRequestCancellationError(error);
+                isCodexAppServerPrewriteRequestCancellationError(error) ||
+                error instanceof CodexAppServerScopedRequestRejectedError;
               if (compactionRequestDefinitelyRejected || error instanceof CodexAppServerRpcError) {
                 // Settle a definite rejection before restoration so a refused
                 // write cannot strand the watcher waiting for a nonexistent turn.

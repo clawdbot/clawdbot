@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
 import type { AuthProfileStore } from "../auth-profiles.js";
 import { OAuthRefreshFailureError } from "../auth-profiles/oauth-refresh-failure.js";
+import { buildAgentRuntimeAuthPlan } from "./auth.js";
 import {
   resolvePreparedRuntimeAuthAttempts,
   resolvePreparedRuntimeModelAuth,
@@ -59,6 +60,42 @@ describe("resolvePreparedRuntimeModelAuth", () => {
     vi.unstubAllEnvs();
   });
 
+  it.each(["api-key", "oauth", "aws-sdk"] as const)(
+    "enforces the harness host key for auxiliary %s auth without a model route",
+    async (mode) => {
+      const provider = "custom-provider";
+      const result = resolvePreparedRuntimeModelAuth({
+        plan: buildAgentRuntimeAuthPlan({
+          provider,
+          harnessId: "fixture-native",
+          harnessRequiresHostApiKey: true,
+          providerAuthAliasesEnabled: false,
+        }),
+        model: { ...platformModel, provider, baseUrl: "https://proxy.example/v1" },
+        cfg: {
+          models: {
+            providers: {
+              [provider]: {
+                baseUrl: "https://proxy.example/v1",
+                auth: mode,
+                ...(mode === "aws-sdk" ? {} : { apiKey: "synthetic-credential" }),
+                models: [],
+              },
+            },
+          },
+        },
+        store: authStore({}),
+      });
+      if (mode === "api-key") {
+        await expect(result).resolves.toMatchObject({
+          auth: { apiKey: "synthetic-credential", mode },
+        });
+      } else {
+        await expect(result).rejects.toThrow("requires a host-resolved API key");
+      }
+    },
+  );
+
   it("removes profile and selection state after a Platform key is resolved", () => {
     const store = {
       ...authStore({
@@ -108,6 +145,43 @@ describe("resolvePreparedRuntimeModelAuth", () => {
       runtimeExternalProfileIdsAuthoritative: true,
     });
   });
+
+  it.each([
+    { harnessId: "codex", withholdProfile: true },
+    { harnessId: "fixture-native", withholdProfile: false },
+  ])(
+    "scopes stored credentials alongside a prepared generic provider key ($harnessId)",
+    ({ harnessId, withholdProfile }) => {
+      const store = authStore({
+        "custom-provider:work": {
+          type: "api_key",
+          provider: "custom-provider",
+          key: "synthetic-custom-key",
+        },
+        "openai:unrelated": { type: "token", provider: "openai", token: "synthetic-native-token" },
+      });
+      const plan = buildAgentRuntimeAuthPlan({
+        provider: "custom-provider",
+        authProfileProvider: "custom-provider",
+        authProfileMode: "api_key",
+        sessionAuthProfileId: "custom-provider:work",
+        sessionAuthProfileCandidateIds: ["custom-provider:work"],
+        harnessId,
+        allowHarnessAuthProfileForwarding: true,
+        providerAuthAliasesEnabled: false,
+      });
+      const scoped = scopeAuthProfileStoreToPreparedPlan(store, plan);
+
+      expect(scoped.profiles).toEqual(
+        withholdProfile
+          ? {}
+          : {
+              "custom-provider:work": store.profiles["custom-provider:work"],
+            },
+      );
+      expect(store.profiles["custom-provider:work"]).toBeDefined();
+    },
+  );
 
   it("keeps a failed explicit SecretRef terminal across prepared profile candidates", async () => {
     const store = authStore({

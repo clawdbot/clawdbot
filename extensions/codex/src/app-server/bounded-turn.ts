@@ -12,6 +12,7 @@ import {
 import type { CodexAppServerAuthRequirement, CodexAppServerPreparedAuth } from "./auth-bridge.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { CODEX_CUSTOM_PROVIDER_API_KEY_ENV } from "./custom-provider.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { CodexEphemeralTurn } from "./ephemeral-turn.js";
 import type { CodexUsageProjection } from "./event-projector-usage.js";
@@ -167,6 +168,28 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   const startOptions = workspace.codexHome
     ? buildPrivateCodexAppServerStartOptions(appServer.start, workspace.codexHome)
     : appServer.start;
+  if (
+    workspace.codexHome &&
+    params.preparedAuth?.kind === "api-key" &&
+    params.preparedAuth.customProvider
+  ) {
+    // Copy only the provider: private follow-ups must not inherit the agent's tools.
+    // The workload key is supplied through the child environment.
+    const binding = params.preparedAuth.customProvider;
+    await fs.writeFile(
+      path.join(workspace.codexHome, "config.toml"),
+      [
+        `[model_providers.${JSON.stringify(binding.provider)}]`,
+        'name="OpenClaw prepared provider"',
+        `base_url=${JSON.stringify(binding.baseUrl)}`,
+        `env_key=${JSON.stringify(CODEX_CUSTOM_PROVIDER_API_KEY_ENV)}`,
+        'wire_api="responses"',
+        "requires_openai_auth=false",
+        "supports_websockets=false",
+      ].join("\n"),
+      { mode: 0o600 },
+    );
+  }
   const ownsClient = !params.options.clientFactory;
   const authSelection = params.preparedAuth
     ? { preparedAuth: params.preparedAuth }
@@ -229,12 +252,20 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   };
   try {
     params.assertCurrent?.();
-    const modelSelection = await resolveCodexBoundedTurnModel({
-      client,
-      selection: params.model,
-      requiredModalities: params.requiredModalities,
-      ...requestOptions,
-    });
+    // Custom text models may be absent from Codex's catalog. The endpoint
+    // validates an explicitly selected model when inference starts.
+    const modelSelection =
+      params.preparedAuth?.kind === "api-key" &&
+      params.preparedAuth.customProvider &&
+      params.model.mode === "required" &&
+      params.requiredModalities.every((modality) => modality === "text")
+        ? { catalogId: params.model.id, runtimeModelId: params.model.id }
+        : await resolveCodexBoundedTurnModel({
+            client,
+            selection: params.model,
+            requiredModalities: params.requiredModalities,
+            ...requestOptions,
+          });
     const inheritedMcpServerNames = params.requireNoExternalCapabilities
       ? await readCodexInheritedMcpServerNames(client, workspace.cwd, abortController.signal)
       : [];

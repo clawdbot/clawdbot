@@ -414,6 +414,8 @@ type AgentHarnessRunCapability<
   }): AgentHarnessSessionRuntimeOwnership | undefined;
   /** Lets this harness resolve forwarded profiles or its own native credentials. */
   authBootstrap?: "harness";
+  /** Requires a host-resolved API key for this provider, instead of native account auth. */
+  requiresHostApiKey?(provider: string): boolean;
   runAttempt(params: TAttemptParams): Promise<AgentHarnessAttemptResult>;
   /**
    * Produces one final answer from a settled tool transcript without exposing

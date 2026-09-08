@@ -19,6 +19,7 @@ import { maybeCompactCodexAppServerSession as maybeCompactCodexAppServerSessionI
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexServerNotification } from "./protocol.js";
+import { CodexAppServerScopedRequestRejectedError } from "./request.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { resolveCodexSessionBinding, sessionBindingIdentity } from "./session-binding.js";
 import {
@@ -2270,6 +2271,22 @@ describe("maybeCompactCodexAppServerSession", () => {
 
     expect(seenAuthProfileId).toBe("openai:work");
     expect(result.ok).toBe(true);
+  });
+
+  it("does not interrupt a compaction refused before the native write", async () => {
+    const fake = createFakeCodexClient({ autoCompleteCompaction: false });
+    fake.request.mockRejectedValueOnce(
+      new CodexAppServerScopedRequestRejectedError("custom provider endpoint mismatch"),
+    );
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding({});
+
+    const result = requireCompactResult(await startCompaction(sessionFile));
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain("custom provider endpoint mismatch");
+    expect(fake.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+    expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("thread-1");
   });
 
   it("reports missing thread bindings as failed native compaction", async () => {

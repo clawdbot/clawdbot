@@ -1,6 +1,7 @@
 import { readSourceReplyDeliveryRuntime } from "../../../auto-reply/reply/source-reply-delivery-runtime.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { resolveProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
+import { SecretSurfaceUnavailableError } from "../../../secrets/runtime-degraded-state.js";
 import { resolvePreparedRunAdmission } from "../../admitted-run-context.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { isProfileInCooldown } from "../../auth-profiles.js";
@@ -8,6 +9,7 @@ import { resolvePreparedModelThinkingCompat } from "../../model-catalog-lookup.j
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { resolveProviderEndpoint } from "../../provider-attribution.js";
 import { getModelProviderRequestRouteFacts } from "../../provider-request-config.js";
+import { agentRuntimeAuthPlanRequiresHostApiKey } from "../../runtime-plan/auth.js";
 import {
   hasPreparedAuthAttemptModelMetadata,
   resolveCredentialScopedAuthAttemptModelDecision,
@@ -260,9 +262,9 @@ export async function prepareEmbeddedRunRuntime(input: {
   };
   const pluginHarnessOwnsAuthBootstrap =
     pluginHarnessOwnsTransport && agentHarness.authBootstrap === "harness";
-  const preparedApiKeyRoute = activePreparedAuthPlan.modelRoute?.authRequirement === "api-key";
-  const pluginHarnessHasPreparedApiKeyAttempt = preparedAuthAttempts.some(
-    (attempt) => attempt.plan.modelRoute?.authRequirement === "api-key",
+  const preparedApiKeyRoute = agentRuntimeAuthPlanRequiresHostApiKey(activePreparedAuthPlan);
+  const pluginHarnessHasPreparedApiKeyAttempt = preparedAuthAttempts.some((attempt) =>
+    agentRuntimeAuthPlanRequiresHostApiKey(attempt.plan),
   );
   const pluginHarnessNeedsOpenClawAuthBootstrap =
     pluginHarnessOwnsTransport &&
@@ -313,6 +315,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     return {
       runtimeModel: nextRuntimeModel,
       authRequirement: modelDecision.authRequirement,
+      requiresHostApiKey: attempt.plan.requiresHostApiKey,
       allowAuthProfileFallback: attempt.allowAuthProfileFallback,
       commit() {
         applyResolvedRuntimeModel(nextRuntimeModel, nextResolvedModel);
@@ -406,13 +409,16 @@ export async function prepareEmbeddedRunRuntime(input: {
         authState.profileIndex = preparedAuthAttempts.length;
         return false;
       }
-      if (candidateAttempt.plan.modelRoute?.authRequirement === "api-key") {
+      if (agentRuntimeAuthPlanRequiresHostApiKey(candidateAttempt.plan)) {
         try {
           await authController.applyAuthProfileCandidate(candidate, candidateIndex);
           authState.thinkLevel = initialThinkLevel;
           attemptedThinking.clear();
           return true;
-        } catch {
+        } catch (error) {
+          if (error instanceof SecretSurfaceUnavailableError) {
+            throw error;
+          }
           continue;
         }
       }

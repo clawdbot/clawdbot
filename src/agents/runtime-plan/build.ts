@@ -160,6 +160,7 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       metadataSnapshot: toolPlanningMetadataSnapshot,
       harnessId: params.harnessId,
       harnessRuntime: params.harnessRuntime,
+      harnessRequiresHostApiKey: params.harnessRequiresHostApiKey,
       allowHarnessAuthProfileForwarding: params.allowHarnessAuthProfileForwarding,
     });
   const resolvedRef = {

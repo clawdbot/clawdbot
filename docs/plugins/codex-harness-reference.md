@@ -274,6 +274,7 @@ managed stdio or the local Unix control socket for production workloads.
 | `remoteWorkspaceRoot`            | unset                                                  | Remote Codex app-server workspace root. OpenClaw maps the local cwd into this root and transfers authoritative remote attachments over an output-capped, no-shell `command/exec` reader. Paths escaping either workspace, symbolic links, oversized files, and unbounded attachment batches fail closed; uploads retain the configured channel identity and app-server request timeout.                                            |
 | `loopDetectionPreToolUseRelay`   | `true`                                                 | Enables the Codex `PreToolUse` relay for loop detection when OpenClaw loop detection is enabled. OpenClaw installs no `PreToolUse` relay when no before-tool plugin hook, trusted-tool policy, or enabled loop detector has local work. Set `false` to disable the loop-detection relay even when detection is enabled; before-tool plugin hooks and trusted-tool policy still install their required fail-closed relay.           |
 | `requestTimeoutMs`               | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                                                                                                                                        |
+| `providerIds`                    | `["codex", "openai"]`                                  | Provider IDs eligible for Codex selection. A nonempty list replaces the defaults and is read from live plugin config. Custom IDs require a matching native provider and prepared route; see [Custom native providers](/plugins/codex-harness-reference#custom-native-providers).                                                                                                                                                   |
 | `mode`                           | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution.                                                                                                                                                                                                                                                                                                                                                                                    |
 | `approvalPolicy`                 | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start, resume, and turn.                                                                                                                                                                                                                                                                                                                                                               |
 | `sandbox`                        | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start and resume. Active OpenClaw sandboxes narrow `danger-full-access` turns to Codex `workspace-write`; the turn network flag follows OpenClaw sandbox egress.                                                                                                                                                                                                                          |
@@ -409,6 +410,105 @@ missing ownership fails closed.
 Only connect OpenClaw to a `0.149.0` or newer remote app-server trusted to accept
 configured marketplace plugin installs and inventory refreshes. Missing modern
 inventory methods and server, authentication, or transport failures fail closed.
+
+## Custom native providers
+
+Add a custom Responses provider to
+`plugins.entries.codex.config.appServer.providerIds`. IDs are normalized to
+lowercase and must match Codex `model_providers`: letters, digits, hyphens, or
+underscores, starting with a letter or digit; `constructor` and `prototype` are
+reserved. The list replaces the defaults and is read at each runtime selection.
+Include `codex` and `openai` to retain their existing routes.
+
+Configure the OpenClaw provider and select its model:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          appServer: {
+            homeScope: "agent",
+            providerIds: ["codex", "openai", "responses-proxy"],
+            transport: "stdio",
+          },
+        },
+      },
+    },
+  },
+  models: {
+    providers: {
+      "responses-proxy": {
+        api: "openai-responses",
+        apiKey: "${CUSTOM_PROXY_API_KEY}",
+        baseUrl: "https://proxy.example/v1",
+        models: [{ id: "gpt-5.5", name: "GPT-5.5" }],
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      model: { primary: "responses-proxy/gpt-5.5" },
+      models: {
+        "responses-proxy/gpt-5.5": { agentRuntime: { id: "codex" } },
+      },
+    },
+  },
+}
+```
+
+Supply `CUSTOM_PROXY_API_KEY` through OpenClaw's secret configuration. Add the
+matching native provider to `<agentDir>/codex-home/config.toml`:
+
+```toml
+[model_providers.responses-proxy]
+name = "Responses proxy"
+base_url = "https://proxy.example/v1"
+wire_api = "responses"
+requires_openai_auth = false
+env_key = "CODEX_API_KEY"
+supports_websockets = false
+```
+
+OpenClaw supplies the selected API key as `CODEX_API_KEY`; keep it out of Codex
+arguments and `config.toml`. The agent home does not inherit the standalone CLI's
+user config. Codex `-c` overrides in `appServer.args` are also supported and
+validated. Reload or restart Codex after configuration changes.
+
+Custom providers require:
+
+- Local stdio and `homeScope: "agent"`. User-home, Unix-socket, WebSocket, and
+  remote app-server connections are unsupported.
+- Matching Responses endpoints over HTTPS, or HTTP on loopback. URL comparison
+  normalizes URLs and removes trailing slashes. Credentials, queries, and
+  fragments in URLs are rejected.
+- API-key auth. Subscription, command-backed, AWS, and static bearer auth are
+  unsupported, as are extra headers, environment headers, query parameters,
+  native Responses WebSockets, and authored request overrides. The provider's
+  runtime policy must also permit Codex.
+
+OpenClaw checks the running server's effective configuration before inference
+and at thread start, resume, fork, and turn boundaries. Thread patches cannot
+replace the route or authentication; session responses must name the selected
+provider. Unknown or mismatched routes fail closed without replay through
+OpenClaw. For a rejected route, check the Codex home, provider ID, endpoint, and
+`env_key`.
+
+The workload key is hidden from native shell and process-RPC environments.
+OpenClaw disables shell snapshots and login-shell environment recovery and
+prevents thread patches from restoring the key. Trusted executables and
+explicit MCP environment forwarding remain outside these protections.
+
+Private bounded follow-ups receive a fresh Codex home containing only the
+prepared provider configuration and key. Explicit text-only models need not
+appear in Codex's catalog; the endpoint must serve them. Default and multimodal
+selection still require catalog checks.
+
+A workload key provides neither ChatGPT account identity nor subscription
+refresh. Custom providers use human approval review; allowing a provider does
+not make its endpoint trusted for model-backed review.
 
 ## Approval and sandbox modes
 
@@ -891,12 +991,13 @@ on every request. Disable native session discovery with
 `sessionCatalog.enabled: false` when no native history should be imported.
 
 A custom endpoint is not automatically a supported Codex route. Explicit
-`agentRuntime.id: "codex"` does not bypass prepared-route compatibility or the
-trusted-endpoint requirement for model-backed approval review. A workload API
-key also does not provide ChatGPT account identity or subscription refresh.
+`agentRuntime.id: "codex"` does not bypass prepared-route compatibility. The
+[custom native provider support](/plugins/codex-harness-reference#custom-native-providers)
+verifies Responses API-key routes. Model-backed approval review still requires
+a trusted endpoint. A workload API key does not provide ChatGPT account
+identity or subscription refresh.
 Verify those contracts before using a broker with the native harness; do not
-substitute a custom provider, remove safety metadata, or weaken review to make
-an inference smoke test pass.
+remove safety metadata or weaken review to make an inference smoke test pass.
 
 If discovery is temporarily unavailable or times out, the subscription route
 uses offline hints derived from the bundled OpenAI model manifest, with Codex

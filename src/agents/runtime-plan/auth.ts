@@ -19,6 +19,24 @@ const EMPTY_PROVIDER_AUTH_ALIAS_METADATA = {
   plugins: [],
 } satisfies NonNullable<ProviderAuthAliasLookupParams["metadataSnapshot"]>;
 
+/** A selected auth mode alone does not transfer credential ownership to the host. */
+export function agentRuntimeAuthPlanRequiresHostApiKey(plan?: AgentRuntimeAuthPlan): boolean {
+  return plan?.requiresHostApiKey === true || plan?.modelRoute?.authRequirement === "api-key";
+}
+
+/** A harness workload key cannot be replaced by account or SDK-owned auth. */
+export function assertRequiredHostApiKey(params: {
+  required?: boolean;
+  provider: string;
+  auth: { mode?: string; apiKey?: string };
+}): void {
+  if (params.required && (params.auth.mode !== "api-key" || !params.auth.apiKey?.trim())) {
+    throw new Error(
+      `The selected agent harness requires a host-resolved API key for ${params.provider}.`,
+    );
+  }
+}
+
 function resolveHarnessAuthProvider(params: {
   harnessId?: string;
   harnessRuntime?: string;
@@ -47,6 +65,7 @@ export function buildAgentRuntimeAuthPlan(params: {
   providerAuthAliasesEnabled?: boolean;
   harnessId?: string;
   harnessRuntime?: string;
+  harnessRequiresHostApiKey?: boolean;
   allowHarnessAuthProfileForwarding?: boolean;
 }): AgentRuntimeAuthPlan {
   const providerAuthAliasesEnabled =
@@ -65,7 +84,10 @@ export function buildAgentRuntimeAuthPlan(params: {
     params.authProfileProvider ?? params.provider,
     aliasLookupParams,
   );
-  const harnessAuthProvider = resolveHarnessAuthProvider(params);
+  const harnessRequiresHostApiKey = params.harnessRequiresHostApiKey === true;
+  const harnessAuthProvider = harnessRequiresHostApiKey
+    ? undefined
+    : resolveHarnessAuthProvider(params);
   const harnessProviderForAuth = harnessAuthProvider
     ? resolveProviderIdForAuth(harnessAuthProvider, aliasLookupParams)
     : undefined;
@@ -74,7 +96,11 @@ export function buildAgentRuntimeAuthPlan(params: {
     harnessProviderForAuth &&
     harnessProviderForAuth === authProfileProviderForAuth;
   const providerCanForwardProfile =
-    !harnessProviderForAuth && providerForAuth === authProfileProviderForAuth;
+    !harnessProviderForAuth &&
+    providerForAuth === authProfileProviderForAuth &&
+    (!harnessRequiresHostApiKey ||
+      (params.allowHarnessAuthProfileForwarding !== false &&
+        (params.authProfileMode === "api-key" || params.authProfileMode === "api_key")));
   const canForwardProfile = providerCanForwardProfile || harnessCanForwardProfile;
   const forwardedAuthProfileId = canForwardProfile ? params.sessionAuthProfileId : undefined;
 
@@ -85,6 +111,7 @@ export function buildAgentRuntimeAuthPlan(params: {
     ...(params.modelId ? { modelId: params.modelId } : {}),
     authProfileProviderForAuth,
     ...(harnessProviderForAuth ? { harnessAuthProvider: harnessProviderForAuth } : {}),
+    ...(harnessRequiresHostApiKey ? { requiresHostApiKey: true } : {}),
     ...(canForwardProfile ? { forwardedAuthProfileId } : {}),
     ...(canForwardProfile && params.sessionAuthProfileId && params.sessionAuthProfileSource
       ? {

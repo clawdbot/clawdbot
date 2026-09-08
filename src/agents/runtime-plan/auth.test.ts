@@ -159,4 +159,105 @@ describe("buildAgentRuntimeAuthPlan", () => {
     expect(plan.forwardedAuthProfileCandidateIds).toBeUndefined();
     expect(plan.selectedAuthMode).toBeUndefined();
   });
+
+  it.each(["api_key", "oauth", "token"])(
+    "keeps an OpenAI-aliased custom route provider-owned for %s auth",
+    (mode) => {
+      pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+        plugins: [
+          {
+            id: "alias-owner",
+            origin: "global",
+            providerAuthAliases: { "custom-provider": "openai" },
+          },
+        ],
+        diagnostics: [],
+      });
+      const plan = buildAgentRuntimeAuthPlan({
+        provider: "custom-provider",
+        authProfileProvider: "openai",
+        authProfileMode: mode,
+        sessionAuthProfileId: "openai:work",
+        harnessId: "codex",
+        harnessRequiresHostApiKey: true,
+      });
+      expect(plan.providerForAuth).toBe("openai");
+      expect(plan.harnessAuthProvider).toBeUndefined();
+      expect(plan.requiresHostApiKey).toBe(true);
+      expect(plan.forwardedAuthProfileId).toBe(mode === "api_key" ? "openai:work" : undefined);
+    },
+  );
+
+  it.each([
+    { source: "direct", mode: "api-key", profileId: undefined },
+    { source: "profile", mode: "api_key", profileId: "custom-provider:work" },
+  ])("preserves provider-owned $source API-key auth for Codex", ({ mode, profileId }) => {
+    const plan = buildAgentRuntimeAuthPlan({
+      provider: "custom-provider",
+      authProfileProvider: "custom-provider",
+      authProfileMode: mode,
+      sessionAuthProfileId: profileId,
+      sessionAuthProfileSource: "user",
+      sessionAuthProfileCandidateIds: profileId ? [profileId] : undefined,
+      harnessId: "codex",
+      harnessRequiresHostApiKey: true,
+      metadataSnapshot: { plugins: [] },
+    });
+
+    expect(plan.harnessAuthProvider).toBeUndefined();
+    expect(plan.selectedAuthMode).toBe(mode);
+    expect(plan.forwardedAuthProfileId).toBe(profileId);
+    expect(plan.forwardedAuthProfileSource).toBe(profileId ? "user" : undefined);
+    expect(plan.forwardedAuthProfileCandidateIds).toEqual(profileId ? [profileId] : undefined);
+    expect(plan.modelRoute).toBeUndefined();
+  });
+
+  it.each([
+    { name: "another provider's key", owner: "another-provider", mode: "api_key", allow: true },
+    { name: "an OpenAI key", owner: "openai", mode: "api_key", allow: true },
+    { name: "OAuth", owner: "custom-provider", mode: "oauth", allow: true },
+    { name: "a token", owner: "custom-provider", mode: "token", allow: true },
+    { name: "a subscription", owner: "custom-provider", mode: "subscription", allow: true },
+    { name: "an unselected credential", owner: "custom-provider", mode: undefined, allow: true },
+    { name: "disabled forwarding", owner: "custom-provider", mode: "api-key", allow: false },
+  ])("does not forward $name as custom Codex auth", ({ owner, mode, allow }) => {
+    const plan = buildAgentRuntimeAuthPlan({
+      provider: "custom-provider",
+      authProfileProvider: owner,
+      authProfileMode: mode,
+      sessionAuthProfileId: `${owner}:work`,
+      sessionAuthProfileSource: "user",
+      sessionAuthProfileCandidateIds: [`${owner}:work`],
+      harnessRuntime: "codex",
+      harnessRequiresHostApiKey: true,
+      allowHarnessAuthProfileForwarding: allow,
+      metadataSnapshot: { plugins: [] },
+    });
+
+    expect(plan.harnessAuthProvider).toBeUndefined();
+    expect(plan.forwardedAuthProfileId).toBeUndefined();
+    expect(plan.forwardedAuthProfileSource).toBeUndefined();
+    expect(plan.forwardedAuthProfileCandidateIds).toBeUndefined();
+    expect(plan.selectedAuthMode).toBeUndefined();
+  });
+
+  it.each([
+    { provider: "codex", mode: "oauth" },
+    { provider: "openai", mode: "api_key" },
+  ])("retains native OpenAI auth ownership for $provider", ({ provider, mode }) => {
+    const plan = buildAgentRuntimeAuthPlan({
+      provider,
+      authProfileProvider: "openai",
+      authProfileMode: mode,
+      sessionAuthProfileId: "openai:work",
+      harnessRuntime: "codex",
+      metadataSnapshot: { plugins: [] },
+    });
+
+    expect(plan).toMatchObject({
+      harnessAuthProvider: "openai",
+      forwardedAuthProfileId: "openai:work",
+      selectedAuthMode: mode,
+    });
+  });
 });

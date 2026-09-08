@@ -57,7 +57,13 @@ import {
   resolveCodexComputerUseServiceAppSourcePath,
 } from "./computer-use-service.js";
 import type { CodexAppServerHomeScope, CodexAppServerStartOptions } from "./config-contracts.js";
+import { readCodexEffectiveConfig } from "./config-layer-policy.js";
 import { resolveCodexComputerUseConfig } from "./config-runtime.js";
+import {
+  CODEX_CUSTOM_PROVIDER_API_KEY_ENV,
+  assertCodexCustomProviderEffectiveConfig,
+  type CodexCustomProviderBinding,
+} from "./custom-provider.js";
 import {
   resolveMacOSDesktopCodexAppPathCandidates,
   type MacOSDesktopCodexAppPathCandidate,
@@ -106,6 +112,14 @@ export async function bridgeCodexAppServerStartOptions(params: {
   config?: AuthProfileOrderConfig;
   pluginConfig?: unknown;
 }): Promise<CodexAppServerStartOptions> {
+  const customProvider =
+    params.preparedAuth?.kind === "api-key" ? params.preparedAuth.customProvider : undefined;
+  if (
+    customProvider &&
+    (params.startOptions.transport !== "stdio" || params.startOptions.homeScope === "user")
+  ) {
+    throw new Error("Configured Codex provider credentials require agent-home stdio.");
+  }
   if (params.startOptions.transport !== "stdio") {
     return params.startOptions;
   }
@@ -114,10 +128,37 @@ export async function bridgeCodexAppServerStartOptions(params: {
 
   if (params.preparedAuth) {
     const scopedStartOptions = await scopeStartOptions();
-    return withClearedEnvironmentVariables(
+    const cleared = withClearedEnvironmentVariables(
       scopedStartOptions,
       CODEX_APP_SERVER_PREPARED_AUTH_ENV_VARS,
     );
+    if (params.preparedAuth.kind === "api-key" && customProvider) {
+      return {
+        ...cleared,
+        // Keep the provider key in the server, not in native shell environments.
+        // CLI overrides own the process baseline; the client owns thread overrides.
+        args: [
+          ...cleared.args,
+          "-c",
+          'shell_environment_policy.set.CODEX_API_KEY=""',
+          "-c",
+          "shell_environment_policy.experimental_use_profile=false",
+          "-c",
+          "features.shell_snapshot=false",
+          "-c",
+          "allow_login_shell=false",
+        ],
+        env: { ...cleared.env, [CODEX_CUSTOM_PROVIDER_API_KEY_ENV]: params.preparedAuth.apiKey },
+        clearEnv: cleared.clearEnv?.filter((name) => {
+          const key = name.trim();
+          return (
+            (process.platform === "win32" ? key.toUpperCase() : key) !==
+            CODEX_CUSTOM_PROVIDER_API_KEY_ENV
+          );
+        }),
+      };
+    }
+    return cleared;
   }
   if (params.authProfileId === null) {
     return scopeStartOptions();
@@ -195,7 +236,7 @@ type CodexAppServerPreparedAuthProfileSnapshot = {
 };
 
 export type CodexAppServerPreparedAuth =
-  | { kind: "api-key"; apiKey: string }
+  | { kind: "api-key"; apiKey: string; customProvider?: CodexCustomProviderBinding }
   | {
       kind: "profile";
       profileId: string;
@@ -269,6 +310,7 @@ export async function resolveCodexAppServerPreparedAuthProfileSnapshot(params: {
 export async function resolveCodexAppServerPreparedAuthHandoff(params: {
   authRequirement?: CodexAppServerAuthRequirement;
   resolvedApiKey?: string;
+  customProvider?: CodexCustomProviderBinding;
   authProfileId?: string;
   authProfileStore: AuthProfileStore;
   agentDir?: string;
@@ -285,6 +327,15 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
   // token logins, so a prepared OpenClaw handoff here would rewrite the account that
   // Codex CLI and Desktop share. Native homes are verified, never logged into.
   const usesNativeHome = params.homeScope === "user";
+  const authRequirement = params.authRequirement ?? (params.customProvider ? "api-key" : undefined);
+  if (
+    params.customProvider &&
+    (usesNativeHome || params.requirePreparedAuth || authRequirement !== "api-key")
+  ) {
+    throw new Error(
+      "Configured Codex providers require a prepared API key on local agent-home stdio.",
+    );
+  }
   if (params.requirePreparedAuth && usesNativeHome) {
     throw createCodexAppServerAuthError(
       'Codex remote-exec cloud placement requires prepared OpenAI auth. Configure an OpenAI API-key, OAuth, or token profile and use appServer.homeScope="agent"; ambient credentials and native Codex auth are not allowed.',
@@ -293,14 +344,18 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
   if (usesNativeHome) {
     return { nativeAuthProfile: true };
   }
-  if (params.authRequirement === "api-key") {
+  if (authRequirement === "api-key") {
     const apiKey = params.resolvedApiKey?.trim();
     if (!apiKey) {
       throw new Error("Prepared Codex API-key route is missing its resolved API key.");
     }
     return {
       nativeAuthProfile: false,
-      preparedAuth: { kind: "api-key" as const, apiKey },
+      preparedAuth: {
+        kind: "api-key" as const,
+        apiKey,
+        ...(params.customProvider ? { customProvider: params.customProvider } : {}),
+      },
     };
   }
 
@@ -666,6 +721,19 @@ export async function applyCodexAppServerAuthProfile(params: {
   assertCurrent?: () => void;
 }): Promise<void> {
   params.assertCurrent?.();
+  const customProvider =
+    params.preparedAuth?.kind === "api-key" ? params.preparedAuth.customProvider : undefined;
+  if (customProvider) {
+    if (params.startOptions?.transport !== "stdio" || params.startOptions.homeScope === "user") {
+      throw new Error("Configured Codex provider credentials require agent-home stdio.");
+    }
+    const cwd = params.startOptions.cwd ?? process.cwd();
+    const effective = await readCodexEffectiveConfig(params.client, cwd);
+    params.assertCurrent?.();
+    assertCodexCustomProviderEffectiveConfig(customProvider, effective.config);
+    params.client.bindCustomProvider(customProvider, cwd);
+    return;
+  }
   if (!params.preparedAuth && params.authProfileId === null) {
     await assertNativeCodexAccountMatchesRoute(
       params.client,

@@ -5,6 +5,7 @@ import type {
 import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
 import { runBoundedCodexAppServerTurn, type CodexBoundedTurnOptions } from "./bounded-turn.js";
+import { resolveCodexCustomProviderBinding } from "./custom-provider-policy.js";
 import { createAttributedCodexAssistantMessage } from "./event-projector-assistant-message.js";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import { assertCodexPassiveTurnItems } from "./protocol-validators.js";
@@ -41,6 +42,16 @@ export async function runCodexSettledTurnFinalization(
   const { selection, data: historyItems } = finalizationContext;
   const hostAuthPlan = attempt.runtimePlan?.auth;
   const authRequirement = hostAuthPlan?.modelRoute?.authRequirement;
+  const nativeProvider = selection.modelProvider?.trim().toLowerCase() ?? "codex";
+  if (nativeProvider !== "codex" && nativeProvider !== "openai") {
+    // Use the captured provider's credential for the follow-up.
+    const preparedProvider = hostAuthPlan?.modelRoute?.provider ?? attempt.model.provider;
+    if (preparedProvider.trim().toLowerCase() !== nativeProvider) {
+      throw new Error(
+        "Captured Codex custom provider does not match the prepared credential route",
+      );
+    }
+  }
   // Capture fixes binding/ordered-profile selection. Ordinary user-home sessions
   // intentionally authorize private side turns through the host plan instead.
   const authProfileId =
@@ -48,6 +59,13 @@ export async function runCodexSettledTurnFinalization(
   const authHandoff = await resolveCodexAppServerPreparedAuthHandoff({
     authRequirement,
     resolvedApiKey: attempt.resolvedApiKey,
+    customProvider: resolveCodexCustomProviderBinding({
+      provider: nativeProvider,
+      route: hostAuthPlan?.modelRoute,
+      preparedModel: attempt.model,
+      preparedAuthMode: hostAuthPlan?.selectedAuthMode,
+      pluginConfig: options.pluginConfig,
+    }),
     authProfileId,
     authProfileStore: attempt.authProfileStore,
     agentDir: attempt.agentDir,

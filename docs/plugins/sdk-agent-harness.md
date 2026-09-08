@@ -92,6 +92,13 @@ set this capability on a harness that only sometimes owns authentication.
 This static bootstrap capability is distinct from ownership of an already-bound
 native session's model and connection.
 
+A harness that needs a host-resolved API key for some providers can implement
+`requiresHostApiKey(provider)`. Return `true` for those providers: core selects
+and resolves a compatible API-key credential before dispatch, including auth
+retries and auxiliary calls. Return `false` to retain native auth bootstrap.
+Codex uses this for custom provider routes; its `codex` and `openai` routes keep
+their existing auth behavior.
+
 ### Bound native session ownership
 
 The optional `resolveSessionRuntimeOwnership({ config, agentId, sessionId,

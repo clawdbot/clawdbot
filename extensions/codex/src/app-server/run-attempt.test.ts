@@ -7649,7 +7649,16 @@ describe("runCodexAppServerAttempt", () => {
       ...createParams(sessionFile, workspaceDir),
       provider: "lmstudio",
       modelId: "local-model",
-      model: createCodexTestModel("lmstudio"),
+      model: {
+        ...createCodexTestModel("lmstudio"),
+        api: "openai-responses",
+        baseUrl: "https://proxy.example/v1",
+      },
+      resolvedApiKey: "synthetic-proxy-key",
+      runtimePlan: {
+        ...createCodexRuntimePlanFixture(),
+        auth: { providerForAuth: "lmstudio", selectedAuthMode: "api-key" },
+      },
       config: {
         tools: {
           exec: {
@@ -7659,7 +7668,9 @@ describe("runCodexAppServerAttempt", () => {
       },
     } as EmbeddedRunAttemptParams;
     setCodexTestModelSupportsTools(params, false);
-    const run = runCodexAppServerAttempt(params, { pluginConfig: {} });
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { providerIds: ["lmstudio"] } },
+    });
     await completeStartedRun(run, waitForMethod, completeTurn);
     const startRequest = requests.find((request) => request.method === "thread/start");
     const startRequestParams = startRequest?.params as Record<string, unknown> | undefined;

@@ -462,7 +462,7 @@ function mockCliOutput(output: { text: string; rawText?: string }) {
 }
 
 function registerCodexSideQuestionHarness(
-  overrides: Partial<Pick<AgentHarness, "authBootstrap" | "supports">> = {},
+  overrides: Partial<Pick<AgentHarness, "authBootstrap" | "supports" | "requiresHostApiKey">> = {},
 ) {
   const runHarnessSideQuestion = vi.fn().mockResolvedValue({ text: "Codex side answer." });
   registerAgentHarness({
@@ -1406,6 +1406,65 @@ describe("runBtwSideQuestion", () => {
         }),
       }),
     );
+  });
+
+  it("forwards a generic provider key to a native side question without an OpenAI identity", async () => {
+    const sideQuestion = registerCodexSideQuestionHarness({
+      authBootstrap: "harness",
+      requiresHostApiKey(this: AgentHarness, provider) {
+        return this.id === "codex" && provider === "custom-provider";
+      },
+      supports: ({ provider }) =>
+        provider === "custom-provider" ? { supported: true, priority: 100 } : { supported: false },
+    });
+    const model = {
+      provider: "custom-provider",
+      id: "gpt-5.2-codex",
+      api: "openai-responses" as const,
+      baseUrl: "https://proxy.example/v1",
+    };
+    resolveModelWithRegistryMock.mockReturnValue(model);
+    resolveModelAsyncMock.mockResolvedValue({ model });
+    resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
+    ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
+    resolveProviderEntryApiKeyProfileReferenceMock.mockReturnValue({ kind: "literal" });
+    getApiKeyForModelMock.mockResolvedValue({
+      apiKey: "synthetic-custom-key",
+      mode: "api-key",
+      source: "models.json",
+    });
+
+    await expect(
+      runSideQuestion({
+        cfg: {
+          models: {
+            providers: {
+              "custom-provider": {
+                api: "openai-responses",
+                baseUrl: model.baseUrl,
+                apiKey: "synthetic-custom-key",
+                models: [],
+              },
+            },
+          },
+        },
+        provider: "custom-provider",
+        model: model.id,
+      }),
+    ).resolves.toEqual({ text: "Codex side answer." });
+
+    expect(sideQuestion).toHaveBeenCalledOnce();
+    expect(mockArg(sideQuestion, 0, 0)).toMatchObject({
+      authProfileId: undefined,
+      preparedRuntimeAuth: {
+        resolvedApiKey: "synthetic-custom-key",
+        plan: {
+          providerForAuth: "custom-provider",
+          authProfileProviderForAuth: "custom-provider",
+          selectedAuthMode: "api-key",
+        },
+      },
+    });
   });
 
   it("lets Codex reproduce an unprofiled Platform API key", async () => {

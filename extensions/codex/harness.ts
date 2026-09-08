@@ -9,6 +9,8 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { readCodexPluginConfig } from "./src/app-server/config-parsing.js";
+import { supportsCodexCustomProvider } from "./src/app-server/custom-provider-policy.js";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
 import { sessionBindingIdentity } from "./src/app-server/session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
@@ -44,6 +46,17 @@ const CODEX_TOOL_POLICY_SAFE_DENY_NAMES = [
   "video_generate",
   "tts",
 ] as const;
+function normalizeProviderIds(providerIds: Iterable<string>): Set<string> {
+  return new Set(
+    [...providerIds].map((id) => id.trim().toLowerCase()).filter((id) => id.length > 0),
+  );
+}
+
+function readConfiguredProviderIds(pluginConfig: unknown): Set<string> | undefined {
+  const providerIds = readCodexPluginConfig(pluginConfig).appServer?.providerIds;
+  return providerIds ? normalizeProviderIds(providerIds) : undefined;
+}
+
 const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "bootstrap",
   "assemble-before-prompt",
@@ -84,11 +97,13 @@ export function createCodexAppServerAgentHarness(
 ): AgentHarnessV2 {
   const harnessRuntimeId = options?.id ?? "codex";
   const normalizedHarnessRuntimeId = harnessRuntimeId.trim().toLowerCase();
-  const providerIds = new Set(
-    [...(options?.providerIds ?? DEFAULT_CODEX_HARNESS_PROVIDER_IDS)].map((id) =>
-      id.trim().toLowerCase(),
-    ),
-  );
+  const staticProviderIds = options.providerIds
+    ? normalizeProviderIds(options.providerIds)
+    : undefined;
+  const resolveProviderIds = () =>
+    staticProviderIds ??
+    readConfiguredProviderIds(options.resolvePluginConfig?.() ?? options.pluginConfig) ??
+    DEFAULT_CODEX_HARNESS_PROVIDER_IDS;
   const sessionCatalogControlFactory = options.sessionCatalogControlFactory;
   const sessionRuntime = options.runtime;
   let modelCatalog:
@@ -104,7 +119,11 @@ export function createCodexAppServerAgentHarness(
   const harness: AgentHarnessV2 = {
     id: harnessRuntimeId,
     label: options?.label ?? "Codex agent harness",
-    autoSelection: { providerIds: [...providerIds] },
+    autoSelection: {
+      get providerIds() {
+        return [...resolveProviderIds()];
+      },
+    },
     cloudPlacement: {
       mode: "remote-exec",
       devicePlacement: {
@@ -120,6 +139,8 @@ export function createCodexAppServerAgentHarness(
       visibleReplies: "message_tool",
     },
     authBootstrap: "harness",
+    requiresHostApiKey: (provider) =>
+      !DEFAULT_CODEX_HARNESS_PROVIDER_IDS.has(provider.trim().toLowerCase()),
     resolveSessionRuntimeOwnership: (params) => {
       const assertCurrent = () => {
         params.assertCurrent();
@@ -203,6 +224,7 @@ export function createCodexAppServerAgentHarness(
       return await loadCodexEffectiveMcpCatalog(params, { bindingStore: options.bindingStore });
     },
     supports: (ctx) => {
+      const providerIds = resolveProviderIds();
       const provider = ctx.provider.trim().toLowerCase();
       if (!providerIds.has(provider)) {
         return {
@@ -216,6 +238,18 @@ export function createCodexAppServerAgentHarness(
           reason: "Codex cannot reproduce authored request transport overrides",
           fallbackRuntime: "openclaw",
         };
+      }
+      if (provider !== "codex" && provider !== "openai") {
+        return supportsCodexCustomProvider(
+          ctx,
+          options.resolvePluginConfig?.() ?? options.pluginConfig,
+        )
+          ? { supported: true, priority: 100 }
+          : {
+              supported: false,
+              reason:
+                "Configured Codex providers require a reproducible Responses API-key route on agent-home stdio",
+            };
       }
       const preparedAuth = ctx.modelProvider?.preparedAuth;
       const runtimePolicy = ctx.modelProvider?.runtimePolicy;

@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  type JsonSchemaObject,
+  validateJsonSchemaValue,
+} from "openclaw/plugin-sdk/json-schema-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 // Codex tests cover config plugin behavior.
@@ -355,6 +359,41 @@ describe("Codex app-server config", () => {
         },
       }),
     ).toStrictEqual({});
+  });
+
+  it.each([
+    { id: "codex", valid: true },
+    { id: "openai", valid: true },
+    { id: " OpenAI ", valid: true },
+    { id: " LLM_proxy-2 ", valid: true },
+    { id: "9router", valid: true },
+    { id: "proxy.example", valid: false },
+    { id: "proxy/route", valid: false },
+    { id: "proxy route", valid: false },
+    { id: "", valid: false },
+    { id: "   ", valid: false },
+    { id: "constructor", valid: false },
+    { id: " Constructor ", valid: false },
+    { id: "prototype", valid: false },
+    { id: " PROTOTYPE ", valid: false },
+    { id: "__proto__", valid: false },
+  ])("validates provider ID $id at both configuration boundaries", async ({ id, valid }) => {
+    const config = { appServer: { providerIds: [id] } };
+    const manifest = JSON.parse(
+      await fs.readFile(new URL("../../openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as { configSchema: JsonSchemaObject };
+    expect
+      .soft(
+        validateJsonSchemaValue({
+          schema: manifest.configSchema,
+          cacheKey: "codex.provider-ids",
+          value: config,
+        }).ok,
+      )
+      .toBe(valid);
+    expect
+      .soft(readCodexPluginConfig(config).appServer?.providerIds)
+      .toEqual(valid ? [id.trim()] : undefined);
   });
 
   it("parses named native session discovery homes and rejects empty labels", () => {

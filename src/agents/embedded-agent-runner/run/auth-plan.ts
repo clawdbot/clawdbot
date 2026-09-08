@@ -176,6 +176,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       harnessId: harness.id,
       harnessRuntime: harness.id,
       harnessAuthBootstrap: harness.authBootstrap,
+      harnessRequiresHostApiKey: harness.requiresHostApiKey?.(params.provider),
       allowHarnessAuthProfileForwarding: true,
       allowTransientCooldownProbe: runParams.allowTransientCooldownProbe === true,
       resolveProviderPreferredProfileId: (context) =>

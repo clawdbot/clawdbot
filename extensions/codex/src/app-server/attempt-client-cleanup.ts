@@ -5,6 +5,7 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { unsubscribeCodexAppServerLiveThread } from "./client-runtime.js";
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
+import { CodexAppServerUnsafeSubscriptionError } from "./request-errors.js";
 import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
@@ -24,13 +25,7 @@ export function isCodexNoActiveTurnInterruptError(error: unknown): error is Code
   );
 }
 
-/** Raised when a thread subscription may be live on a client OpenClaw no longer controls. */
-export class CodexAppServerUnsafeSubscriptionError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "CodexAppServerUnsafeSubscriptionError";
-  }
-}
+export { CodexAppServerUnsafeSubscriptionError } from "./request-errors.js";
 
 export function isCodexAppServerUnsafeSubscriptionError(
   error: unknown,

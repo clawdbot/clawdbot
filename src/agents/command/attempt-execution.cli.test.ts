@@ -4655,6 +4655,71 @@ describe("embedded attempt harness pinning", () => {
     });
   });
 
+  it.each([true, false])(
+    "does not preselect account auth for a custom route (registered: %s)",
+    async (registered) => {
+      const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "openai:work": {
+              type: "oauth",
+              provider: "openai",
+              access: "synthetic-account-access",
+              refresh: "synthetic-account-refresh",
+              expires: Date.now() + 60_000,
+            },
+          },
+        },
+        tmpDir,
+        { filterExternalAuthProfiles: false, syncExternalCli: false },
+      );
+      const requiresHostApiKey = vi.fn((provider: string) => provider === "proxy");
+      clearAgentHarnesses();
+      if (registered) {
+        registerAgentHarness({
+          id: "codex",
+          label: "Codex",
+          requiresHostApiKey,
+          supports: () => ({ supported: true, priority: 100 }),
+          runAttempt: vi.fn(),
+        });
+      }
+      runEmbeddedAgentMock.mockResolvedValueOnce({
+        meta: { durationMs: 1 },
+      } satisfies EmbeddedAgentRunResult);
+      try {
+        await runHarnessAttempt({
+          providerOverride: "proxy",
+          cfg: {
+            models: {
+              providers: {
+                proxy: {
+                  baseUrl: "https://proxy.example/v1",
+                  agentRuntime: { id: "codex" },
+                  models: [],
+                },
+              },
+            },
+          },
+          sessionEntry: makeSessionEntry("custom-provider-auth-session"),
+          runId: "run-custom-provider-auth",
+        });
+      } finally {
+        clearAgentHarnesses();
+      }
+      if (registered) {
+        expect(requiresHostApiKey).toHaveBeenCalledWith("proxy");
+      }
+      expectMockArgFields(runEmbeddedAgentMock, {
+        provider: "proxy",
+        authProfileId: undefined,
+        authProfileIdSource: undefined,
+      });
+    },
+  );
+
   it("pins a fresh OpenAI session to the Codex harness by default", async () => {
     const sessionEntry = makeSessionEntry("fresh-session");
     runEmbeddedAgentMock.mockResolvedValueOnce({

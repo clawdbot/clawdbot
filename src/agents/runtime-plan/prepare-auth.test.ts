@@ -126,6 +126,135 @@ function allCooldownOpenAIStore(): AuthProfileStore {
 }
 
 describe("prepareAgentRuntimeAuthPlan", () => {
+  it.each(["direct", "automatic profile", "pinned profile"])(
+    "resolves a custom Codex provider's %s key without substituting OpenAI auth",
+    async (source) => {
+      const config = providerConfig("custom-provider", {
+        api: "openai-responses",
+        baseUrl: "https://proxy.example/v1",
+        ...(source === "direct" ? { auth: "api-key", apiKey: "synthetic-direct-key" } : {}),
+      });
+      const store = authStore({
+        "custom-provider:work": apiKeyProfile("custom-provider", "synthetic-profile-key"),
+        "openai:unrelated": openAIApiKeyProfile("synthetic-unrelated-key"),
+      });
+      const prepared = prepareAgentRuntimeAuth({
+        provider: "custom-provider",
+        modelId: "gpt-5.2-codex",
+        modelApi: "openai-responses",
+        modelBaseUrl: "https://proxy.example/v1",
+        harnessId: "codex",
+        harnessRequiresHostApiKey: true,
+        harnessAuthBootstrap: "harness",
+        env: {},
+        config,
+        authProfileStore: store,
+        metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
+        ...(source === "pinned profile"
+          ? {
+              sessionAuthProfileId: "custom-provider:work",
+              sessionAuthProfileSource: "user" as const,
+            }
+          : {}),
+      });
+      const first = prepared.attempts[0];
+      expect(first?.kind).toBe(source === "direct" ? "direct" : "profile");
+      expect(first?.plan.harnessAuthProvider).toBeUndefined();
+      expect(first?.plan.modelRoute).toBeUndefined();
+      expect(first?.plan.selectedAuthMode).toBe(source === "direct" ? "api-key" : "api_key");
+      expect(first?.plan.forwardedAuthProfileId).toBe(
+        source === "direct" ? undefined : "custom-provider:work",
+      );
+      const model: Model = {
+        id: "gpt-5.2-codex",
+        name: "Fixture model",
+        provider: "custom-provider",
+        api: "openai-responses",
+        baseUrl: "https://proxy.example/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 1_024,
+      };
+      const resolved = await getApiKeyForModelCore({
+        model,
+        cfg: config,
+        profileId: first?.profileId,
+        allowAuthProfileFallback: first?.allowAuthProfileFallback,
+        store,
+      });
+      expect(resolved.apiKey).toBe(
+        source === "direct" ? "synthetic-direct-key" : "synthetic-profile-key",
+      );
+    },
+  );
+
+  it.each(["direct", "automatic profile", "pinned profile"])(
+    "prepares a custom route's %s key when credentials alias to OpenAI",
+    (source) => {
+      const prepared = prepareAgentRuntimeAuth({
+        provider: "custom-provider",
+        modelId: "fixture-model",
+        modelApi: "openai-responses",
+        modelBaseUrl: "https://proxy.example/v1",
+        harnessId: "codex",
+        harnessRequiresHostApiKey: true,
+        harnessAuthBootstrap: "harness",
+        env: {},
+        config: providerConfig("custom-provider", {
+          api: "openai-responses",
+          baseUrl: "https://proxy.example/v1",
+          ...(source === "direct" ? { auth: "api-key", apiKey: "synthetic-direct-key" } : {}),
+        }),
+        authProfileStore: authStore({
+          "openai:work": openAIApiKeyProfile("synthetic-profile-key"),
+        }),
+        metadataSnapshot: createPluginMetadataSnapshotFixture({
+          plugins: [
+            {
+              id: "alias-owner",
+              origin: "bundled",
+              providerAuthAliases: { "custom-provider": "openai" },
+            },
+          ],
+        }),
+        ...(source === "pinned profile"
+          ? { sessionAuthProfileId: "openai:work", sessionAuthProfileSource: "user" as const }
+          : {}),
+      });
+      const first = prepared.attempts[0];
+      expect(first?.kind).toBe(source === "direct" ? "direct" : "profile");
+      expect(first?.plan.providerForAuth).toBe("openai");
+      expect(first?.plan.harnessAuthProvider).toBeUndefined();
+      expect(first?.plan.requiresHostApiKey).toBe(true);
+      expect(first?.plan.forwardedAuthProfileId).toBe(
+        source === "direct" ? undefined : "openai:work",
+      );
+    },
+  );
+
+  it("rejects an OpenAI profile pin for a custom Codex provider", () => {
+    expect(() =>
+      prepareAgentRuntimeAuth({
+        provider: "custom-provider",
+        modelId: "gpt-5.2-codex",
+        modelApi: "openai-responses",
+        modelBaseUrl: "https://proxy.example/v1",
+        harnessId: "codex",
+        harnessRequiresHostApiKey: true,
+        harnessAuthBootstrap: "harness",
+        env: {},
+        authProfileStore: authStore({
+          "openai:work": openAIApiKeyProfile("synthetic-unrelated-key"),
+        }),
+        sessionAuthProfileId: "openai:work",
+        sessionAuthProfileSource: "user",
+        metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
+      }),
+    ).toThrow('Auth profile "openai:work" is not configured for custom-provider');
+  });
+
   it("carries prepared provider aliases into generic auth planning", () => {
     const plan = prepareAgentRuntimeAuthPlan({
       provider: "legacy-provider",
