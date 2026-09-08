@@ -105,6 +105,9 @@ const {
   resolveRecentTurnsPreserve,
   resolveQualityGuardMaxRetries,
   extractOpaqueIdentifiers,
+  extractMessageTextForIdentifiers,
+  extractIdentifiersFromMessages,
+  computeLostIdentifiers,
   auditSummaryQuality: auditSummaryQualityOwner,
   capCompactionSummary,
   budgetCompactionSummary,
@@ -1591,6 +1594,90 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(extractOpaqueIdentifiers(input)).toStrictEqual(expected);
   });
 
+  it("filters credential-shaped identifiers from extraction", () => {
+    const identifiers = extractOpaqueIdentifiers(
+      [
+        "commit a1b2c3d4e5f6",
+        "api key sk-proj-abc123def456ghi789",
+        "stripe pk_live_abcdef1234567890",
+        "slack token xoxb-1234-5678-abcdefgh",
+        "github token ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ12345",
+        "aws key AKIAIOSFODNN7EXAMPLE",
+        "jwt eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+        "url https://api.example.com/callback?token=secret123",
+        "safe url https://example.com/repos/123",
+        "bearer Bearer sk-1234567890abcdef",
+      ].join("\n"),
+    );
+    // Safe identifiers preserved
+    expect(identifiers).toContain("A1B2C3D4E5F6");
+    expect(identifiers).toContain("https://example.com/repos/123");
+    // Credential-shaped identifiers filtered
+    expect(identifiers.some((id) => id.includes("sk-proj"))).toBe(false);
+    expect(identifiers.some((id) => id.includes("pk_live"))).toBe(false);
+    expect(identifiers.some((id) => id.includes("xoxb-"))).toBe(false);
+    expect(identifiers.some((id) => id.includes("ghp_"))).toBe(false);
+    expect(identifiers.some((id) => id.startsWith("AKIA"))).toBe(false);
+    expect(identifiers.some((id) => id.startsWith("eyJ"))).toBe(false);
+    expect(identifiers.some((id) => id.includes("token="))).toBe(false);
+    expect(identifiers.some((id) => id.includes("Bearer"))).toBe(false);
+  });
+
+  it("filters sliced credential fragments even when prefix falls outside regex match", () => {
+    // Regression: the hex regex [A-Fa-f0-9]{8,} can match hex portions of API
+    // keys when the prefix (sk-, ghp_, AKIA, etc.) is not captured. Pre-extraction
+    // redaction prevents this by removing the credential before the regex runs.
+    const identifiers = extractOpaqueIdentifiers(
+      [
+        "api key sk-abcd1234efabcdef with path /usr/local/bin",
+        "stripe sk_live_AABB1122CCDD3344 and commit ee11ff2233440055",
+        "aws AKIAIOSFODNN7EXAMPLE more text",
+        "jwt eyJhbGciOiJIUzI1NiJ9 and id deadbeef12345678",
+      ].join("\n"),
+    );
+    // Hex fragments of credentials must NOT appear
+    expect(identifiers.some((id) => id.includes("ABCD1234EF"))).toBe(false);
+    expect(identifiers.some((id) => id.includes("AABB1122CCDD3344"))).toBe(false);
+    expect(identifiers.some((id) => id.includes("IOSFODNN"))).toBe(false);
+    // Legitimate identifiers still extracted
+    expect(identifiers).toContain("/usr/local/bin");
+    expect(identifiers).toContain("EE11FF2233440055");
+    expect(identifiers).toContain("DEADBEEF12345678");
+  });
+
+  it("filters uppercase auth-scheme credential fragments case-insensitively", () => {
+    const identifiers = extractOpaqueIdentifiers(
+      [
+        "auth BEARER abcdef1234567890 done",
+        "token SK-PROJ-1234567890ABCDEF rest",
+        "safe commit deadbeef12345678",
+      ].join("\n"),
+    );
+    // Uppercase BEARER and SK-PROJ fragments must be redacted
+    expect(identifiers.some((id) => id.includes("ABCDEF1234567890"))).toBe(false);
+    expect(identifiers.some((id) => id.includes("1234567890ABCDEF"))).toBe(false);
+    // Legitimate identifier preserved
+    expect(identifiers).toContain("DEADBEEF12345678");
+  });
+
+  it("bounds extraction to MAX_EXTRACTION_CHARS budget", () => {
+    // Create messages that exceed 500k chars total.
+    // Use space padding (not "x") because "x" is hex and creates a 200k-char
+    // regex match in the identifier extractor, making the test unreasonably slow.
+    const bigContent = " ".repeat(200_000) + " deadbeef12345678";
+    const messages = [
+      { role: "user", content: bigContent },
+      { role: "user", content: bigContent },
+      { role: "user", content: bigContent }, // this pushes past 500k
+      { role: "user", content: "id aabbccdd11223344" }, // should be truncated away
+    ];
+    const ids = extractIdentifiersFromMessages(messages);
+    // First two messages fit within budget, third is partially included
+    expect(ids.length).toBeLessThanOrEqual(50);
+    // The last message should not be reached
+    expect(ids.some((id) => id.includes("AABBCCDD11223344"))).toBe(false);
+  });
+
   it("filters ordinary short numbers and trims wrapped punctuation", () => {
     const identifiers = extractOpaqueIdentifiers(
       "Year 2026 count 42 port 18789 ticket 123456 URL https://example.com/a, path /tmp/x.log, and tiny /a with prose on/off plus typecheck/lint/format.",
@@ -1781,6 +1868,242 @@ describe("compaction-safeguard recent-turn preservation", () => {
         latestUnresolvedUserRequest: latestAsk,
       }).reasons,
     ).toContain("latest_user_ask_not_foregrounded");
+  });
+
+  it("extracts identifiers from tool call arguments", () => {
+    const text = extractMessageTextForIdentifiers({
+      role: "assistant",
+      content: [
+        { type: "text", text: "running tool" },
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "exec",
+          arguments: { path: "/srv/deploy/config.yaml", hash: "a1b2c3d4e5f6" },
+        },
+      ],
+    });
+    expect(text).toContain("/srv/deploy/config.yaml");
+    expect(text).toContain("a1b2c3d4e5f6"); // pragma: allowlist secret
+  });
+
+  it("extracts identifiers from tool result content but not details", () => {
+    const text = extractMessageTextForIdentifiers({
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "exec",
+      content: [{ type: "text", text: "deployed to https://app.example.com/v2" }],
+      details: { secret: "sk-secret-value-12345678" },
+    });
+    expect(text).toContain("https://app.example.com/v2");
+    expect(text).not.toContain("sk-secret-value-12345678");
+  });
+
+  it("extracts identifiers from string arguments (OpenAI format)", () => {
+    const text = extractMessageTextForIdentifiers({
+      role: "assistant",
+      content: [
+        {
+          type: "functionCall",
+          id: "call_2",
+          name: "read",
+          arguments: '{"file":"/etc/nginx/nginx.conf"}',
+        },
+      ],
+    });
+    expect(text).toContain("/etc/nginx/nginx.conf");
+  });
+
+  it("extracts identifiers from tool_use blocks (Anthropic format)", () => {
+    const text = extractMessageTextForIdentifiers({
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_abc123",
+          name: "bash",
+          input: { command: "cat /var/log/app-8f3a2b1c.log" },
+        },
+      ],
+    });
+    expect(text).toContain("/var/log/app-8f3a2b1c.log");
+  });
+
+  it("extracts identifiers from function_call blocks (legacy OpenAI format)", () => {
+    const text = extractMessageTextForIdentifiers({
+      role: "assistant",
+      content: [
+        {
+          type: "function_call",
+          id: "call_xyz789",
+          name: "read_file",
+          arguments: '{"path":"/home/user/config-deadbeef.json"}',
+        },
+      ],
+    });
+    expect(text).toContain("/home/user/config-deadbeef.json");
+  });
+
+  it("extracts identifiers across all messages in a transcript", () => {
+    const ids = extractIdentifiersFromMessages([
+      { role: "user", content: "check hash a1b2c3d4e5f6" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_1",
+            name: "exec",
+            arguments: { path: "/srv/deploy/config.yaml" },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: [{ type: "text", text: "port host.local:18789" }],
+      },
+    ]);
+    expect(ids).toContain("A1B2C3D4E5F6"); // pragma: allowlist secret
+    expect(ids).toContain("/srv/deploy/config.yaml");
+    expect(ids).toContain("host.local:18789");
+  });
+
+  it("redacts credential fields from tool call arguments before extraction", () => {
+    const text = extractMessageTextForIdentifiers({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_cred",
+          name: "configure",
+          arguments: { apiKey: "sk-proj-abc123def456", endpoint: "https://api.acme.io/v1" },
+        },
+      ],
+    });
+    // apiKey is a credential field — sanitizeDiagnosticPayload omits it
+    expect(text).not.toContain("sk-proj-abc123def456"); // pragma: allowlist secret
+    expect(text).toContain("https://api.acme.io/v1");
+  });
+
+  it("sanitizes string-encoded JSON arguments with credential fields before extraction", () => {
+    // Regression: string arguments (OpenAI format) were appended raw, letting
+    // credential values like tokens feed into the hex identifier extractor.
+    const text = extractMessageTextForIdentifiers({
+      role: "assistant",
+      content: [
+        {
+          type: "functionCall",
+          id: "call_str_cred",
+          name: "auth",
+          arguments: '{"token":"deadbeef12345678","endpoint":"https://api.acme.io/v2"}',
+        },
+      ],
+    });
+    // "token" is a credential field — sanitizeDiagnosticPayload omits it
+    expect(text).not.toContain("deadbeef12345678"); // pragma: allowlist secret
+    // Non-credential fields survive
+    expect(text).toContain("https://api.acme.io/v2");
+  });
+
+  it("passes non-JSON string arguments through without crashing", () => {
+    // String arguments that are not valid JSON should still be included for
+    // identifier extraction (the downstream extractor applies its own
+    // credential-prefix redaction).
+    const text = extractMessageTextForIdentifiers({
+      role: "assistant",
+      content: [
+        {
+          type: "functionCall",
+          id: "call_plain",
+          name: "exec",
+          arguments: "not json at all /srv/app/config.yaml",
+        },
+      ],
+    });
+    expect(text).toContain("/srv/app/config.yaml");
+  });
+
+  it("redacts credential name/value shapes from non-JSON string arguments", () => {
+    // Regression: invalid JSON tool args with "token: deadbeef..." leaked into
+    // extractOpaqueIdentifiers because only prefix redaction ran later.
+    const text = extractMessageTextForIdentifiers({
+      role: "assistant",
+      content: [
+        {
+          type: "functionCall",
+          id: "call_raw_cred",
+          name: "auth",
+          arguments: "token: deadbeef12345678 path=/srv/app/config.yaml", // pragma: allowlist secret
+        },
+      ],
+    });
+    expect(text).not.toContain("deadbeef12345678"); // pragma: allowlist secret
+    expect(text).toContain("/srv/app/config.yaml");
+    const ids = extractOpaqueIdentifiers(text);
+    expect(ids).not.toContain("DEADBEEF12345678"); // pragma: allowlist secret
+  });
+
+  it("extracts credential-shaped values from tool result content", () => {
+    const text = extractMessageTextForIdentifiers({
+      role: "toolResult",
+      toolCallId: "call_cred",
+      toolName: "configure",
+      content: [{ type: "text", text: "Token: ghp_xYz1234567890abcDEF set for repo" }],
+    });
+    expect(text).toContain("ghp_xYz1234567890abcDEF"); // pragma: allowlist secret
+  });
+
+  it("computes lost identifiers between source and summary", () => {
+    const source = ["A1B2C3D4E5F6", "https://example.com/api", "/tmp/data.log"]; // pragma: allowlist secret
+    const summary = "Deployed to https://example.com/api with config at /tmp/data.log";
+    const lost = computeLostIdentifiers(source, summary);
+    expect(lost).toEqual(["A1B2C3D4E5F6"]); // pragma: allowlist secret
+  });
+
+  it("matches hex identifiers case-insensitively in lost computation", () => {
+    const source = ["A1B2C3D4E5F6"]; // pragma: allowlist secret
+    const summary = "Hash: a1b2c3d4e5f6"; // pragma: allowlist secret
+    const lost = computeLostIdentifiers(source, summary);
+    expect(lost).toEqual([]);
+  });
+
+  it("detects identifiers lost from pruned dropped messages", () => {
+    // Identifiers only present in messages that would be pruned should still
+    // be checked against the summary.
+    const prunedOnlyId = "DEADBEEF12345678"; // pragma: allowlist secret
+    const survivingId = "A1B2C3D4E5F6"; // pragma: allowlist secret
+    const allMessages = [
+      { role: "user", content: `deploy id ${prunedOnlyId}` },
+      { role: "user", content: `config hash ${survivingId}` },
+    ];
+    const ids = extractIdentifiersFromMessages(allMessages);
+    expect(ids).toContain(prunedOnlyId);
+    const summary = `Config hash ${survivingId} preserved.`;
+    const lost = computeLostIdentifiers(ids, summary);
+    expect(lost).toContain(prunedOnlyId);
+  });
+
+  it("strict mode fails on any lost identifier, not just > 2", () => {
+    const ids = ["A1B2C3D4E5F6"]; // pragma: allowlist secret
+    const summary = [
+      "## Decisions",
+      "Keep flow.",
+      "## Open TODOs",
+      "None.",
+      "## Constraints/Rules",
+      "Follow rules.",
+      "## Pending user asks",
+      "Provide status.",
+      "## Exact identifiers",
+      "None captured.",
+    ].join("\n");
+    // Even one missing identifier should be flagged in strict mode
+    const lost = computeLostIdentifiers(ids, summary);
+    expect(lost).toHaveLength(1);
+    // The safeguard code uses: identifierPolicy === "strict" ? > 0 : > 2
+    expect(lost.length > 0).toBe(true);
   });
 
   it("clamps quality-guard retries into a safe range", () => {
@@ -1985,7 +2308,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     });
     const messagesToSummarize: AgentMessage[] = Array.from({ length: 4 }, (_unused, index) => ({
       role: "user",
-      content: `msg-${index}-${"x".repeat(120_000)}`,
+      content: `msg-${index}-${"x".repeat(30_000)}`,
       timestamp: index + 1,
     }));
     const transcriptBefore = structuredClone(messagesToSummarize);
@@ -3921,6 +4244,417 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(result.compaction?.summary).toContain("latest ask status");
   });
 
+  it("retries when more than 2 transcript identifiers are lost from summary on strict policy", async () => {
+    mockSummarizeInStages.mockReset();
+    const goodSections = [
+      "## Decisions",
+      "Keep current flow.",
+      "## Open TODOs",
+      "None.",
+      "## Constraints/Rules",
+      "Follow rules.",
+      "## Pending user asks",
+      "check deployment status",
+      "## Exact identifiers",
+    ].join("\n");
+    // First attempt: passes quality audit but loses identifiers
+    mockSummarizeInStages.mockResolvedValueOnce(summaryResult(`${goodSections}\nNone.`));
+    // Second attempt: includes all identifiers
+    mockSummarizeInStages.mockResolvedValueOnce(
+      summaryResult(
+        `${goodSections}\na1b2c3d4e5f6, https://deploy.example.com/v2, /srv/app/config.yaml`,
+      ),
+    );
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "check deployment status for hash a1b2c3d4e5f6", timestamp: 1 },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "deploy",
+                arguments: { url: "https://deploy.example.com/v2" },
+              },
+            ],
+            timestamp: 2,
+          } as unknown as AgentMessage,
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "deploy",
+            content: [{ type: "text", text: "deployed config at /srv/app/config.yaml" }],
+            timestamp: 3,
+          } as unknown as AgentMessage,
+        ],
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    const retryCall = mockSummarizeInStages.mock.calls[1]?.[0];
+    expect(retryCall?.customInstructions).toContain("must be preserved");
+  });
+
+  it("retries in strict mode when any identifier is lost (even 1 or 2)", async () => {
+    mockSummarizeInStages.mockReset();
+    // Summary includes the user ask text and identifiers from text content,
+    // but loses 2 identifiers that only appear in tool call arguments.
+    // In strict mode, any lost identifier triggers a retry.
+    const goodSections = [
+      "## Decisions",
+      "Keep current flow.",
+      "## Open TODOs",
+      "None.",
+      "## Constraints/Rules",
+      "Follow rules.",
+      "## Pending user asks",
+      "check deployment status for a1b2c3d4e5f6",
+      "## Exact identifiers",
+      "a1b2c3d4e5f6", // pragma: allowlist secret
+    ].join("\n");
+    mockSummarizeInStages
+      .mockResolvedValueOnce(summaryResult(goodSections))
+      .mockResolvedValueOnce(summaryResult(goodSections));
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          {
+            role: "user",
+            content: "check deployment status for a1b2c3d4e5f6",
+            timestamp: 1,
+          },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "deploy",
+                arguments: { path: "/srv/lost/config.yaml", port: "443" },
+              },
+            ],
+            timestamp: 2,
+          } as unknown as AgentMessage,
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "deploy",
+            content: [{ type: "text", text: "done" }],
+            timestamp: 3,
+          } as unknown as AgentMessage,
+        ],
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    // Strict mode retries when any identifier is missing (the path is lost)
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry identifier survival when policy is off", async () => {
+    mockSummarizeInStages.mockReset();
+    // Summary omits all identifiers, but policy is "off" so no survival retry.
+    const goodSections = [
+      "## Decisions",
+      "Keep current flow.",
+      "## Open TODOs",
+      "None.",
+      "## Constraints/Rules",
+      "Follow rules.",
+      "## Pending user asks",
+      "check deployment config status",
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    mockSummarizeInStages.mockResolvedValueOnce(summaryResult(goodSections));
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+      identifierPolicy: "off",
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          {
+            role: "user",
+            content: "check deployment config status for a1b2c3d4e5f6",
+            timestamp: 1,
+          },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "read",
+                arguments: { path: "/srv/app/config.yaml" },
+              },
+            ],
+            timestamp: 2,
+          } as unknown as AgentMessage,
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "read",
+            content: [{ type: "text", text: "config at https://lost.example.com/api" }],
+            timestamp: 3,
+          } as unknown as AgentMessage,
+        ],
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels strict compaction when cap recovery would exceed size limit", async () => {
+    // Regression: when strict mode detects identifier loss after capping and
+    // the recovery block would push the summary past MAX_COMPACTION_SUMMARY_CHARS,
+    // compaction must be cancelled (not return a summary missing required identifiers).
+    mockSummarizeInStages.mockReset();
+    // Produce a summary that exceeds the cap. Capping truncates to
+    // MAX_COMPACTION_SUMMARY_CHARS, leaving no room for the recovery block.
+    const overCapSummary = [
+      "## Decisions",
+      "Keep current flow.",
+      // Pad an optional section so capping fills the artifact without
+      // inflating ## Exact identifiers (that would trip quality-retention
+      // infeasible before post-cap identifier recovery).
+      "x".repeat(MAX_COMPACTION_SUMMARY_CHARS + 500),
+      "## Open TODOs",
+      "None.",
+      "## Constraints/Rules",
+      "Follow rules.",
+      "## Pending user asks",
+      "deploy service",
+      "## Exact identifiers",
+      // Intentionally omit the identifier so post-cap validation triggers
+      "None.",
+    ].join("\n");
+    mockSummarizeInStages.mockResolvedValueOnce(summaryResult(overCapSummary));
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 0,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          {
+            role: "user",
+            content: "deploy service",
+            timestamp: 1,
+          },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "deploy",
+                arguments: { hash: "a1b2c3d4e5f6" },
+              },
+            ],
+            timestamp: 2,
+          } as unknown as AgentMessage,
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "deploy",
+            content: [{ type: "text", text: "done" }],
+            timestamp: 3,
+          } as unknown as AgentMessage,
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    // Must cancel rather than returning a strict summary missing required identifiers
+    expect(result.cancel).toBe(true);
+    const reason = consumeCompactionSafeguardCancellation(sessionManager)?.reason;
+    expect(reason).toContain("required identifier");
+  });
+
+  it("skips post-cap strict identifier audit when qualityGuard is disabled", async () => {
+    // Users with qualityGuard.enabled:false must keep the opt-out: post-cap
+    // recovery/cancel is part of the audit surface and must not fire alone.
+    mockSummarizeInStages.mockReset();
+    const overCapSummary =
+      [
+        "## Decisions",
+        "Keep current flow.",
+        "## Open TODOs",
+        "None.",
+        "## Constraints/Rules",
+        "Follow rules.",
+        "## Pending user asks",
+        "deploy service",
+        "## Exact identifiers",
+        "None.",
+      ].join("\n") +
+      "\n" +
+      "x".repeat(MAX_COMPACTION_SUMMARY_CHARS + 500);
+    mockSummarizeInStages.mockResolvedValueOnce(summaryResult(overCapSummary));
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: false,
+      qualityGuardMaxRetries: 0,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          {
+            role: "user",
+            content: "deploy with hash a1b2c3d4e5f6",
+            timestamp: 1,
+          },
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).toBeFalsy();
+    expect(result.compaction?.summary).toBeTruthy();
+    expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeFalsy();
+  });
+
   it("cancels when corrective generation fails after finalized quality rejection", async () => {
     mockSummarizeInStages.mockReset();
     const oversizedHistorySummary = "history detail ".repeat(MAX_COMPACTION_SUMMARY_CHARS);
@@ -4321,6 +5055,70 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(compaction.summary).toContain("## Recent turns preserved verbatim");
     expect(compaction.summary).toContain("latest ask status");
     expect(compaction.summary).toContain("latest assistant reply");
+  });
+
+  it("recovers identifiers omitted by a configured provider summary", async () => {
+    mockSummarizeInStages.mockReset();
+    const providerSummarize = vi
+      .fn()
+      .mockResolvedValue(
+        [
+          "## Decisions",
+          "Keep current flow.",
+          "## Open TODOs",
+          "None.",
+          "## Constraints/Rules",
+          "Follow rules.",
+          "## Pending user asks",
+          "deploy service",
+          "## Exact identifiers",
+          "None.",
+        ].join("\n"),
+      );
+    installCompactionProviderForTest({
+      id: "lossy-provider",
+      label: "Lossy Provider",
+      summarize: providerSummarize,
+    });
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      provider: "lossy-provider",
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      identifierPolicy: "strict",
+    });
+
+    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
+      sessionManager,
+      event: {
+        preparation: {
+          messagesToSummarize: [
+            {
+              role: "user",
+              content: "deploy with hash a1b2c3d4e5f6",
+              timestamp: 1,
+            },
+          ],
+          turnPrefixMessages: [],
+          firstKeptEntryId: "entry-1",
+          tokensBefore: 1_500,
+          fileOps: { read: [], edited: [], written: [] },
+          settings: { reserveTokens: 4_000 },
+          previousSummary: undefined,
+          isSplitTurn: false,
+        },
+        customInstructions: "",
+        signal: new AbortController().signal,
+      },
+      apiKey: null,
+    });
+
+    expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
+    expect(mockSummarizeInStages).not.toHaveBeenCalled();
+    expect(result.cancel).not.toBe(true);
+    expect(result.compaction?.summary?.toLowerCase()).toContain("a1b2c3d4e5f6");
+    expect(result.compaction?.summary).toContain("## Exact identifiers (recovered)");
   });
 
   it("preserves an above-half provider body byte-for-byte when the joined artifact fits", async () => {

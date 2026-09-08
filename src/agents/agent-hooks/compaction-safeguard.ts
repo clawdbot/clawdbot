@@ -48,6 +48,7 @@ import {
 } from "../runtime/index.js";
 import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import type { SessionModelUsageSink } from "../sessions/compaction/runtime.js";
+import type { SessionBeforeCompactResult } from "../sessions/extensions/types.js";
 import type { ExtensionAPI, ExtensionContext } from "../sessions/index.js";
 import { recordSessionModelUsage } from "../sessions/session-model-usage.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
@@ -61,7 +62,10 @@ import {
   auditSummaryQuality,
   buildCompactionStructureInstructions,
   buildStructuredFallbackSummary,
+  computeLostIdentifiers,
   createSummaryQualityRetentionPlan,
+  extractIdentifiersFromMessages,
+  extractMessageTextForIdentifiers,
   extractOpaqueIdentifiers,
   nestRequiredSummaryHeadings,
   wrapUntrustedInstructionBlock,
@@ -915,6 +919,59 @@ async function readWorkspaceContextForSummary(
   }
 }
 
+// Shared by configured-provider and built-in LLM finalize paths so a
+// nonempty provider summary cannot skip strict identifier recovery.
+function applyStrictIdentifierPostCap(params: {
+  qualityGuardEnabled: boolean;
+  identifierPolicy: string;
+  transcriptIdentifiers: string[];
+  finalized: SessionBeforeCompactResult;
+  sessionManager: unknown;
+}): SessionBeforeCompactResult {
+  const {
+    qualityGuardEnabled,
+    identifierPolicy,
+    transcriptIdentifiers,
+    finalized,
+    sessionManager,
+  } = params;
+  if (
+    !qualityGuardEnabled ||
+    identifierPolicy !== "strict" ||
+    transcriptIdentifiers.length === 0 ||
+    !("compaction" in finalized) ||
+    !finalized.compaction
+  ) {
+    return finalized;
+  }
+  const summary = finalized.compaction.summary;
+  const postCapLost = computeLostIdentifiers(transcriptIdentifiers, summary);
+  if (postCapLost.length === 0) {
+    return finalized;
+  }
+  const recoveryBlock = postCapLost.map((id) => `- ${id}`).join("\n");
+  const recovered = `${summary}\n\n## Exact identifiers (recovered)\n${recoveryBlock}`;
+  if (recovered.length <= MAX_COMPACTION_SUMMARY_CHARS) {
+    log.warn(
+      `Compaction safeguard: final capping removed ${postCapLost.length} identifier(s); re-appending.`,
+    );
+    return {
+      compaction: {
+        ...finalized.compaction,
+        summary: recovered,
+      },
+    };
+  }
+  log.warn(
+    `Compaction safeguard: final capping removed ${postCapLost.length} identifier(s); recovery would exceed cap, cancelling compaction.`,
+  );
+  setCompactionSafeguardCancellation(
+    sessionManager,
+    `Strict compaction cancelled: ${postCapLost.length} required identifier(s) lost after capping and recovery block exceeds size limit.`,
+  );
+  return { cancel: true };
+}
+
 /** Registers compaction hooks that summarize, preserve recent turns, and audit output quality. */
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
@@ -1005,6 +1062,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const qualityGuardEnabled = runtime?.qualityGuardEnabled ?? false;
     const providerId = runtime?.provider;
     const turnPrefixMessages = baseTurnPrefixMessages;
+    const transcriptIdentifiers = extractIdentifiersFromMessages([
+      ...baseMessagesToSummarize,
+      ...turnPrefixMessages,
+    ]);
     const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
     const structuredInstructions = buildCompactionStructureInstructions(
       customInstructions,
@@ -1102,7 +1163,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               },
               producerLosses,
             );
-            return compactionResult(finalized.summary);
+            return applyStrictIdentifierPostCap({
+              qualityGuardEnabled,
+              identifierPolicy,
+              transcriptIdentifiers,
+              finalized: compactionResult(finalized.summary),
+              sessionManager: ctx.sessionManager,
+            });
           }
           log.warn(
             `Compaction provider "${compactionProvider.id}" returned empty result, falling back to LLM.`,
@@ -1369,8 +1436,16 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         const canRegenerate =
           messagesToSummarize.length > 0 ||
           (preparation.isSplitTurn && turnPrefixMessages.length > 0);
+        const postCapResult = () =>
+          applyStrictIdentifierPostCap({
+            qualityGuardEnabled,
+            identifierPolicy,
+            transcriptIdentifiers,
+            finalized: compactionResult(finalized.summary),
+            sessionManager: ctx.sessionManager,
+          });
         if (!qualityGuardEnabled) {
-          return compactionResult(finalized.summary);
+          return postCapResult();
         }
         if (finalized.qualityRetentionInfeasible) {
           log.warn(
@@ -1393,22 +1468,39 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           retainedTurnSummary: splitUserAsk !== null ? splitTurnSummaryLocal : undefined,
           identifierPolicy,
         });
-        if (quality.ok) {
-          return compactionResult(finalized.summary);
+        const lostIdentifiers =
+          identifierPolicy === "strict"
+            ? computeLostIdentifiers(transcriptIdentifiers, finalized.summary)
+            : [];
+        const identifierSurvivalFailed =
+          identifierPolicy === "strict" ? lostIdentifiers.length > 0 : lostIdentifiers.length > 2;
+        if (quality.ok && !identifierSurvivalFailed) {
+          return postCapResult();
         }
         if (!canRegenerate || attempt >= totalAttempts - 1) {
-          const reasonCodes = [
-            ...new Set(quality.reasons.map((reason) => reason.split(":", 1)[0])),
-          ];
-          log.warn(
-            "Compaction safeguard: finalized summary failed quality checks; " +
-              `reasonCodes=${reasonCodes.join(",")} reasonCount=${quality.reasons.length}`,
-          );
-          setCompactionSafeguardCancellation(
-            ctx.sessionManager,
-            "Compaction safeguard finalized summary failed quality checks.",
-          );
-          return { cancel: true };
+          if (quality.ok && identifierSurvivalFailed) {
+            if (lostIdentifiers.length > 0) {
+              log.info(
+                `Compaction safeguard: ${lostIdentifiers.length} identifier(s) lost from transcript.`,
+              );
+            }
+            return postCapResult();
+          }
+          if (!quality.ok) {
+            const reasonCodes = [
+              ...new Set(quality.reasons.map((reason) => reason.split(":", 1)[0])),
+            ];
+            log.warn(
+              "Compaction safeguard: finalized summary failed quality checks; " +
+                `reasonCodes=${reasonCodes.join(",")} reasonCount=${quality.reasons.length}`,
+            );
+            setCompactionSafeguardCancellation(
+              ctx.sessionManager,
+              "Compaction safeguard finalized summary failed quality checks.",
+            );
+            return { cancel: true };
+          }
+          return postCapResult();
         }
         const reasons = quality.reasons.join(", ");
         const qualityFeedbackInstruction =
@@ -1416,9 +1508,17 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             ? "Fix all issues and include every required section with exact identifiers preserved."
             : "Fix all issues and include every required section while following the configured identifier policy.";
         const budgetInstruction = `Keep the complete summary body within ${finalized.bodyBudget} UTF-16 code units so the finalized artifact remains valid after required suffixes.`;
+        let feedbackText = !quality.ok
+          ? `Previous summary failed quality checks (${reasons}).`
+          : "";
+        if (identifierSurvivalFailed) {
+          const lostList = lostIdentifiers.slice(0, 5).join(", ");
+          const hint = `These identifiers from the original transcript were lost and must be preserved in ## Exact identifiers: ${lostList}`;
+          feedbackText = feedbackText ? `${feedbackText}\n${hint}` : hint;
+        }
         const qualityFeedbackReasons = wrapUntrustedInstructionBlock(
           "Quality check feedback",
-          `Previous summary failed quality checks (${reasons}).`,
+          feedbackText,
         );
         correctiveInstructions = qualityFeedbackReasons
           ? `${qualityFeedbackInstruction}\n${budgetInstruction}\n\n${qualityFeedbackReasons}`
@@ -1461,6 +1561,9 @@ const testing = {
   resolveRecentTurnsPreserve,
   resolveQualityGuardMaxRetries,
   extractOpaqueIdentifiers,
+  extractMessageTextForIdentifiers,
+  extractIdentifiersFromMessages,
+  computeLostIdentifiers,
   auditSummaryQuality,
   capCompactionSummary,
   budgetCompactionSummary,

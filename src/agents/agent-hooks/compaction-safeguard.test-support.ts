@@ -13,7 +13,10 @@ type CompactionSafeguardTestApi = {
   appendSummarySection: CallableFunction;
   resolveRecentTurnsPreserve: CallableFunction;
   resolveQualityGuardMaxRetries: CallableFunction;
-  extractOpaqueIdentifiers: CallableFunction;
+  extractOpaqueIdentifiers: (text: string) => string[];
+  extractMessageTextForIdentifiers: (message: unknown) => string;
+  extractIdentifiersFromMessages: (messages: unknown[]) => string[];
+  computeLostIdentifiers: (sourceIdentifiers: string[], summary: string) => string[];
   auditSummaryQuality: CallableFunction;
   capCompactionSummary: CallableFunction;
   budgetCompactionSummary: CallableFunction;
