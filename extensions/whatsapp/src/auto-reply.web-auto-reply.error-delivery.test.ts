@@ -15,6 +15,8 @@ installWebAutoReplyTestHomeHooks();
 let monitorWebChannel: typeof import("./auto-reply/monitor.js").monitorWebChannel;
 
 const TERMINAL_FAILURE_TEXT = "⚠️ The model ended this turn without answering.";
+const PROVIDER_REFUSAL_TEXT =
+  "The provider refused this request (category: bio). Revise the request and try again.";
 const SELF_JID = "123@s.whatsapp.net";
 
 describe("web auto-reply terminal failure delivery", () => {
@@ -25,12 +27,12 @@ describe("web auto-reply terminal failure delivery", () => {
     ({ monitorWebChannel } = await import("./auto-reply/monitor.js"));
   });
 
-  async function startMonitorWithTerminalFailure(): Promise<{
+  async function startMonitorWithTerminalFailure(text = TERMINAL_FAILURE_TEXT): Promise<{
     spies: ReturnType<typeof createWebInboundDeliverySpies>;
     onMessage: (msg: WebInboundCallbackMessage) => Promise<void>;
   }> {
     const spies = createWebInboundDeliverySpies();
-    const resolver = vi.fn().mockResolvedValue({ text: TERMINAL_FAILURE_TEXT, isError: true });
+    const resolver = vi.fn().mockResolvedValue({ text, isError: true });
     let capturedOnMessage: Parameters<ListenerFactory>[0]["onMessage"] | undefined;
     const listenerFactory: ListenerFactory = async ({ onMessage }) => {
       capturedOnMessage = onMessage;
@@ -81,5 +83,23 @@ describe("web auto-reply terminal failure delivery", () => {
 
     expect(spies.reply).toHaveBeenCalledTimes(1);
     expect(spies.reply.mock.calls[0]?.[0]).toContain(TERMINAL_FAILURE_TEXT);
+  });
+
+  it("delivers one sanitized provider refusal final without session-reset guidance", async () => {
+    const { spies, onMessage } = await startMonitorWithTerminalFailure(PROVIDER_REFUSAL_TEXT);
+
+    await sendWebDirectInboundMessage({
+      onMessage,
+      spies,
+      id: "direct-provider-refusal",
+      from: "+1000",
+      to: "+2000",
+      body: "hello",
+    });
+
+    expect(spies.reply).toHaveBeenCalledOnce();
+    expect(spies.reply.mock.calls[0]?.[0]).toContain(PROVIDER_REFUSAL_TEXT);
+    expect(spies.reply.mock.calls[0]?.[0]).not.toContain("/new");
+    expect(spies.reply.mock.calls[0]?.[0]).not.toContain("biological risk");
   });
 });

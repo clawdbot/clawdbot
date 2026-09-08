@@ -1,5 +1,3 @@
-import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
@@ -19,21 +17,12 @@ import type {
   CodexAppServerThreadBinding,
 } from "./session-binding.js";
 import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
+import { withCodexAppServerThreadMutation } from "./thread-ownership-queue.js";
 
-// Dist and source copies share physical clients, so their lifecycle queues must
-// share ownership too. Settled entries drain naturally; never clear active tails.
-const nativeThreadOwners = resolveGlobalSingleton(
-  Symbol.for("openclaw.codexNativeThreadOwners"),
-  () => new KeyedAsyncQueue(),
-);
-
-/** Serialize OpenClaw-owned lifecycle changes, not native-internal thread controllers. */
-export async function withCodexAppServerThreadMutation<T>(
-  threadId: string,
-  run: () => Promise<T>,
-): Promise<T> {
-  return await nativeThreadOwners.enqueue(`thread:${threadId}`, run);
-}
+export {
+  withCodexAppServerThreadMutation,
+  withCodexConversationThreadActivity,
+} from "./thread-ownership-queue.js";
 
 /** Codex subscriptions belong to a physical connection, not the native thread ID alone. */
 export function isSameCodexAppServerThreadOwner(
@@ -63,14 +52,6 @@ export async function withExclusiveCodexAppServerThread<T>(params: {
     }
     return await params.run();
   });
-}
-
-/** Serializes bound turns and retirement so detach cannot unsubscribe an active turn. */
-export async function withCodexConversationThreadActivity<T>(
-  bindingId: string,
-  run: () => Promise<T>,
-): Promise<T> {
-  return await nativeThreadOwners.enqueue(`conversation:${bindingId}`, run);
 }
 
 /** Publishes one owned subscription with its persistent or ephemeral retention lifetime. */

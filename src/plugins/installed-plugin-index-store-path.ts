@@ -14,6 +14,7 @@ export type InstalledPluginIndexStoreOptions = {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
   filePath?: string;
+  artifactPreservingReadOnly?: boolean;
 };
 
 function resolveStoreEnv(options: InstalledPluginIndexStoreOptions): NodeJS.ProcessEnv {

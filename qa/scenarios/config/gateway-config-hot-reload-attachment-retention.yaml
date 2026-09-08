@@ -1,0 +1,31 @@
+title: Gateway attachment retention hot reload
+scenario:
+  id: gateway-config-hot-reload-attachment-retention
+  surface: gateway
+  coverage:
+    primary:
+      - gateway.config-reload-hot-apply
+      - gateway.config-reload-hot-reload
+    secondary:
+      - gateway.config-reload-lifecycle
+  objective: Prove attachment retention adopts a changed TTL on real initial or hourly maintenance without restarting the Gateway.
+  successCriteria:
+    - The Gateway starts with a 24-hour attachment TTL, then commits a hot change to two hours.
+    - Real initial or hourly maintenance deletes the three-hour-old attachment and preserves the fresh control file.
+    - The original Gateway PID, boot identity, and authenticated WebSocket survive the complete observation.
+  plugins: [qa-lab]
+  docsRefs: [docs/gateway/configuration.md]
+  codeRefs:
+    - test/e2e/qa-lab/runtime/gateway-config-hot-reload-attachment-retention.ts
+    - test/e2e/qa-lab/runtime/gateway-config-hot-reload-retention.ts
+    - src/gateway/server-maintenance.ts
+  execution:
+    kind: script
+    parallelSafe: false
+    path: test/e2e/qa-lab/runtime/gateway-config-hot-reload-attachment-retention.ts
+    config:
+      requiredProviderMode: mock-openai
+    args: [--output-dir, "${outputDir}"]
+    # The retained proof allows 70 minutes for initial/hourly maintenance, plus setup and cleanup.
+    timeoutMs: 4500000
+    summary: Requires a disposable Testbox with OPENCLAW_TESTBOX=1. Owns a real Gateway and synthetic attachment files through initial or hourly maintenance; allow up to 75 minutes. Model upstream is synthetic.

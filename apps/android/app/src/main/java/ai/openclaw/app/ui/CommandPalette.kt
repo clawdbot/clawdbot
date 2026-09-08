@@ -37,9 +37,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.MicNone
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -68,11 +66,7 @@ import androidx.compose.ui.unit.dp
 internal fun CommandPalette(
   viewModel: MainViewModel,
   onDismiss: () -> Unit,
-  onOpenChat: () -> Unit,
-  onOpenVoice: () -> Unit,
-  onOpenSessions: () -> Unit,
-  onOpenProviders: () -> Unit,
-  onOpenSettings: () -> Unit,
+  onOpen: (CommandAction) -> Unit,
   onOpenSession: (String, String?) -> Unit,
 ) {
   val isConnected by viewModel.isConnected.collectAsState()
@@ -80,6 +74,7 @@ internal fun CommandPalette(
   val models by viewModel.providerModelCatalog.collectAsState()
   val providers by viewModel.modelAuthProviders.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
+  val desktopObserveAvailable by viewModel.desktopObserveAvailable.collectAsState()
   var query by rememberSaveable { mutableStateOf("") }
   val searchFocusRequester = remember { FocusRequester() }
   val keyboardController = LocalSoftwareKeyboardController.current
@@ -88,15 +83,12 @@ internal fun CommandPalette(
     keyboardController?.show()
   }
   val normalizedQuery = query.trim()
-  val quickActions =
-    listOf(
-      CommandItem(CommandAction.Chat, nativeText("Open Chat"), nativeText("Start or continue a conversation"), Icons.Outlined.ChatBubbleOutline, onOpenChat),
-      CommandItem(CommandAction.Voice, nativeText("Start Voice"), nativeText("Talk or dictate with OpenClaw"), Icons.Outlined.MicNone, onOpenVoice),
-      CommandItem(CommandAction.Sessions, nativeText("Browse Threads"), nativeText("Find previous conversations"), Icons.Outlined.AccessTime, onOpenSessions),
-      CommandItem(CommandAction.Providers, nativeText("Providers & Models"), verbatimText(providerCommandSubtitle(isConnected, providers, models)), Icons.Outlined.Inventory2, onOpenProviders),
-      CommandItem(CommandAction.Settings, nativeText("Settings"), nativeText("Gateway, voice, notifications, privacy"), Icons.Outlined.Settings, onOpenSettings),
+  val actionRows =
+    commandItems(
+      query = normalizedQuery,
+      desktopObserveAvailable = desktopObserveAvailable,
+      providerSubtitle = providerCommandSubtitle(isConnected, providers, models),
     )
-  val actionRows = quickActions.filter { it.matches(normalizedQuery) }
   val sessionRows =
     sessions
       .filter { session ->
@@ -147,7 +139,7 @@ internal fun CommandPalette(
           }
         } else {
           item {
-            CommandActionList(rows = actionRows)
+            CommandActionList(rows = actionRows, onOpen = onOpen)
           }
         }
 
@@ -187,26 +179,75 @@ internal fun CommandPalette(
   }
 }
 
-internal enum class CommandAction {
-  Chat,
-  Voice,
-  Sessions,
-  Providers,
-  Settings,
+internal sealed interface CommandAction {
+  data object Chat : CommandAction
+
+  data object Voice : CommandAction
+
+  data object Sessions : CommandAction
+
+  data class Settings(
+    val route: SettingsRoute,
+  ) : CommandAction
 }
+
+internal fun commandItems(
+  query: String,
+  desktopObserveAvailable: Boolean,
+  providerSubtitle: String,
+): List<CommandItem> =
+  buildList<CommandAction> {
+    add(CommandAction.Chat)
+    add(CommandAction.Voice)
+    add(CommandAction.Sessions)
+    add(CommandAction.Settings(SettingsRoute.ProvidersModels))
+    add(CommandAction.Settings(SettingsRoute.Home))
+    if (query.isNotEmpty()) addAll(SettingsRoute.entries.map { CommandAction.Settings(it) })
+  }.distinct()
+    .filter { it !is CommandAction.Settings || it.route.isAvailable(desktopObserveAvailable) }
+    .map { action ->
+      when (action) {
+        CommandAction.Chat -> {
+          CommandItem(action, nativeText("Open Chat"), nativeText("Start or continue a conversation"), Icons.Outlined.ChatBubbleOutline)
+        }
+
+        CommandAction.Voice -> {
+          CommandItem(action, nativeText("Start Voice"), nativeText("Talk or dictate with OpenClaw"), Icons.Outlined.MicNone)
+        }
+
+        CommandAction.Sessions -> {
+          CommandItem(action, nativeText("Browse Threads"), nativeText("Find previous conversations"), Icons.Outlined.AccessTime)
+        }
+
+        is CommandAction.Settings -> {
+          val route = action.route
+          val subtitle =
+            when (route) {
+              SettingsRoute.Home -> nativeText("Gateway, voice, notifications, privacy")
+              SettingsRoute.ProvidersModels -> verbatimText(providerSubtitle)
+              else -> checkNotNull(route.category).title
+            }
+          CommandItem(action, route.title, subtitle, route.icon)
+        }
+      }
+    }.filter { it.matches(query) }
 
 internal data class CommandItem(
   val action: CommandAction,
   val title: NativeText,
   val subtitle: NativeText,
   val icon: ImageVector,
-  val onClick: () -> Unit,
 ) {
-  /** Matches palette queries against both action title and explanatory subtitle. */
   fun matches(query: String): Boolean =
     query.isEmpty() ||
       title.resolveNativeText().contains(query, ignoreCase = true) ||
-      subtitle.resolveNativeText().contains(query, ignoreCase = true)
+      subtitle.resolveNativeText().contains(query, ignoreCase = true) ||
+      (
+        action is CommandAction.Settings && action.route.category
+          ?.title
+          ?.resolveNativeText()
+          ?.contains(query, ignoreCase = true) == true
+      )
 }
 
 internal fun commandSessionMatches(
@@ -225,9 +266,7 @@ internal fun commandActionAccessibilityDescription(
     CommandAction.Sessions,
     -> title
 
-    CommandAction.Providers,
-    CommandAction.Settings,
-    -> resolve("Open \${row.title}", title)
+    is CommandAction.Settings -> resolve("Open \${row.title}", title)
   }
 
 private data class CommandSessionRow(
@@ -239,16 +278,22 @@ private data class CommandSessionRow(
 )
 
 @Composable
-private fun CommandActionList(rows: List<CommandItem>) {
+private fun CommandActionList(
+  rows: List<CommandItem>,
+  onOpen: (CommandAction) -> Unit,
+) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
     ClawSeparatedColumn(items = rows) { row ->
-      CommandActionRow(row = row)
+      CommandActionRow(row = row, onOpen = onOpen)
     }
   }
 }
 
 @Composable
-private fun CommandActionRow(row: CommandItem) {
+private fun CommandActionRow(
+  row: CommandItem,
+  onOpen: (CommandAction) -> Unit,
+) {
   val title = row.title.resolveNativeTextResource()
   val subtitle = row.subtitle.resolveNativeTextResource()
   Surface(color = Color.Transparent, contentColor = ClawTheme.colors.text) {
@@ -258,7 +303,7 @@ private fun CommandActionRow(row: CommandItem) {
           .fillMaxWidth()
           .heightIn(min = 52.dp)
           .clip(RoundedCornerShape(ClawTheme.radii.row))
-          .clickable(onClickLabel = commandActionAccessibilityDescription(row.action, title), onClick = row.onClick)
+          .clickable(onClickLabel = commandActionAccessibilityDescription(row.action, title), onClick = { onOpen(row.action) })
           .padding(horizontal = 2.dp, vertical = 6.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(9.dp),

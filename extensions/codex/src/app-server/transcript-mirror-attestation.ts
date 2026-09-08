@@ -1,9 +1,30 @@
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readUpstreamUserText } from "./upstream-prompt-provenance.js";
+import type { AttemptSettlementWarning } from "./attempt-terminal.js";
+import type { CodexAsyncAssistantMessage } from "./event-projector-assistant-message.js";
+import { readMirrorIdentity, readUpstreamUserText } from "./upstream-prompt-provenance.js";
 
-type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
+export type MirroredAgentMessage = Extract<
+  AgentMessage,
+  { role: "user" | "assistant" | "toolResult" }
+> &
+  Partial<Pick<CodexAsyncAssistantMessage, "openclawAsyncDelivery">>;
+
+export function isMirroredAgentMessage(message: AgentMessage): message is MirroredAgentMessage {
+  return message.role === "user" || message.role === "assistant" || message.role === "toolResult";
+}
+
+export function buildCodexMirrorDedupeIdentity(message: MirroredAgentMessage): string {
+  const identity = readMirrorIdentity(message);
+  if (identity) {
+    return identity;
+  }
+  // Untagged callers dedupe role/content within their idempotency scope.
+  // Volatile metadata must not change that identity on a reordered retry.
+  const payload = JSON.stringify({ role: message.role, content: message.content });
+  return `${message.role}:${createHash("sha256").update(payload).digest("hex").slice(0, 16)}`;
+}
 
 const MIRROR_ORIGIN_META_KEY = "mirrorOrigin" as const;
 const MIRROR_SOURCE_FINGERPRINT_META_KEY = "mirrorSourceFingerprint" as const;
@@ -50,6 +71,7 @@ export function attachCodexMirrorRunId<T extends AgentMessage>(
   message: T,
   runId: string,
   terminal = false,
+  settlementWarning?: AttemptSettlementWarning,
 ): T {
   const existing = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
   const metadata = asOptionalRecord(existing) ?? {};
@@ -60,6 +82,7 @@ export function attachCodexMirrorRunId<T extends AgentMessage>(
       ...current,
       runId,
       ...(terminal ? { runTerminal: true } : {}),
+      ...(terminal && settlementWarning ? { settlementWarning } : {}),
     },
   } as T; // SAFETY: AgentMessage variants permit provider metadata at runtime; preserve T.
 }

@@ -364,13 +364,23 @@ function parseRawDiff(raw) {
     }
     paths.push(filePath);
   }
-  if (
-    paths.length !== releaseCandidatePaths.length ||
-    releaseCandidatePaths.some((filePath) => !paths.includes(filePath))
-  ) {
-    fail("Mobile release candidate must modify exactly the five generated mobile release files.");
-  }
+  // The cutter omits byte-identical outputs. Later checks still verify all five
+  // target files against trusted regeneration, including unchanged paths.
   return paths;
+}
+
+function candidateRawDiff(baseSha, candidateSha) {
+  return gitBuffer(
+    trustedRoot,
+    "diff",
+    "--raw",
+    "-z",
+    "--no-renames",
+    "--no-abbrev",
+    baseSha,
+    candidateSha,
+    "--",
+  );
 }
 
 function verifyCandidateTreeModes(baseSha, candidateSha) {
@@ -428,13 +438,13 @@ async function releaseTooling(baseSha) {
   return releaseToolingPromises.get(baseSha);
 }
 
-async function regenerateReleaseCandidate(baseSha, candidateSha, gatewayVersion) {
-  const tooling = await releaseTooling(baseSha);
+async function regenerateReleaseCandidate(toolingSha, codeSha, candidateSha, gatewayVersion) {
+  const tooling = await releaseTooling(toolingSha);
   if (JSON.stringify(tooling.mobileReleasePaths) !== JSON.stringify(releaseCandidatePaths)) {
     fail("Trusted mobile cutter release path contract does not match release authority.");
   }
   const baseBlobs = new Map(
-    releaseCandidatePaths.map((filePath) => [filePath, readCandidateBlob(baseSha, filePath)]),
+    releaseCandidatePaths.map((filePath) => [filePath, readCandidateBlob(codeSha, filePath)]),
   );
   const targetBlobs = new Map(
     releaseCandidatePaths.map((filePath) => [filePath, readCandidateBlob(candidateSha, filePath)]),
@@ -504,48 +514,72 @@ async function regenerateReleaseCandidate(baseSha, candidateSha, gatewayVersion)
   return matches[0];
 }
 
-async function validateReleaseCandidate(baseSha) {
+async function validateReleaseCandidate(toolingSha) {
   const gatewayVersion = canonicalReleaseRef(targetRef);
   git(
     trustedRoot,
     "fetch",
     "--no-tags",
-    "--depth=256",
+    "--no-recurse-submodules",
+    "--depth=33",
     "origin",
-    "+refs/heads/main:refs/remotes/origin/mobile-authority-main",
     `+refs/heads/${targetRef}:refs/remotes/origin/mobile-authority-target`,
   );
   if (git(trustedRoot, "rev-parse", "refs/remotes/origin/mobile-authority-target") !== targetSha) {
     fail("Fetched release branch does not match target-sha.");
   }
-  git(trustedRoot, "cat-file", "-e", `${baseSha}^{commit}`);
-  if (git(trustedRoot, "merge-base", baseSha, targetSha) !== baseSha) {
-    fail("Mobile release candidate must descend from its pinned trusted workflow base.");
+  let mergeBases = [];
+  try {
+    mergeBases = git(trustedRoot, "merge-base", "--all", toolingSha, targetSha)
+      .split("\n")
+      .filter(Boolean);
+  } catch {
+    mergeBases = [];
   }
-  const commits = git(trustedRoot, "rev-list", "--parents", "--reverse", `${baseSha}..${targetSha}`)
-    .split("\n")
-    .filter(Boolean);
-  if (
-    commits.length < 1 ||
-    commits.length > MAX_RELEASE_CANDIDATE_COMMITS ||
-    commits.some((line) => line.split(" ").length !== 2)
-  ) {
-    fail("Mobile release candidate history must be a bounded linear commit chain.");
+  if (mergeBases.length !== 1) {
+    fail("Mobile release candidate must have exactly one shared Code SHA.");
   }
-  parseRawDiff(
-    gitBuffer(
-      trustedRoot,
-      "diff",
-      "--raw",
-      "-z",
-      "--no-renames",
-      "--no-abbrev",
-      baseSha,
-      targetSha,
-      "--",
-    ),
+  const codeSha = fullSha(mergeBases[0], "derived Code SHA");
+  const distance = Number(
+    git(trustedRoot, "rev-list", "--first-parent", "--count", `${codeSha}..${toolingSha}`),
   );
-  verifyCandidateTreeModes(baseSha, targetSha);
+  if (!Number.isSafeInteger(distance) || distance < 0) {
+    fail("Derived Code SHA is not on the trusted Tooling SHA first-parent history.");
+  }
+  let firstParentAtDistance = "";
+  try {
+    firstParentAtDistance = git(trustedRoot, "rev-parse", `${toolingSha}~${distance}^{commit}`);
+  } catch {
+    firstParentAtDistance = "";
+  }
+  if (firstParentAtDistance !== codeSha) {
+    fail("Derived Code SHA is not on the trusted Tooling SHA first-parent history.");
+  }
+  if (codeSha === targetSha) {
+    fail("Mobile release candidate must contain at least one commit after its Code SHA.");
+  }
+  let commitSha = targetSha;
+  let commitCount = 0;
+  while (commitSha !== codeSha) {
+    if (commitCount === MAX_RELEASE_CANDIDATE_COMMITS) {
+      fail("Mobile release candidate history must be a bounded linear commit chain.");
+    }
+    const parents = git(trustedRoot, "show", "-s", "--format=%P", commitSha)
+      .split(" ")
+      .filter(Boolean);
+    if (parents.length !== 1) {
+      fail("Mobile release candidate history must be a bounded linear commit chain.");
+    }
+    const parentSha = parents[0];
+    const rawDiff = candidateRawDiff(parentSha, commitSha);
+    if (rawDiff.byteLength > 0) {
+      parseRawDiff(rawDiff);
+    }
+    commitSha = parentSha;
+    commitCount += 1;
+  }
+  parseRawDiff(candidateRawDiff(codeSha, targetSha));
+  verifyCandidateTreeModes(codeSha, targetSha);
   const manifest = canonicalJson(
     readCandidateBlob(targetSha, "apps/mobile/version.json"),
     "apps/mobile/version.json",
@@ -558,7 +592,7 @@ async function validateReleaseCandidate(baseSha) {
   }
   return {
     gatewayVersion,
-    ...(await regenerateReleaseCandidate(baseSha, targetSha, gatewayVersion)),
+    ...(await regenerateReleaseCandidate(toolingSha, codeSha, targetSha, gatewayVersion)),
   };
 }
 

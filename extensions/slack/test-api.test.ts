@@ -8,6 +8,7 @@ describe("Slack test API", () => {
       "createSlackWebClient",
       "createSlackWriteClient",
       "listSlackReactions",
+      "preloadSlackActions",
       "resolveSlackWebClientOptions",
       "sendSlackMessage",
     ]);

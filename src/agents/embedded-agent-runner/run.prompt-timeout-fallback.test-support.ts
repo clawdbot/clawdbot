@@ -1,7 +1,7 @@
 // Full-entry coverage for handing replay-safe prompt timeouts to model fallback.
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
+import { createModelFallbackConfig } from "../test-helpers/model-fallback-config-fixture.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   MockedFailoverError,
@@ -35,7 +35,7 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
   });
 
   it("throws FailoverError for persistent replay-safe prompt timeouts after transient retries", async () => {
-    // The transient retry owner replays the same model first; a timeout that
+    // The transient retry owner continues the same model first; a timeout that
     // persists past the retry budget hands off to the configured fallback.
     mockedClassifyFailoverReason.mockReturnValue("timeout");
     mockedRunEmbeddedAttempt.mockResolvedValue(
@@ -54,22 +54,13 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
       provider: "openai",
       model: "gpt-5.4",
       runId: "run-prompt-timeout-fallback",
-      config: makeModelFallbackCfg({
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-5.4",
-              fallbacks: ["anthropic/claude-opus-4-6"],
-            },
-          },
-        },
-      }),
+      config: createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-opus-4-6"]),
     });
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
     await expect(promise).rejects.toThrow("LLM request timed out.");
     // Initial attempt plus the full same-model transient retry budget.
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(4);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(9);
   });
 
   it("finalizes a settled write after an idle timeout without replaying the prompt", async () => {
@@ -145,16 +136,7 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
       provider: "openai",
       model: "gpt-5.4",
       runId: "run-post-tool-idle-finalization",
-      config: makeModelFallbackCfg({
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-5.4",
-              fallbacks: ["anthropic/claude-opus-4-6"],
-            },
-          },
-        },
-      }),
+      config: createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-opus-4-6"]),
     });
 
     expect(result.payloads).toEqual([{ text: "The note was written once." }]);

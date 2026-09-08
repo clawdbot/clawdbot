@@ -245,22 +245,63 @@ describe("handleWorkspaceIconHttpRequest", () => {
     },
   );
 
-  it("revalidates an unchanged icon without resending its bytes", async () => {
-    const root = await makeWorkspace({ "favicon.png": PNG_BYTES });
-    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
-    await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:one" });
+  it.each([
+    {
+      name: "exact current tag",
+      method: "GET",
+      validator: (etag: string) => etag,
+      expectedStatus: 304,
+    },
+    {
+      name: "quoted comma/star GET",
+      method: "GET",
+      validator: '"client,*,tag"',
+      expectedStatus: 200,
+    },
+    {
+      name: "weak quoted comma/star HEAD",
+      method: "HEAD",
+      validator: 'W/"client,*,tag"',
+      expectedStatus: 200,
+    },
+    {
+      name: "literal backslash before weak match",
+      method: "HEAD",
+      validator: (etag: string) => String.raw`"trailing\", W/` + etag,
+      expectedStatus: 304,
+    },
+  ])(
+    "honors $name for workspace image responses",
+    async ({ method, validator, expectedStatus }) => {
+      const root = await makeWorkspace({ "favicon.png": PNG_BYTES });
+      mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
+      await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:one" });
 
-    const first = await fetch(iconRoute("agent:main:one"));
-    const etag = first.headers.get("etag");
-    expect(etag).toBeTruthy();
-    await first.arrayBuffer();
+      const first = await fetch(iconRoute("agent:main:one"));
+      const etag = first.headers.get("etag") ?? "";
+      expect(etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
+      await first.arrayBuffer();
 
-    const revalidated = await fetch(iconRoute("agent:main:one"), {
-      headers: { "If-None-Match": etag ?? "" },
-    });
-    expect(revalidated.status).toBe(304);
-    expect((await revalidated.arrayBuffer()).byteLength).toBe(0);
-  });
+      const response = await fetch(iconRoute("agent:main:one"), {
+        method,
+        headers: { "If-None-Match": typeof validator === "function" ? validator(etag) : validator },
+      });
+      expect(response.status).toBe(expectedStatus);
+      expect(response.headers.get("etag")).toBe(etag);
+      expect(response.headers.get("content-disposition")).toBe(
+        'attachment; filename="workspace-icon"',
+      );
+      expect(response.headers.get("content-length")).toBe(
+        expectedStatus === 304 ? null : String(PNG_BYTES.byteLength),
+      );
+      if (expectedStatus === 200) {
+        expect(response.headers.get("content-type")).toBe("image/png");
+      }
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(
+        expectedStatus === 304 || method === "HEAD" ? Buffer.alloc(0) : PNG_BYTES,
+      );
+    },
+  );
 
   it("omits the body but keeps the representation headers on HEAD", async () => {
     const root = await makeWorkspace({ "favicon.png": PNG_BYTES });

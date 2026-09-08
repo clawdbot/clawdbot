@@ -1,7 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 
 export type CronStoreTransactionHooks = {
-  beforeWrite?: (db: DatabaseSync) => void;
-  afterWrite?: (db: DatabaseSync) => void;
-  afterCommit?: () => void;
+  // void accepts Promise-returning functions; every hook must finish before its caller proceeds.
+  beforeWrite?: (db: DatabaseSync) => undefined;
+  afterWrite?: (db: DatabaseSync) => undefined;
+  afterCommit?: () => undefined;
 };

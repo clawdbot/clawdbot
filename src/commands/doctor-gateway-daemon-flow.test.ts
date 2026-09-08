@@ -103,7 +103,8 @@ vi.mock("../daemon/systemd-hints.js", () => ({
   renderSystemdUnavailableHints,
 }));
 
-vi.mock("../gateway/net.js", () => ({
+vi.mock("../gateway/net.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/net.js")>()),
   resolveGatewayBindHost,
   resolveGatewayRequiredListenHosts: (bindHost: string) =>
     bindHost === "100.64.0.40" ? [bindHost, "127.0.0.1"] : [bindHost],
@@ -590,6 +591,7 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(ctx.runtime.error).toHaveBeenCalledOnce();
     expect(service.restart).not.toHaveBeenCalled();
     expect(service.isLoaded).not.toHaveBeenCalled();
+    expect(service.readCommand).not.toHaveBeenCalled();
     expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
     expect(note).not.toHaveBeenCalled();
   });
@@ -749,7 +751,6 @@ describe("maybeRepairGatewayDaemon", () => {
     };
     service.readCommand.mockResolvedValue(existingCommand);
     vi.mocked(resolveGatewayInstallToken).mockResolvedValueOnce({
-      tokenRefConfigured: false,
       warnings: [],
     });
     vi.mocked(buildGatewayInstallPlan).mockResolvedValueOnce({
@@ -914,7 +915,7 @@ describe("maybeRepairGatewayDaemon", () => {
     setPlatform("darwin");
     service.isLoaded.mockResolvedValueOnce(false).mockResolvedValue(true);
     service.readRuntime
-      .mockResolvedValueOnce({ status: "unknown", missingSupervision: true })
+      .mockResolvedValueOnce({ status: "stopped" })
       .mockResolvedValue({ status: "running" });
     vi.mocked(launchd.launchAgentPlistExists).mockResolvedValueOnce(true).mockResolvedValue(false);
     vi.mocked(launchd.isLaunchAgentLoaded).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
@@ -934,7 +935,6 @@ describe("maybeRepairGatewayDaemon", () => {
     service.readRuntime.mockResolvedValue({
       status: "unknown",
       detail: "Bootstrap failed: 125: Domain does not support specified action",
-      missingSupervision: true,
       missingGuiSession: true,
     });
     buildGatewayRuntimeHints.mockReturnValue([
@@ -988,7 +988,7 @@ describe("maybeRepairGatewayDaemon", () => {
   it("surfaces typed system ownership from bootstrap repair and stops recovery", async () => {
     setPlatform("darwin");
     service.isLoaded.mockResolvedValue(false);
-    service.readRuntime.mockResolvedValue({ status: "unknown", missingSupervision: true });
+    service.readRuntime.mockResolvedValue({ status: "stopped" });
     vi.mocked(launchd.launchAgentPlistExists).mockResolvedValueOnce(true).mockResolvedValue(false);
     vi.mocked(launchd.isLaunchAgentLoaded).mockResolvedValue(false);
     vi.mocked(launchd.repairLaunchAgentBootstrap).mockResolvedValueOnce({
@@ -1025,10 +1025,7 @@ describe("maybeRepairGatewayDaemon", () => {
   it("routes GUI-session bootstrap failures through the doctor runtime hint", async () => {
     setPlatform("darwin");
     service.isLoaded.mockResolvedValue(false);
-    service.readRuntime.mockResolvedValue({
-      status: "unknown",
-      missingSupervision: true,
-    });
+    service.readRuntime.mockResolvedValue({ status: "stopped" });
     vi.mocked(launchd.isLaunchAgentLoaded).mockResolvedValue(false);
     vi.mocked(launchd.launchAgentPlistExists).mockResolvedValueOnce(true).mockResolvedValue(false);
     vi.mocked(launchd.repairLaunchAgentBootstrap).mockResolvedValueOnce({

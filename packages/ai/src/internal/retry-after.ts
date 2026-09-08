@@ -29,11 +29,102 @@ type HttpDateComponents = {
   seconds: number;
 };
 
-/** Parses the three HTTP-date forms accepted for Retry-After without Date.parse normalization. */
+type HttpDateInstant = {
+  timestampMs: number;
+  // Date cannot represent :60; its following timestamp is an exclusive upper bound.
+  leapSecond: boolean;
+};
+
+function ownDataValue(value: unknown, key: string): unknown {
+  return value && typeof value === "object"
+    ? Object.getOwnPropertyDescriptor(value, key)?.value
+    : undefined;
+}
+
+/** Reads only retry timing metadata, without invoking provider getters or serialization hooks. */
+export function parseRetryAfterHeadersSeconds(
+  headers: unknown,
+  nowMs = Date.now(),
+): number | undefined {
+  if (!headers || typeof headers !== "object") {
+    return undefined;
+  }
+  try {
+    let entries: Array<[string, unknown]>;
+    try {
+      entries = ["retry-after", "retry-after-ms"].map<[string, unknown]>((key) => [
+        key,
+        Headers.prototype.get.call(headers, key),
+      ]);
+    } catch {
+      entries = Object.getOwnPropertyNames(headers).flatMap<[string, unknown]>((key) => {
+        const name = key.toLowerCase();
+        return name === "retry-after" || name === "retry-after-ms"
+          ? [[name, ownDataValue(headers, key)]]
+          : [];
+      });
+    }
+    let floor: number | undefined;
+    for (const [key, value] of entries) {
+      const text =
+        typeof value === "string" ? value.trim() : typeof value === "number" ? String(value) : "";
+      const milliseconds = key === "retry-after-ms";
+      const numeric =
+        typeof value === "number"
+          ? value >= 0 && (milliseconds || Number.isInteger(value) || value === Infinity)
+          : (milliseconds ? /^\d+(?:\.\d+)?$/ : /^\d+$/).test(text);
+      const number = typeof value === "number" ? value : Number(text);
+      const retryAt =
+        !numeric && !milliseconds ? parseRetryAfterHttpDateMs(text, nowMs) : undefined;
+      const seconds = numeric
+        ? Number.isFinite(number) && number <= Number.MAX_SAFE_INTEGER
+          ? number / (milliseconds ? 1000 : 1)
+          : Infinity
+        : retryAt === undefined
+          ? undefined
+          : Math.max(0, (retryAt - nowMs) / 1000);
+      if (seconds !== undefined) {
+        floor = Math.max(floor ?? 0, seconds);
+      }
+    }
+    return floor;
+  } catch {
+    return undefined;
+  }
+}
+
+/** SDK errors carry native response headers separately from their error body. */
+export function parseRetryAfterErrorSeconds(
+  error: unknown,
+  nowMs = Date.now(),
+): number | undefined {
+  try {
+    const direct = parseRetryAfterHeadersSeconds(ownDataValue(error, "headers"), nowMs);
+    const response = parseRetryAfterHeadersSeconds(
+      ownDataValue(ownDataValue(error, "response"), "headers"),
+      nowMs,
+    );
+    return direct === undefined && response === undefined
+      ? undefined
+      : Math.max(direct ?? 0, response ?? 0);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Round leap seconds forward for Retry-After so an unrepresentable instant cannot retry early. */
 export function parseRetryAfterHttpDateMs(value: string, nowMs = Date.now()): number | undefined {
+  return parseHttpDateInstant(value, nowMs)?.timestampMs;
+}
+
+/** Parse all three HTTP-date forms while retaining leap-second ordering. */
+export function parseHttpDateInstant(
+  value: string,
+  nowMs = Date.now(),
+): HttpDateInstant | undefined {
   const imfFixdate = IMF_FIXDATE_RE.exec(value);
   if (imfFixdate) {
-    return parseHttpDateComponentsMs({
+    return parseHttpDateComponents({
       weekday: HTTP_DATE_SHORT_WEEKDAY_INDEX.get(imfFixdate[1] ?? ""),
       year: Number.parseInt(imfFixdate[4] ?? "", 10),
       month: HTTP_DATE_MONTH_INDEX.get(imfFixdate[3] ?? ""),
@@ -76,12 +167,12 @@ export function parseRetryAfterHttpDateMs(value: string, nowMs = Date.now()): nu
       now.getUTCMilliseconds(),
     );
     const resolvedYear = candidate > fiftyYearsFromNow ? candidateYear - 100 : candidateYear;
-    return parseHttpDateComponentsMs({ year: resolvedYear, ...components });
+    return parseHttpDateComponents({ year: resolvedYear, ...components });
   }
 
   const asctimeDate = OBSOLETE_ASCTIME_DATE_RE.exec(value);
   if (asctimeDate) {
-    return parseHttpDateComponentsMs({
+    return parseHttpDateComponents({
       weekday: HTTP_DATE_SHORT_WEEKDAY_INDEX.get(asctimeDate[1] ?? ""),
       year: Number.parseInt(asctimeDate[7] ?? "", 10),
       month: HTTP_DATE_MONTH_INDEX.get(asctimeDate[2] ?? ""),
@@ -95,16 +186,17 @@ export function parseRetryAfterHttpDateMs(value: string, nowMs = Date.now()): nu
   return undefined;
 }
 
-function parseHttpDateComponentsMs(components: HttpDateComponents): number | undefined {
+function parseHttpDateComponents(components: HttpDateComponents): HttpDateInstant | undefined {
   const timestamp = parseHttpDateCalendarMs(components);
   if (timestamp === undefined) {
     return undefined;
   }
-  const weekdayTimestamp = components.seconds === 60 ? timestamp - 1_000 : timestamp;
+  const leapSecond = components.seconds === 60;
+  const weekdayTimestamp = leapSecond ? timestamp - 1_000 : timestamp;
   if (new Date(weekdayTimestamp).getUTCDay() !== components.weekday) {
     return undefined;
   }
-  return timestamp;
+  return { timestampMs: timestamp, leapSecond };
 }
 
 function parseHttpDateCalendarMs(

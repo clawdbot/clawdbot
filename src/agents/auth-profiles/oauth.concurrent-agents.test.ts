@@ -20,7 +20,7 @@ import {
   resetOAuthProviderRuntimeMocks,
 } from "./oauth-test-utils.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
-import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
 
 const {
   refreshProviderOAuthCredentialWithPluginMock,

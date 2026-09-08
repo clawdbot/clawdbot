@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { normalizeModelRef } from "../agents/model-ref-shared.js";
-import { parseModelRef } from "../agents/model-selection-normalize.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import type { ModelRef } from "../agents/model-ref-shared.js";
 import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -19,28 +20,10 @@ import { ADMIN_SCOPE } from "./operator-scopes.js";
 import type { GatewayContextResolver, GatewayRequestOptions } from "./server-methods/types.js";
 import {
   dispatchGatewayMethodInProcess,
+  getInProcessGatewayRequestContext,
   prepareInProcessAgentExecution,
 } from "./server-plugin-in-process-dispatch.js";
 import { resolvePluginSubagentToolsAlsoAllow } from "./server-plugin-runtime-client.js";
-
-function resolvePluginSubagentRequestedModelRef(params: {
-  provider?: string;
-  model?: string;
-}): string | null {
-  if (params.provider && params.model) {
-    const normalizedRequest = normalizeModelRef(params.provider, params.model);
-    return `${normalizedRequest.provider}/${normalizedRequest.model}`;
-  }
-  const rawModel = params.model?.trim();
-  if (!rawModel || !rawModel.includes("/")) {
-    return null;
-  }
-  const parsed = parseModelRef(rawModel, "");
-  if (!parsed?.provider || !parsed.model) {
-    return null;
-  }
-  return `${parsed.provider}/${parsed.model}`;
-}
 
 function normalizePluginSubagentRunRuntime(
   value: unknown,
@@ -89,56 +72,53 @@ export function resolvePluginSubagentOverridePolicies(
   return policies;
 }
 
-function authorizeFallbackModelOverride(params: {
+function resolveFallbackModelOverridePolicy(params: {
   policies: PluginSubagentOverridePolicies;
   pluginId?: string;
   provider?: string;
   model?: string;
-}): { allowed: true } | { allowed: false; reason: string } {
+}): PluginSubagentOverridePolicy | undefined {
   const pluginId = params.pluginId?.trim();
   if (!pluginId) {
-    return {
-      allowed: false,
-      reason: "provider/model override requires plugin identity in fallback subagent runs.",
-    };
+    throw new Error("provider/model override requires plugin identity in fallback subagent runs.");
   }
   const policy = params.policies[pluginId];
   if (!policy?.allowModelOverride) {
-    return {
-      allowed: false,
-      reason:
-        `plugin "${pluginId}" is not trusted for fallback provider/model override requests. ` +
+    throw new Error(
+      `plugin "${pluginId}" is not trusted for fallback provider/model override requests. ` +
         "See https://docs.openclaw.ai/plugins/sdk-runtime#api-runtime-subagent and search for: " +
         "plugins.entries.<id>.subagent.allowModelOverride",
-    };
+    );
   }
   if (policy.allowAny) {
-    return { allowed: true };
+    return undefined;
   }
   if (policy.configured && policy.models.size === 0) {
-    return {
-      allowed: false,
-      reason: `plugin "${pluginId}" configured subagent.allowedModels, but none of the entries normalized to a valid provider/model target.`,
-    };
+    throw new Error(
+      `plugin "${pluginId}" configured subagent.allowedModels, but none of the entries normalized to a valid provider/model target.`,
+    );
   }
   if (policy.models.size === 0) {
-    return { allowed: true };
+    return undefined;
   }
-  const requestedModelRef = resolvePluginSubagentRequestedModelRef(params);
-  if (!requestedModelRef) {
-    return {
-      allowed: false,
-      reason:
-        "fallback provider/model overrides that use an allowlist must resolve to a canonical provider/model target.",
-    };
+  if (!params.model?.trim() || (!params.provider && !params.model.includes("/"))) {
+    throw new Error(
+      "fallback provider/model overrides that use an allowlist must resolve to a canonical provider/model target.",
+    );
   }
-  if (policy.models.has(requestedModelRef)) {
-    return { allowed: true };
+  return policy;
+}
+
+function assertPluginSubagentModelAllowed(
+  policy: PluginSubagentOverridePolicy | undefined,
+  selection: ModelRef,
+  pluginId: string | undefined,
+  authProfileId?: string,
+): void {
+  const modelRef = `${selection.provider}/${selection.model}${authProfileId ? `@${authProfileId}` : ""}`;
+  if (policy && !policy.models.has(modelRef)) {
+    throw new Error(`model override "${modelRef}" is not allowlisted for plugin "${pluginId}".`);
   }
-  return {
-    allowed: false,
-    reason: `model override "${requestedModelRef}" is not allowlisted for plugin "${pluginId}".`,
-  };
 }
 
 function hasAdminScope(client: GatewayRequestOptions["client"] | undefined): boolean {
@@ -179,23 +159,21 @@ export function createGatewaySubagentRuntime(
     const hasRequestScopeClient = Boolean(scope?.client);
     let allowOverride = hasRequestScopeClient && canClientUseModelOverride(scope?.client ?? null);
     let allowSyntheticModelOverride = false;
+    let policy: PluginSubagentOverridePolicy | undefined;
     if (overrideRequested && !allowOverride && !hasRequestScopeClient) {
-      const fallbackAuth = authorizeFallbackModelOverride({
+      policy = resolveFallbackModelOverridePolicy({
         policies: overridePolicies,
         pluginId: scope?.pluginId,
         provider: params.provider,
         model: params.model,
       });
-      if (!fallbackAuth.allowed) {
-        throw new Error(fallbackAuth.reason);
-      }
       allowOverride = true;
       allowSyntheticModelOverride = true;
     }
     if (overrideRequested && !allowOverride) {
       throw new Error("provider/model override is not authorized for this plugin subagent run.");
     }
-    return { allowOverride, allowSyntheticModelOverride };
+    return { allowOverride, allowSyntheticModelOverride, policy };
   };
   const getSessionMessages: PluginRuntime["subagent"]["getSessionMessages"] = async (params) => {
     const scope = getPluginRuntimeGatewayRequestScope();
@@ -271,7 +249,7 @@ export function createGatewaySubagentRuntime(
           await execution.authorize();
           assertCurrent();
           signal.throwIfAborted();
-          authorizeModelOverride(params);
+          const { policy } = authorizeModelOverride(params);
           const cfg = execution.context.getRuntimeConfig();
           const agentId = resolveConfiguredAgentId(cfg, params.agentId);
           const selection = resolveSimpleCompletionSelectionForAgent({
@@ -282,6 +260,12 @@ export function createGatewaySubagentRuntime(
           if (!selection) {
             throw new Error(`No model configured for agent ${agentId}.`);
           }
+          assertPluginSubagentModelAllowed(
+            policy,
+            { provider: selection.provider, model: selection.modelId },
+            pluginId,
+            selection.profileId,
+          );
           const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000);
           const runSignal = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
           // Hold capacity through runtime cleanup; a response-only abort race would
@@ -321,7 +305,8 @@ export function createGatewaySubagentRuntime(
         { abortSignal: signals.length ? AbortSignal.any(signals) : undefined },
       );
     },
-    async run(params) {
+    async run(request) {
+      const params = { ...request };
       if (params.disableTools === true && (params.toolsAlsoAllow?.length ?? 0) > 0) {
         throw new Error("Tool-free plugin subagent runs cannot request additive tools.");
       }
@@ -337,7 +322,57 @@ export function createGatewaySubagentRuntime(
         pluginId,
         toolsAlsoAllow: params.toolsAlsoAllow,
       });
-      const { allowOverride, allowSyntheticModelOverride } = authorizeModelOverride(params);
+      const { allowOverride, allowSyntheticModelOverride, policy } = authorizeModelOverride(params);
+      let sessionMutationCommitGuard: (() => void) | undefined;
+      if (policy) {
+        const context = getInProcessGatewayRequestContext(resolveGatewayContext);
+        if (!context) {
+          throw new Error("Plugin model override requires a live Gateway binding.");
+        }
+        const cfg = context.getRuntimeConfig();
+        sessionMutationCommitGuard = () => {
+          runtimeLifetime?.throwIfAborted();
+          if (
+            getInProcessGatewayRequestContext(resolveGatewayContext) !== context ||
+            context.getRuntimeConfig() !== cfg
+          ) {
+            throw new Error(
+              "Plugin model override configuration changed before admission. Retry the run.",
+            );
+          }
+        };
+        const [modelRefs, agentScope, metadata] = await Promise.all([
+          import("../agents/command/model-ref.js"),
+          import("../agents/agent-scope.js"),
+          import("../plugins/plugin-metadata-snapshot.js"),
+        ]);
+        sessionMutationCommitGuard();
+        const model = expectDefined(params.model, "authorized model override");
+        const agentId = agentScope.resolveSessionAgentId({
+          config: cfg,
+          sessionKey: params.sessionKey,
+        });
+        const manifestPlugins =
+          cfg.plugins?.enabled === false
+            ? []
+            : metadata.resolvePluginMetadataSnapshot({
+                config: cfg,
+                env: process.env,
+                workspaceDir: agentScope.resolveAgentWorkspaceDir(cfg, agentId),
+              });
+        const selection = params.provider
+          ? modelRefs.normalizeAgentCommandModelRef(cfg, params.provider, model, {
+              manifestPlugins,
+            })
+          : modelRefs.parseAgentCommandModelRef(cfg, agentId, model, "", { manifestPlugins });
+        if (!selection) {
+          throw new Error("Invalid model override.");
+        }
+        const authProfileId = params.provider ? undefined : splitTrailingAuthProfile(model).profile;
+        assertPluginSubagentModelAllowed(policy, selection, pluginId, authProfileId);
+        // The command owns parsing. Replacing its input with this result would
+        // apply non-idempotent provider aliases again; retain the authorized syntax.
+      }
       const payload = await dispatchGatewayMethodInProcess<{
         runId?: string;
         sessionKey?: string;
@@ -360,6 +395,7 @@ export function createGatewaySubagentRuntime(
         },
         {
           allowSyntheticModelOverride,
+          sessionMutationCommitGuard,
           agentRunTracking: "plugin_subagent",
           ...(!scope?.client ? { operatorRoleActor: { kind: "system" as const } } : {}),
           ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),

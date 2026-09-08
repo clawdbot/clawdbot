@@ -11,7 +11,7 @@ import {
   type NonClawHubInstallSourceClass,
 } from "../plugins/install-provenance.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";
-import type { ManagedPluginSourceInstallRequest } from "../plugins/management-service.js";
+import type { ManagedPluginSourceInstallRequest } from "../plugins/management-install.js";
 import { resolveCatalogOfficialExternalInstallPlan } from "../plugins/official-external-install-trust.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { looksLikeLocalInstallSpec } from "./install-spec.js";

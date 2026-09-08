@@ -131,11 +131,10 @@ describe("memory manager FTS-only reindex", () => {
         backend: "builtin",
 
         search: {
-          provider: params.provider ?? "auto",
+          provider: params.provider,
           model: "",
           store,
           cache: { enabled: false },
-          sync: { watch: false, onSessionStart: false, onSearch: false },
         },
       },
       agents: {
@@ -210,6 +209,44 @@ describe("memory manager FTS-only reindex", () => {
     });
     expect(createEmbeddingProviderMock).not.toHaveBeenCalled();
   });
+
+  it.each([undefined, "auto", "local"])(
+    "indexes before the first search when optional provider %s cannot initialize",
+    async (provider) => {
+      providerConstructionError = new Error("Embedding provider setup unavailable");
+      const memoryManager = await createManager({ provider });
+
+      await expect(
+        memoryManager.sync({ reason: "session-startup-catchup", force: true }),
+      ).resolves.toBeUndefined();
+      expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
+
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "new-note.md"),
+        "Beta calibration record",
+      );
+      await memoryManager.sync({ reason: "session-delta", force: true });
+      await memoryManager.sync({ reason: "post-compaction", force: true });
+      expect(countChunksContaining("Beta calibration record")).toBeGreaterThan(0);
+      expect(createEmbeddingProviderMock).toHaveBeenCalledOnce();
+      expect(memoryManager.status()).toMatchObject({
+        provider: "none",
+        custom: { searchMode: "fts-only", indexIdentity: { status: "valid" } },
+      });
+
+      const debug: unknown[] = [];
+      await expect(
+        memoryManager.search("Beta calibration", { onDebug: (value) => debug.push(value) }),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          path: "memory/new-note.md",
+          snippet: expect.stringContaining("Beta calibration record"),
+        }),
+      ]);
+      expect(JSON.stringify(debug)).toContain("Embedding provider setup unavailable");
+      expect(createEmbeddingProviderMock).toHaveBeenCalledOnce();
+    },
+  );
 
   it("returns keyword matches when optional provider construction fails during search bootstrap", async () => {
     providerConstructionError = Object.assign(
@@ -290,6 +327,9 @@ describe("memory manager FTS-only reindex", () => {
     );
     const memoryManager = await createManager({ provider: "openai" });
 
+    await expect(
+      memoryManager.sync({ reason: "session-startup-catchup", force: true }),
+    ).rejects.toThrow('No API key resolved for provider "openai"');
     await expect(memoryManager.search("Alpha topic")).rejects.toThrow(
       'No API key resolved for provider "openai"',
     );
@@ -458,7 +498,7 @@ describe("memory manager FTS-only reindex", () => {
     const secondSearch = memoryManager.search("Alpha topic");
     releaseProviderConstruction();
 
-    await expect(backgroundSync).resolves.toBe(providerConstructionError);
+    await expect(backgroundSync).resolves.toBeUndefined();
     const results = await Promise.all([firstSearch, secondSearch]);
     expect(results).toEqual([
       [expect.objectContaining({ path: "MEMORY.md", source: "memory" })],

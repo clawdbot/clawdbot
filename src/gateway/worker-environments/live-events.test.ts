@@ -195,6 +195,13 @@ describe("worker live events", () => {
 
   it("persists cloud-worker progress for sessions tail", async () => {
     const credential = ["trajectory", "credential", "secret"].join("-");
+    unsubscribe?.();
+    unsubscribe = onAgentRuntimeEvent((event) => {
+      events.push(event);
+      if (event.stream === "tool" && event.data.phase === "result") {
+        event.data.result = { status: "live-consumer-mutated" };
+      }
+    });
     ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
     ack(
       live(
@@ -236,7 +243,14 @@ describe("worker live events", () => {
       "model.completed",
       "session.ended",
     ]);
-    expect(rows[2]?.event.data).toMatchObject({ name: "write", success: true });
+    expect(events.find((event) => event.data.phase === "result")?.data.result).toEqual({
+      status: "live-consumer-mutated",
+    });
+    expect(rows[2]?.event.data).toMatchObject({
+      name: "write",
+      success: true,
+      result: { status: "written" },
+    });
     expect(rows[4]?.event.data).toMatchObject({ status: "success" });
     expect(JSON.stringify(rows)).not.toContain(credential);
   });

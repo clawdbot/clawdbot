@@ -5,12 +5,15 @@ import {
   validateGatewaySuspendPrepareParams,
   validateGatewaySuspendResumeParams,
   validateGatewaySuspendStatusParams,
+  validateGatewaySuspendHandoffParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
+  armGatewaySuspendHandoff,
   getGatewaySuspendStatus,
   prepareGatewaySuspend,
   resumeGatewaySuspend,
 } from "../../infra/gateway-suspend-coordinator.js";
+import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { createGatewayServerActiveWorkInspectors } from "../server-active-work.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -27,6 +30,41 @@ function schedulerRecoveryError(retryAfterMs: number) {
 }
 
 export const suspendHandlers: GatewayRequestHandlers = {
+  "gateway.suspend.handoff": ({ respond, params, context }) => {
+    if (!validateGatewaySuspendHandoffParams(params)) {
+      respond(false, undefined, invalidParams("gateway.suspend.handoff"));
+      return;
+    }
+    if (
+      params.target.pid !== process.pid ||
+      params.target.processInstanceId !== getGatewayProcessInstanceId()
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "gateway process changed after preflight"),
+      );
+      return;
+    }
+    const owner = context.hostLifecycle?.externalRestart;
+    if (!owner) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "gateway host does not own process exit"),
+      );
+      return;
+    }
+    const result = armGatewaySuspendHandoff({
+      suspensionId: params.suspensionId.trim(),
+      owner,
+    });
+    if (!result.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, result.error));
+      return;
+    }
+    respond(true, result.value);
+  },
   "gateway.suspend.prepare": async ({ respond, params, context }) => {
     if (!validateGatewaySuspendPrepareParams(params)) {
       respond(false, undefined, invalidParams("gateway.suspend.prepare"));

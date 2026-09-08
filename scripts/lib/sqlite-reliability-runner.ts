@@ -20,6 +20,7 @@ import {
 } from "../../src/state/openclaw-state-db.js";
 import { runVacuumInterruptionProof } from "./sqlite-reliability-compaction.js";
 import {
+  assertSameReliabilityState,
   COMMITTED_WAL_SENTINEL,
   PROFILES,
   STRESS_TABLE_SQL,
@@ -28,6 +29,7 @@ import {
   type ReliabilityStateProof,
 } from "./sqlite-reliability-contract.js";
 import { runIndexRepairInterruptionProof } from "./sqlite-reliability-index-repair.js";
+import type { ReliabilityWorkerExit } from "./sqlite-reliability-process.js";
 import { runPublicationInterruptionProof } from "./sqlite-reliability-publication.js";
 import { runRepositoryInterruptionProof } from "./sqlite-reliability-repository.js";
 import { runRestoreInterruptionProof } from "./sqlite-reliability-restore.js";
@@ -39,7 +41,6 @@ import {
   terminateWriter,
   waitForWriterMessage,
   type WriterHandle,
-  type WriterExit,
 } from "./sqlite-reliability-writer.js";
 
 type TargetDatabase = {
@@ -204,22 +205,6 @@ function readReliabilityState(database: DatabaseSync, rowsPerBatch: number): Rel
     rows,
     sha256: hash.digest("hex"),
   };
-}
-
-function assertSameReliabilityState(
-  actual: ReliabilityStateProof,
-  expected: ReliabilityStateProof,
-  label: string,
-): void {
-  if (
-    actual.batches !== expected.batches ||
-    actual.rows !== expected.rows ||
-    actual.sha256 !== expected.sha256
-  ) {
-    throw new Error(
-      `${label} changed reliability state: expected batches=${expected.batches} rows=${expected.rows} sha256=${expected.sha256}, got batches=${actual.batches} rows=${actual.rows} sha256=${actual.sha256}`,
-    );
-  }
 }
 
 function verifyRestoredDatabase(params: {
@@ -724,7 +709,7 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
       rowsPerBatch: profile.rowsPerBatch,
       uncommittedBatch: partial.batch,
     });
-    let crashExit: WriterExit | undefined;
+    let crashExit: ReliabilityWorkerExit | undefined;
     let stateAfterRecovery: ReliabilityStateProof | undefined;
     const metrics: IterationMetric[] = [];
     for (let iteration = 0; iteration < profile.iterations; iteration += 1) {

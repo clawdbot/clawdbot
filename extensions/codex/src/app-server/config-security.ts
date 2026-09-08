@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { hostname as readHostName } from "node:os";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
+import { isLoopbackHost } from "openclaw/plugin-sdk/request-url";
 import type {
   CodexAppServerConnectionClass,
   CodexAppServerDefaultPolicy,

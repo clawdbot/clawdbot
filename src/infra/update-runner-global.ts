@@ -37,8 +37,6 @@ export async function runGlobalUpdate(params: {
   timeoutMs: number;
   startedAt: number;
   beforeVersion: string | null;
-  allowGatewayServiceRepair: boolean;
-  allowGatewayActivation: boolean;
 }): Promise<UpdateRunResult> {
   const { opts, pkgRoot, globalManager, runCommand, timeoutMs, startedAt, beforeVersion } = params;
   const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;
@@ -109,13 +107,13 @@ export async function runGlobalUpdate(params: {
         stepIndex: 0,
         totalSteps: 1,
       }),
-    postVerifyStep: async (verifiedPackageRoot) => {
-      const doctorEntry = await resolveGatewayInstallEntrypoint(verifiedPackageRoot);
+    postVerifyStep: async (activePackageRoot) => {
+      const doctorEntry = await resolveGatewayInstallEntrypoint(activePackageRoot);
       if (!doctorEntry) {
         return null;
       }
       const doctorNodePath = await resolveStableNodePath(process.execPath);
-      const candidateHostVersion = await readPackageVersion(verifiedPackageRoot);
+      const candidateHostVersion = await readPackageVersion(activePackageRoot);
       // A staged candidate must not mutate or activate the native service before
       // its package rollback boundary commits.
       const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
@@ -132,7 +130,7 @@ export async function runGlobalUpdate(params: {
           "--non-interactive",
           ...(doctorPolicy.fix ? ["--fix"] : []),
         ],
-        cwd: verifiedPackageRoot,
+        cwd: activePackageRoot,
         timeoutMs,
         env: buildUpdateDoctorEnv({
           allowGatewayServiceRepair: false,
@@ -150,10 +148,12 @@ export async function runGlobalUpdate(params: {
   return {
     status: packageUpdate.failedStep ? "error" : "ok",
     mode: globalManager,
-    root: packageUpdate.verifiedPackageRoot ?? pkgRoot,
-    reason: packageUpdate.failedStep
-      ? normalizeFallbackFailureReason(packageUpdate.failedStep.name)
-      : undefined,
+    root: packageUpdate.activePackageRoot ?? undefined,
+    reason:
+      packageUpdate.reason ??
+      (packageUpdate.failedStep
+        ? normalizeFallbackFailureReason(packageUpdate.failedStep.name)
+        : undefined),
     before: { version: beforeVersion },
     after: { version: packageUpdate.afterVersion },
     steps: packageUpdate.steps,

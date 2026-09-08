@@ -4,9 +4,10 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { StringDecoder } from "node:string_decoder";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { normalizeNullableString as normalizeObservedValue } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { InferResult } from "kysely";
 import { sha256Hex } from "../infra/crypto-digest.js";
+import { compileSqliteQueryBindings, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
@@ -17,16 +18,23 @@ import {
   registerSqliteCacheExitClose,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { readDebugProxyCaptureBlob, readDebugProxyCaptureSessionEvents } from "./store-readonly.js";
+import {
+  findDebugProxyCaptureBlobReference,
+  listDebugProxyCaptureSessions,
+  queryDebugProxyCapturePreset,
+  readDebugProxyCaptureBlob,
+  readDebugProxyCaptureSessionEvents,
+  summarizeDebugProxyCaptureSessionCoverage,
+} from "./store-readonly.js";
 import type {
   CaptureBlobRecord,
   CaptureEventRecord,
-  CaptureObservedDimension,
   CaptureQueryPreset,
   CaptureQueryRow,
   CaptureSessionCoverageSummary,
@@ -43,6 +51,17 @@ type DebugProxyCaptureStoreOptions = {
 type PathBasedDebugProxyCaptureStore = {
   blobDir: string;
   walMaintenance: SqliteWalMaintenance;
+};
+
+type CaptureDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "capture_sessions" | "capture_events" | "capture_blobs"
+>;
+type LegacyCaptureDatabase = Pick<CaptureDatabase, "capture_events"> & {
+  capture_sessions: CaptureDatabase["capture_sessions"] & {
+    db_path: string;
+    blob_dir: string;
+  };
 };
 
 const DEBUG_PROXY_CAPTURE_DIR_MODE = 0o700;
@@ -182,26 +201,6 @@ function serializeJson(value: unknown): string | null {
   return value == null ? null : JSON.stringify(value);
 }
 
-// Metadata is optional and user/tool supplied, so parse defensively for coverage
-// summaries instead of assuming every event has valid JSON.
-function parseMetaJson(metaJson: unknown): Record<string, unknown> | null {
-  if (typeof metaJson !== "string" || metaJson.trim().length === 0) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(metaJson) as unknown;
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
-}
-
-function sortObservedCounts(counts: Map<string, number>): CaptureObservedDimension[] {
-  return [...counts.entries()]
-    .map(([value, count]) => ({ value, count }))
-    .toSorted((left, right) => right.count - left.count || left.value.localeCompare(right.value));
-}
-
 type SharedDebugProxyCaptureState = {
   database: OpenClawStateDatabase;
   env?: NodeJS.ProcessEnv;
@@ -269,63 +268,70 @@ class DebugProxyCaptureStoreImpl {
   }
 
   upsertSession(session: CaptureSessionRecord): void {
-    if (this.pathBased) {
-      this.db
-        .prepare(
-          `INSERT INTO capture_sessions (
-            id, started_at, ended_at, mode, source_scope, source_process, proxy_url, db_path, blob_dir
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET
-            ended_at=excluded.ended_at,
-            proxy_url=excluded.proxy_url,
-            source_process=excluded.source_process`,
-        )
-        .run(
-          session.id,
-          session.startedAt,
-          session.endedAt ?? null,
-          session.mode,
-          session.sourceScope,
-          session.sourceProcess,
-          session.proxyUrl ?? null,
-          session.dbPath ?? this.dbPath,
-          session.blobDir ?? this.pathBased.blobDir,
+    const pathBased = this.pathBased;
+    const { compiled, bind } = compileSqliteQueryBindings<CaptureSessionRecord>((parameter) => {
+      const values = {
+        id: parameter((value) => value.id),
+        started_at: parameter((value) => value.startedAt),
+        ended_at: parameter((value) => value.endedAt ?? null),
+        mode: parameter((value) => value.mode),
+        source_scope: parameter((value) => value.sourceScope),
+        source_process: parameter((value) => value.sourceProcess),
+        proxy_url: parameter((value) => value.proxyUrl ?? null),
+      };
+      if (pathBased) {
+        return getNodeSqliteKysely<LegacyCaptureDatabase>(this.db)
+          .insertInto("capture_sessions")
+          .values({
+            ...values,
+            db_path: parameter((value) => value.dbPath ?? this.dbPath),
+            blob_dir: parameter((value) => value.blobDir ?? pathBased.blobDir),
+          })
+          .onConflict((conflict) =>
+            conflict.column("id").doUpdateSet((eb) => ({
+              ended_at: eb.ref("excluded.ended_at"),
+              proxy_url: eb.ref("excluded.proxy_url"),
+              source_process: eb.ref("excluded.source_process"),
+            })),
+          );
+      }
+      return getNodeSqliteKysely<CaptureDatabase>(this.db)
+        .insertInto("capture_sessions")
+        .values(values)
+        .onConflict((conflict) =>
+          conflict.column("id").doUpdateSet((eb) => ({
+            started_at: eb.fn<number>("min", [
+              "capture_sessions.started_at",
+              "excluded.started_at",
+            ]),
+            ended_at: eb.ref("excluded.ended_at"),
+            mode: eb
+              .case()
+              .when("capture_sessions.mode", "=", "implicit")
+              .then(eb.ref("excluded.mode"))
+              .else(eb.ref("capture_sessions.mode"))
+              .end(),
+            proxy_url: eb.ref("excluded.proxy_url"),
+            source_process: eb.ref("excluded.source_process"),
+          })),
         );
+    });
+    const upsert = () => this.db.prepare(compiled.sql).run(...bind(session));
+    if (pathBased) {
+      upsert();
       return;
     }
-    runSharedDebugProxyCaptureWrite(this, () =>
-      this.db
-        .prepare(
-          `INSERT INTO capture_sessions (
-            id, started_at, ended_at, mode, source_scope, source_process, proxy_url
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET
-            started_at=MIN(capture_sessions.started_at, excluded.started_at),
-            ended_at=excluded.ended_at,
-            mode=CASE
-              WHEN capture_sessions.mode = 'implicit' THEN excluded.mode
-              ELSE capture_sessions.mode
-            END,
-            proxy_url=excluded.proxy_url,
-            source_process=excluded.source_process`,
-        )
-        .run(
-          session.id,
-          session.startedAt,
-          session.endedAt ?? null,
-          session.mode,
-          session.sourceScope,
-          session.sourceProcess,
-          session.proxyUrl ?? null,
-        ),
-    );
+    runSharedDebugProxyCaptureWrite(this, upsert);
   }
 
   endSession(sessionId: string, endedAt = Date.now()): void {
-    const update = () =>
-      this.db
-        .prepare(`UPDATE capture_sessions SET ended_at = ? WHERE id = ?`)
-        .run(endedAt, sessionId);
+    const { compiled, bind } = compileSqliteQueryBindings<void>(() =>
+      getNodeSqliteKysely<CaptureDatabase>(this.db)
+        .updateTable("capture_sessions")
+        .set({ ended_at: endedAt })
+        .where("id", "=", sessionId),
+    );
+    const update = () => this.db.prepare(compiled.sql).run(...bind());
     if (this.pathBased) {
       update();
       return;
@@ -357,23 +363,22 @@ class DebugProxyCaptureStoreImpl {
         ...(contentType ? { contentType } : {}),
       };
     }
-    runSharedDebugProxyCaptureWrite(this, () =>
-      this.db
-        .prepare(
-          `INSERT OR IGNORE INTO capture_blobs (
-            blob_id, content_type, encoding, size_bytes, sha256, data, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          blobId,
-          contentType ?? null,
-          "gzip",
-          data.byteLength,
+    const { compiled, bind } = compileSqliteQueryBindings<Buffer>((parameter) =>
+      getNodeSqliteKysely<CaptureDatabase>(this.db)
+        .insertInto("capture_blobs")
+        .orIgnore()
+        .values({
+          blob_id: blobId,
+          content_type: contentType ?? null,
+          encoding: "gzip",
+          size_bytes: parameter((value) => value.byteLength),
           sha256,
-          gzipSync(data),
-          Date.now(),
-        ),
+          data: parameter((value) => gzipSync(value)),
+          created_at: parameter(() => Date.now()),
+        }),
     );
+    // Prepare errors must precede payload compression and its creation timestamp.
+    runSharedDebugProxyCaptureWrite(this, () => this.db.prepare(compiled.sql).run(...bind(data)));
     return {
       blobId,
       encoding: "gzip",
@@ -392,75 +397,74 @@ class DebugProxyCaptureStoreImpl {
       // Capture can be invoked directly by provider seams before the top-level
       // runtime initializes. Keep the shared-schema foreign key valid without
       // making diagnostics break the request they are observing.
-      this.db
-        .prepare(
-          `INSERT OR IGNORE INTO capture_sessions (
-            id, started_at, mode, source_scope, source_process
-          ) VALUES (?, ?, 'implicit', ?, ?)`,
-        )
-        .run(event.sessionId, event.ts, event.sourceScope, event.sourceProcess);
+      const implicitSession = compileSqliteQueryBindings<CaptureEventRecord>((parameter) =>
+        getNodeSqliteKysely<CaptureDatabase>(this.db)
+          .insertInto("capture_sessions")
+          .orIgnore()
+          .values({
+            id: parameter((value) => value.sessionId),
+            started_at: parameter((value) => value.ts),
+            mode: "implicit",
+            source_scope: parameter((value) => value.sourceScope),
+            source_process: parameter((value) => value.sourceProcess),
+          }),
+      );
+      this.db.prepare(implicitSession.compiled.sql).run(...implicitSession.bind(event));
       // A concurrent purge can remove a payload before its event is recorded.
       // Keep the inline preview instead of failing the observed request.
-      const dataBlobId =
-        event.dataBlobId &&
-        this.db.prepare(`SELECT 1 FROM capture_blobs WHERE blob_id = ?`).get(event.dataBlobId)
+      let dataBlobId: string | null = null;
+      if (event.dataBlobId) {
+        const blob = compileSqliteQueryBindings<string>((parameter) =>
+          getNodeSqliteKysely<CaptureDatabase>(this.db)
+            .selectFrom("capture_blobs")
+            .select((eb) => eb.lit(1).as("present"))
+            .where(
+              "blob_id",
+              "=",
+              parameter((value) => value),
+            ),
+        );
+        dataBlobId = this.db.prepare(blob.compiled.sql).get(...blob.bind(event.dataBlobId))
           ? event.dataBlobId
           : null;
+      }
       this.insertEvent(event, dataBlobId);
     });
   }
 
   private insertEvent(event: CaptureEventRecord, dataBlobId: string | null): void {
-    this.db
-      .prepare(
-        `INSERT INTO capture_events (
-          session_id, ts, source_scope, source_process, protocol, direction, kind, flow_id,
-          method, host, path, status, close_code, content_type, headers_json,
-          data_text, data_blob_id, data_sha256, error_text, meta_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        event.sessionId,
-        event.ts,
-        event.sourceScope,
-        event.sourceProcess,
-        event.protocol,
-        event.direction,
-        event.kind,
-        event.flowId,
-        event.method ?? null,
-        event.host ?? null,
-        event.path ?? null,
-        event.status ?? null,
-        event.closeCode ?? null,
-        event.contentType ?? null,
-        event.headersJson ?? null,
-        event.dataText ?? null,
-        dataBlobId,
-        event.dataSha256 ?? null,
-        event.errorText ?? null,
-        event.metaJson ?? null,
-      );
+    const { compiled, bind } = compileSqliteQueryBindings<CaptureEventRecord>((parameter) =>
+      getNodeSqliteKysely<CaptureDatabase>(this.db)
+        .insertInto("capture_events")
+        .values({
+          session_id: parameter((value) => value.sessionId),
+          ts: parameter((value) => value.ts),
+          source_scope: parameter((value) => value.sourceScope),
+          source_process: parameter((value) => value.sourceProcess),
+          protocol: parameter((value) => value.protocol),
+          direction: parameter((value) => value.direction),
+          kind: parameter((value) => value.kind),
+          flow_id: parameter((value) => value.flowId),
+          method: parameter((value) => value.method ?? null),
+          host: parameter((value) => value.host ?? null),
+          path: parameter((value) => value.path ?? null),
+          status: parameter((value) => value.status ?? null),
+          close_code: parameter((value) => value.closeCode ?? null),
+          content_type: parameter((value) => value.contentType ?? null),
+          headers_json: parameter((value) => value.headersJson ?? null),
+          data_text: parameter((value) => value.dataText ?? null),
+          data_blob_id: dataBlobId,
+          data_sha256: parameter((value) => value.dataSha256 ?? null),
+          error_text: parameter((value) => value.errorText ?? null),
+          meta_json: parameter((value) => value.metaJson ?? null),
+        }),
+    );
+    this.db.prepare(compiled.sql).run(...bind(event));
   }
 
   listSessions(limit = 50): CaptureSessionSummary[] {
-    return this.db
-      .prepare(
-        `SELECT
-           s.id,
-           s.started_at AS startedAt,
-           s.ended_at AS endedAt,
-           s.mode,
-           s.source_process AS sourceProcess,
-           s.proxy_url AS proxyUrl,
-           COUNT(e.id) AS eventCount
-         FROM capture_sessions s
-         LEFT JOIN capture_events e ON e.session_id = s.id
-         GROUP BY s.id
-         ORDER BY s.started_at DESC
-         LIMIT ?`,
-      )
-      .all(limit) as CaptureSessionSummary[];
+    // The shipped SDK type omits null, but callers receive native nullable fields.
+    return listDebugProxyCaptureSessions(this.db, limit) as CaptureSessionSummary[];
   }
 
   getSessionEvents(sessionId: string, limit = 500): Array<Record<string, unknown>> {
@@ -468,67 +472,16 @@ class DebugProxyCaptureStoreImpl {
   }
 
   summarizeSessionCoverage(sessionId: string): CaptureSessionCoverageSummary {
-    const rows = this.db
-      .prepare(
-        `SELECT host, meta_json AS metaJson
-         FROM capture_events
-         WHERE session_id = ?`,
-      )
-      .all(sessionId) as Array<{ host?: string | null; metaJson?: string | null }>;
-    const providers = new Map<string, number>();
-    const apis = new Map<string, number>();
-    const models = new Map<string, number>();
-    const hosts = new Map<string, number>();
-    const localPeers = new Map<string, number>();
-    let unlabeledEventCount = 0;
-    for (const row of rows) {
-      const meta = parseMetaJson(row.metaJson);
-      const provider = normalizeObservedValue(meta?.provider);
-      const api = normalizeObservedValue(meta?.api);
-      const model = normalizeObservedValue(meta?.model);
-      const host = normalizeObservedValue(row.host);
-      if (!provider && !api && !model) {
-        unlabeledEventCount += 1;
-      }
-      if (provider) {
-        providers.set(provider, (providers.get(provider) ?? 0) + 1);
-      }
-      if (api) {
-        apis.set(api, (apis.get(api) ?? 0) + 1);
-      }
-      if (model) {
-        models.set(model, (models.get(model) ?? 0) + 1);
-      }
-      if (host) {
-        hosts.set(host, (hosts.get(host) ?? 0) + 1);
-        // Local model/provider endpoints are useful to surface separately when
-        // debugging why cloud-provider labels are absent.
-        if (host.startsWith("127.0.0.1:") || host.startsWith("localhost:")) {
-          localPeers.set(host, (localPeers.get(host) ?? 0) + 1);
-        }
-      }
-    }
-    return {
-      sessionId,
-      totalEvents: rows.length,
-      unlabeledEventCount,
-      providers: sortObservedCounts(providers),
-      apis: sortObservedCounts(apis),
-      models: sortObservedCounts(models),
-      hosts: sortObservedCounts(hosts),
-      localPeers: sortObservedCounts(localPeers),
-    };
+    return summarizeDebugProxyCaptureSessionCoverage(this.db, sessionId);
   }
 
   readBlob(blobId: string): string | null {
     if (this.pathBased) {
-      const legacyRow = this.db
-        .prepare(`SELECT data_blob_id AS blobId FROM capture_events WHERE data_blob_id = ? LIMIT 1`)
-        .get(blobId) as { blobId?: string } | undefined;
-      if (!legacyRow?.blobId) {
+      const legacyBlobId = findDebugProxyCaptureBlobReference(this.db, blobId);
+      if (!legacyBlobId) {
         return null;
       }
-      const blobPath = path.join(this.pathBased.blobDir, `${legacyRow.blobId}.bin.gz`);
+      const blobPath = path.join(this.pathBased.blobDir, `${legacyBlobId}.bin.gz`);
       return fs.existsSync(blobPath)
         ? gunzipSync(fs.readFileSync(blobPath)).toString("utf8")
         : null;
@@ -537,98 +490,20 @@ class DebugProxyCaptureStoreImpl {
   }
 
   queryPreset(preset: CaptureQueryPreset, sessionId?: string): CaptureQueryRow[] {
-    const sessionWhere = sessionId ? "AND session_id = ?" : "";
-    const args = sessionId ? [sessionId] : [];
-    switch (preset) {
-      // Presets are intentionally SQL-only summaries so the CLI can query large
-      // capture sessions without loading every event into memory.
-      case "double-sends":
-        return this.db
-          .prepare(
-            `SELECT host, path, method, COUNT(*) AS duplicateCount
-             FROM capture_events
-             WHERE kind = 'request' ${sessionWhere}
-             GROUP BY host, path, method, data_sha256
-             HAVING COUNT(*) > 1
-             ORDER BY duplicateCount DESC, host ASC`,
-          )
-          .all(...args) as CaptureQueryRow[];
-      case "retry-storms":
-        return this.db
-          .prepare(
-            `SELECT host, path, COUNT(*) AS errorCount
-             FROM capture_events
-             WHERE kind = 'response' AND status >= 429 ${sessionWhere}
-             GROUP BY host, path
-             HAVING COUNT(*) > 1
-             ORDER BY errorCount DESC, host ASC`,
-          )
-          .all(...args) as CaptureQueryRow[];
-      case "cache-busting":
-        return this.db
-          .prepare(
-            `SELECT host, path, COUNT(*) AS variantCount
-             FROM capture_events
-             WHERE kind = 'request'
-               AND (path LIKE '%?%' OR headers_json LIKE '%cache-control%' OR headers_json LIKE '%pragma%')
-               ${sessionWhere}
-             GROUP BY host, path
-             ORDER BY variantCount DESC, host ASC`,
-          )
-          .all(...args) as CaptureQueryRow[];
-      case "ws-duplicate-frames":
-        return this.db
-          .prepare(
-            `SELECT host, path, COUNT(*) AS duplicateFrames
-             FROM capture_events
-             WHERE kind = 'ws-frame' AND direction = 'outbound' ${sessionWhere}
-             GROUP BY host, path, data_sha256
-             HAVING COUNT(*) > 1
-             ORDER BY duplicateFrames DESC, host ASC`,
-          )
-          .all(...args) as CaptureQueryRow[];
-      case "missing-ack":
-        return this.db
-          .prepare(
-            `SELECT flow_id AS flowId, host, path, COUNT(*) AS outboundFrames
-             FROM capture_events
-             WHERE kind = 'ws-frame' AND direction = 'outbound' ${sessionWhere}
-               AND flow_id NOT IN (
-                 SELECT flow_id FROM capture_events
-                 WHERE kind = 'ws-frame' AND direction = 'inbound' ${sessionId ? "AND session_id = ?" : ""}
-               )
-             GROUP BY flow_id, host, path
-             ORDER BY outboundFrames DESC`,
-          )
-          .all(...(sessionId ? [sessionId, sessionId] : [])) as CaptureQueryRow[];
-      case "error-bursts":
-        return this.db
-          .prepare(
-            `SELECT host, path, COUNT(*) AS errorCount
-             FROM capture_events
-             WHERE kind = 'error' ${sessionWhere}
-             GROUP BY host, path
-             ORDER BY errorCount DESC, host ASC`,
-          )
-          .all(...args) as CaptureQueryRow[];
-      default:
-        return [];
-    }
+    return queryDebugProxyCapturePreset(this.db, preset, sessionId);
   }
 
   purgeAll(): { sessions: number; events: number; blobs: number } {
+    const kysely = getNodeSqliteKysely<CaptureDatabase>(this.db);
+    const metadataDeletes = [
+      kysely.deleteFrom("capture_events").compile().sql,
+      kysely.deleteFrom("capture_sessions").compile().sql,
+    ];
     if (this.pathBased) {
-      const sessionCount =
-        (
-          this.db.prepare(`SELECT COUNT(*) AS count FROM capture_sessions`).get() as {
-            count: number;
-          }
-        ).count ?? 0;
-      const eventCount =
-        (this.db.prepare(`SELECT COUNT(*) AS count FROM capture_events`).get() as { count: number })
-          .count ?? 0;
+      const sessionCount = this.countCaptureRows("capture_sessions");
+      const eventCount = this.countCaptureRows("capture_events");
       runSqliteImmediateTransactionSync(this.db, () => {
-        this.db.exec(`DELETE FROM capture_events; DELETE FROM capture_sessions;`);
+        this.db.exec(metadataDeletes.join(";") + ";");
       });
       let blobs = 0;
       if (fs.existsSync(this.pathBased.blobDir)) {
@@ -640,20 +515,11 @@ class DebugProxyCaptureStoreImpl {
       return { sessions: sessionCount, events: eventCount, blobs };
     }
     return runSharedDebugProxyCaptureWrite(this, () => {
-      const sessionCount =
-        (
-          this.db.prepare(`SELECT COUNT(*) AS count FROM capture_sessions`).get() as {
-            count: number;
-          }
-        ).count ?? 0;
-      const eventCount =
-        (this.db.prepare(`SELECT COUNT(*) AS count FROM capture_events`).get() as { count: number })
-          .count ?? 0;
-      const blobCount =
-        (this.db.prepare(`SELECT COUNT(*) AS count FROM capture_blobs`).get() as { count: number })
-          .count ?? 0;
+      const sessionCount = this.countCaptureRows("capture_sessions");
+      const eventCount = this.countCaptureRows("capture_events");
+      const blobCount = this.countCaptureRows("capture_blobs");
       this.db.exec(
-        `DELETE FROM capture_events; DELETE FROM capture_sessions; DELETE FROM capture_blobs;`,
+        [...metadataDeletes, kysely.deleteFrom("capture_blobs").compile().sql].join(";") + ";",
       );
       return { sessions: sessionCount, events: eventCount, blobs: blobCount };
     });
@@ -668,69 +534,29 @@ class DebugProxyCaptureStoreImpl {
       return this.deletePathBasedSessions(uniqueSessionIds);
     }
     return runSharedDebugProxyCaptureWrite(this, () => {
-      const placeholders = uniqueSessionIds.map(() => "?").join(", ");
-      const blobRows = this.db
-        .prepare(
-          `SELECT DISTINCT data_blob_id AS blobId
-           FROM capture_events
-           WHERE session_id IN (${placeholders})
-             AND data_blob_id IS NOT NULL`,
-        )
-        .all(...uniqueSessionIds) as Array<{ blobId?: string | null }>;
-      const eventCount =
-        (
-          this.db
-            .prepare(
-              `SELECT COUNT(*) AS count
-               FROM capture_events
-               WHERE session_id IN (${placeholders})`,
-            )
-            .get(...uniqueSessionIds) as { count: number }
-        ).count ?? 0;
-      const sessionCount =
-        (
-          this.db
-            .prepare(
-              `SELECT COUNT(*) AS count
-               FROM capture_sessions
-               WHERE id IN (${placeholders})`,
-            )
-            .get(...uniqueSessionIds) as { count: number }
-        ).count ?? 0;
-      this.db
-        .prepare(`DELETE FROM capture_events WHERE session_id IN (${placeholders})`)
-        .run(...uniqueSessionIds);
-      this.db
-        .prepare(`DELETE FROM capture_sessions WHERE id IN (${placeholders})`)
-        .run(...uniqueSessionIds);
+      const { blobRows, eventCount, sessionCount } = this.readSessionDeletionRows(uniqueSessionIds);
+      this.deleteSessionMetadata(uniqueSessionIds);
       const candidateBlobIds = blobRows
         .map((row) => row.blobId?.trim())
         .filter((blobId): blobId is string => Boolean(blobId));
-      const remainingBlobRefs =
-        // Shared blobs are deleted only when no surviving event references them.
-        candidateBlobIds.length > 0
-          ? new Set(
-              (
-                this.db
-                  .prepare(
-                    `SELECT DISTINCT data_blob_id AS blobId
-                     FROM capture_events
-                     WHERE data_blob_id IN (${candidateBlobIds.map(() => "?").join(", ")})
-                       AND data_blob_id IS NOT NULL`,
-                  )
-                  .all(...candidateBlobIds) as Array<{ blobId?: string | null }>
-              )
-                .map((row) => row.blobId?.trim())
-                .filter((blobId): blobId is string => Boolean(blobId)),
-            )
-          : new Set<string>();
+      const remainingBlobRefs = this.findRemainingBlobReferences(candidateBlobIds);
+      const { compiled, bind } = compileSqliteQueryBindings<string>((parameter) =>
+        getNodeSqliteKysely<CaptureDatabase>(this.db)
+          .deleteFrom("capture_blobs")
+          .where(
+            "blob_id",
+            "=",
+            parameter((blobId) => blobId),
+          ),
+      );
       let blobs = 0;
-      const deleteBlob = this.db.prepare(`DELETE FROM capture_blobs WHERE blob_id = ?`);
+      // Prepare even without victims so native authorization failures still roll back metadata.
+      const deleteBlob = this.db.prepare(compiled.sql);
       for (const blobId of candidateBlobIds) {
         if (remainingBlobRefs.has(blobId)) {
           continue;
         }
-        const result = deleteBlob.run(blobId);
+        const result = deleteBlob.run(...bind(blobId));
         if (Number(result.changes) > 0) {
           blobs += 1;
         }
@@ -748,63 +574,13 @@ class DebugProxyCaptureStoreImpl {
     if (!pathBased) {
       throw new Error("path-based debug proxy capture store is unavailable");
     }
-    const placeholders = sessionIds.map(() => "?").join(", ");
-    const blobRows = this.db
-      .prepare(
-        `SELECT DISTINCT data_blob_id AS blobId
-         FROM capture_events
-         WHERE session_id IN (${placeholders})
-           AND data_blob_id IS NOT NULL`,
-      )
-      .all(...sessionIds) as Array<{ blobId?: string | null }>;
-    const eventCount =
-      (
-        this.db
-          .prepare(
-            `SELECT COUNT(*) AS count
-             FROM capture_events
-             WHERE session_id IN (${placeholders})`,
-          )
-          .get(...sessionIds) as { count: number }
-      ).count ?? 0;
-    const sessionCount =
-      (
-        this.db
-          .prepare(
-            `SELECT COUNT(*) AS count
-             FROM capture_sessions
-             WHERE id IN (${placeholders})`,
-          )
-          .get(...sessionIds) as { count: number }
-      ).count ?? 0;
-    runSqliteImmediateTransactionSync(this.db, () => {
-      this.db
-        .prepare(`DELETE FROM capture_events WHERE session_id IN (${placeholders})`)
-        .run(...sessionIds);
-      this.db
-        .prepare(`DELETE FROM capture_sessions WHERE id IN (${placeholders})`)
-        .run(...sessionIds);
-    });
+    const { blobRows, eventCount, sessionCount } = this.readSessionDeletionRows(sessionIds);
+    runSqliteImmediateTransactionSync(this.db, () => this.deleteSessionMetadata(sessionIds));
+    // Legacy files are removed only after metadata commits; file failures do not roll it back.
     const candidateBlobIds = blobRows
       .map((row) => row.blobId?.trim())
       .filter((blobId): blobId is string => Boolean(blobId));
-    const remainingBlobRefs =
-      candidateBlobIds.length > 0
-        ? new Set(
-            (
-              this.db
-                .prepare(
-                  `SELECT DISTINCT data_blob_id AS blobId
-                   FROM capture_events
-                   WHERE data_blob_id IN (${candidateBlobIds.map(() => "?").join(", ")})
-                     AND data_blob_id IS NOT NULL`,
-                )
-                .all(...candidateBlobIds) as Array<{ blobId?: string | null }>
-            )
-              .map((row) => row.blobId?.trim())
-              .filter((blobId): blobId is string => Boolean(blobId)),
-          )
-        : new Set<string>();
+    const remainingBlobRefs = this.findRemainingBlobReferences(candidateBlobIds);
     let blobs = 0;
     for (const blobId of candidateBlobIds) {
       if (remainingBlobRefs.has(blobId)) {
@@ -817,6 +593,75 @@ class DebugProxyCaptureStoreImpl {
       }
     }
     return { sessions: sessionCount, events: eventCount, blobs };
+  }
+
+  // Native statements leave corruption recovery with the shared write owner or legacy caller.
+  private countCaptureRows(table: keyof CaptureDatabase): number {
+    const query = getNodeSqliteKysely<CaptureDatabase>(this.db)
+      .selectFrom(table)
+      .select((eb) => eb.fn.countAll<number>().as("count"));
+    const row = this.db.prepare(query.compile().sql).get() as InferResult<typeof query>[number]; // SAFETY: COUNT(*) always returns the generated numeric count projection.
+    return row.count ?? 0;
+  }
+
+  private readSessionDeletionRows(sessionIds: string[]) {
+    const kysely = getNodeSqliteKysely<CaptureDatabase>(this.db);
+    const events = kysely.selectFrom("capture_events").where("session_id", "in", sessionIds);
+    // DISTINCT precedes trimming: colliding trimmed IDs retain separate cleanup attempts.
+    const blobs = compileSqliteQueryBindings(() =>
+      events.select("data_blob_id as blobId").distinct().where("data_blob_id", "is not", null),
+    );
+    const blobRows = this.db
+      .prepare(blobs.compiled.sql)
+      .all(...blobs.bind(undefined)) as InferResult<typeof blobs.compiled>; // SAFETY: Native rows follow the generated nullable blob-id projection.
+    const eventQuery = compileSqliteQueryBindings(() =>
+      events.select((eb) => eb.fn.countAll<number>().as("count")),
+    );
+    const eventRow = this.db
+      .prepare(eventQuery.compiled.sql)
+      .get(...eventQuery.bind(undefined)) as InferResult<typeof eventQuery.compiled>[number]; // SAFETY: COUNT(*) always returns the generated numeric count projection.
+    const sessionQuery = compileSqliteQueryBindings(() =>
+      kysely
+        .selectFrom("capture_sessions")
+        .select((eb) => eb.fn.countAll<number>().as("count"))
+        .where("id", "in", sessionIds),
+    );
+    const sessionRow = this.db
+      .prepare(sessionQuery.compiled.sql)
+      .get(...sessionQuery.bind(undefined)) as InferResult<typeof sessionQuery.compiled>[number]; // SAFETY: COUNT(*) always returns the generated numeric count projection.
+    return { blobRows, eventCount: eventRow.count ?? 0, sessionCount: sessionRow.count ?? 0 };
+  }
+
+  private deleteSessionMetadata(sessionIds: string[]): void {
+    const kysely = getNodeSqliteKysely<CaptureDatabase>(this.db);
+    const events = compileSqliteQueryBindings(() =>
+      kysely.deleteFrom("capture_events").where("session_id", "in", sessionIds),
+    );
+    this.db.prepare(events.compiled.sql).run(...events.bind(undefined));
+    const sessions = compileSqliteQueryBindings(() =>
+      kysely.deleteFrom("capture_sessions").where("id", "in", sessionIds),
+    );
+    this.db.prepare(sessions.compiled.sql).run(...sessions.bind(undefined));
+  }
+
+  private findRemainingBlobReferences(candidateBlobIds: string[]): Set<string> {
+    if (candidateBlobIds.length === 0) {
+      return new Set();
+    }
+    const { compiled, bind } = compileSqliteQueryBindings(() =>
+      getNodeSqliteKysely<CaptureDatabase>(this.db)
+        .selectFrom("capture_events")
+        .select("data_blob_id as blobId")
+        .distinct()
+        .where("data_blob_id", "in", candidateBlobIds)
+        .where("data_blob_id", "is not", null),
+    );
+    const rows = this.db.prepare(compiled.sql).all(...bind(undefined)) as InferResult<
+      typeof compiled
+    >; // SAFETY: Native rows follow the generated nullable blob-id projection.
+    return new Set(
+      rows.map((row) => row.blobId?.trim()).filter((blobId): blobId is string => Boolean(blobId)),
+    );
   }
 }
 

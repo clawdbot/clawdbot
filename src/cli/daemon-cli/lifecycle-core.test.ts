@@ -665,7 +665,9 @@ describe("runServiceRestart token drift", () => {
       postRestartCheck,
     });
 
-    expect(postRestartCheck).toHaveBeenCalledTimes(1);
+    expect(postRestartCheck).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ activationAccepted: true }),
+    );
     expect(service.restart).not.toHaveBeenCalled();
     const payload = readJsonLog<{ result?: string; message?: string }>();
     expect(payload.result).toBe("restarted");

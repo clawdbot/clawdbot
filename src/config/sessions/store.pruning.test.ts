@@ -989,7 +989,7 @@ describe("resolveMaintenanceConfigFromInput", () => {
       expect(maintenance.maxDiskBytes).toBeNull();
       expect(maintenance.highWaterBytes).toBeNull();
       expect(result).toBeNull();
-      await expect(fs.access(transcriptPath)).resolves.toBeUndefined();
+      await fs.access(transcriptPath);
     });
   });
 

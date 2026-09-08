@@ -75,14 +75,8 @@ export async function captureManifest(params: {
         REMOTE_WORKSPACE_MANIFEST_JS,
         params.workspaceDir,
         params.baseCommit ?? "",
-        ...(process.platform === "win32"
-          ? [
-              params.baseCommit ? "eligible" : "all",
-              params.referenceManifestRef.slice("sha256:".length),
-            ]
-          : params.baseCommit
-            ? ["eligible"]
-            : []),
+        params.baseCommit ? "eligible" : "all",
+        params.referenceManifestRef.slice("sha256:".length),
         ...(memoMode ? ["memo-v1"] : []),
       ],
       ...(params.hashMemo === undefined

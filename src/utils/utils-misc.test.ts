@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { asBoolean, parseBooleanValue } from "./boolean.js";
-import { splitShellArgs } from "./shell-argv.js";
+import { splitCommandArgs, splitShellArgs } from "./shell-argv.js";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "./zod-parse.js";
 
 describe("asBoolean", () => {
@@ -74,6 +74,34 @@ describe("splitShellArgs", () => {
     expect(splitShellArgs(`echo "hi # still-literal"`)).toEqual(["echo", "hi # still-literal"]);
     expect(splitShellArgs(`echo hi#tail`)).toEqual(["echo", "hi#tail"]);
   });
+});
+
+describe("splitCommandArgs", () => {
+  it.each([
+    {
+      input: String.raw`program some\path 'a"b' #literal`,
+      expected: ["program", String.raw`some\path`, 'a"b', "#literal"],
+    },
+    {
+      input: String.raw`program "C:\some path\file.py" \\server\share\ #literal`,
+      expected: ["program", String.raw`C:\some path\file.py`, "\\\\server\\share\\", "#literal"],
+    },
+    { input: 'program "unfinished', expected: null },
+    { input: "program 'unfinished", expected: null },
+    { input: "program unfinished\\", expected: ["program", "unfinished\\"] },
+  ])("parses quote-only process arguments: $input", ({ input, expected }) => {
+    expect(splitCommandArgs(input)).toEqual(expected);
+  });
+
+  it.each(['program "unfinished', "program 'unfinished"])(
+    "allows unfinished quotes when requested: %s",
+    (raw) => {
+      expect(splitCommandArgs(raw, { allowUnclosedQuotes: true })).toEqual([
+        "program",
+        "unfinished",
+      ]);
+    },
+  );
 });
 
 describe("zod parse helpers", () => {

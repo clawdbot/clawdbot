@@ -13,6 +13,7 @@ import type {
   OpenClawPluginNodeInvokeTransportResult,
 } from "../plugins/types.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
+import { ApprovalObserverClosedError } from "./exec-approval-lifecycle.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import {
   consumeNodeInvokePlacementGrant,
@@ -565,9 +566,10 @@ export async function applyPluginNodeInvokePolicy(params: {
         : {}),
     });
   } catch (error) {
-    // Plugin policy handlers may settle after their exact caller authority
-    // closes. Never attribute that late result to the retired run.
-    if (!nodeCommandDispatched && isCallerRuntimeAuthorityActive()) {
+    // Observer closure is not a denial. Do not attribute a late policy failure
+    // after the exact caller authority has closed.
+    const policyFailed = !(error instanceof ApprovalObserverClosedError);
+    if (policyFailed && !nodeCommandDispatched && isCallerRuntimeAuthorityActive()) {
       recordNodeDecision({
         pluginId: entry.pluginId,
         outcome: "denied",
@@ -598,13 +600,12 @@ export async function applyPluginNodeInvokePolicy(params: {
         : [],
     });
   }
-  if (result.ok) {
-    return result;
-  }
-  return {
-    ...result,
-    // Core owns dispatch and must override a plugin-supplied claim. Callers may
-    // clear speculative state only when this value is definitively false.
-    details: { ...result.details, nodeCommandDispatched },
-  };
+  return result.ok
+    ? result
+    : {
+        ...result,
+        // Core owns dispatch and must override a plugin-supplied claim. Callers may
+        // clear speculative state only when this value is definitively false.
+        details: { ...result.details, nodeCommandDispatched },
+      };
 }

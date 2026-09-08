@@ -14,6 +14,7 @@ import { createOllamaWebSearchProvider } from "./src/web-search-provider.js";
 const LIVE = process.env.OPENCLAW_LIVE_TEST === "1" && process.env.OPENCLAW_LIVE_OLLAMA === "1";
 const OLLAMA_BASE_URL =
   process.env.OPENCLAW_LIVE_OLLAMA_BASE_URL?.trim() || "http://127.0.0.1:11434";
+const EXPECTED_OLLAMA_VERSION = process.env.OPENCLAW_LIVE_OLLAMA_VERSION?.trim();
 const CHAT_MODEL = process.env.OPENCLAW_LIVE_OLLAMA_MODEL?.trim() || "llama3.2:latest";
 const EMBEDDING_MODEL =
   process.env.OPENCLAW_LIVE_OLLAMA_EMBED_MODEL?.trim() || "embeddinggemma:latest";
@@ -50,6 +51,38 @@ function requireOllamaRuntimeApiKey(): string | undefined {
 
 function resolveOllamaDirectApiKey(): string {
   return requireOllamaRuntimeApiKey() ?? "ollama-local";
+}
+
+async function fetchOllamaApi(
+  pathname: string,
+  init?: RequestInit,
+): Promise<Record<string, unknown>> {
+  const apiKey = requireOllamaRuntimeApiKey();
+  const headers = new Headers(init?.headers);
+  if (apiKey) {
+    headers.set("Authorization", `Bearer ${apiKey}`);
+  }
+  const response = await fetch(new URL(pathname, OLLAMA_BASE_URL), {
+    ...init,
+    headers,
+  });
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(`Ollama ${pathname} returned HTTP ${response.status}: ${body}`);
+  }
+  return JSON.parse(body) as Record<string, unknown>;
+}
+
+function ollamaModelNameMatches(candidate: unknown, expected: string): boolean {
+  if (typeof candidate !== "string") {
+    return false;
+  }
+  const normalize = (value: string) =>
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/:latest$/u, "");
+  return normalize(candidate) === normalize(expected);
 }
 
 async function collectStreamEvents<T>(stream: AsyncIterable<T>): Promise<T[]> {
@@ -160,6 +193,54 @@ function buildCliEnv(root: string): NodeJS.ProcessEnv {
 }
 
 describe.skipIf(!LIVE)("ollama live", () => {
+  it.skipIf(isOllamaCloudBaseUrl(OLLAMA_BASE_URL))(
+    "records the exact local daemon and model identity",
+    async () => {
+      const [versionPayload, tagsPayload, showPayload] = await Promise.all([
+        fetchOllamaApi("/api/version"),
+        fetchOllamaApi("/api/tags"),
+        fetchOllamaApi("/api/show", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: CHAT_MODEL }),
+        }),
+      ]);
+      const version = versionPayload.version;
+      expect(typeof version).toBe("string");
+      if (EXPECTED_OLLAMA_VERSION) {
+        expect(version).toBe(EXPECTED_OLLAMA_VERSION);
+      }
+      const models = Array.isArray(tagsPayload.models) ? tagsPayload.models : [];
+      const selected = models.find((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return false;
+        }
+        const model = entry as Record<string, unknown>;
+        return (
+          ollamaModelNameMatches(model.name, CHAT_MODEL) ||
+          ollamaModelNameMatches(model.model, CHAT_MODEL)
+        );
+      }) as Record<string, unknown> | undefined;
+      expect(selected).toBeDefined();
+      expect(typeof selected?.digest).toBe("string");
+      const capabilities = Array.isArray(showPayload.capabilities)
+        ? showPayload.capabilities.filter((value): value is string => typeof value === "string")
+        : [];
+      console.info(
+        `[ollama:live] qualification ${JSON.stringify({
+          version,
+          platform: process.platform,
+          arch: process.arch,
+          osRelease: os.release(),
+          model: selected?.name ?? selected?.model ?? CHAT_MODEL,
+          digest: selected?.digest,
+          capabilities,
+        })}`,
+      );
+    },
+    15_000,
+  );
+
   it("runs infer model run through the local CLI path without static model discovery", async () => {
     await withTempOpenClawState(async ({ root }) => {
       const result = await runOpenClawCli(
@@ -213,51 +294,73 @@ describe.skipIf(!LIVE)("ollama live", () => {
         }
       | undefined;
 
-    const stream = streamFn(
-      {
-        id: `${PROVIDER_ID}/${CHAT_MODEL}`,
-        api: "ollama",
-        provider: PROVIDER_ID,
-        contextWindow: 8192,
-        params: { num_ctx: 4096, top_p: 0.9, thinking: false, keep_alive: "5m" },
-        requestTimeoutMs: 120_000,
-      } as never,
-      {
-        messages: [{ role: "user", content: "Reply exactly OK." }],
-        tools: [
-          {
-            name: "lookup_weather",
-            description: "Lookup weather for a city.",
-            parameters: {
-              properties: {
-                city: { enum: ["London", "Vienna"] },
-                units: { enum: ["metric", "imperial"] },
-                options: {
-                  properties: {
-                    includeWind: { type: "boolean" },
+    const runNativeChat = () =>
+      streamFn(
+        {
+          id: `${PROVIDER_ID}/${CHAT_MODEL}`,
+          api: "ollama",
+          provider: PROVIDER_ID,
+          input: ["text"],
+          contextWindow: 8192,
+          params: { num_ctx: 4096, top_p: 0.9, thinking: false, keep_alive: "5m" },
+          requestTimeoutMs: 120_000,
+        } as never,
+        {
+          messages: [{ role: "user", content: "Reply exactly OK." }],
+          tools: [
+            {
+              name: "lookup_weather",
+              description: "Lookup weather for a city.",
+              parameters: {
+                properties: {
+                  city: { enum: ["London", "Vienna"] },
+                  units: { enum: ["metric", "imperial"] },
+                  options: {
+                    properties: {
+                      includeWind: { type: "boolean" },
+                    },
                   },
+                  required: ["city"],
                 },
               },
-              required: ["city"],
             },
+          ],
+        } as never,
+        {
+          maxTokens: 32,
+          temperature: 0,
+          onPayload: (body: unknown) => {
+            payload = body as NonNullable<typeof payload>;
           },
-        ],
-      } as never,
-      {
-        maxTokens: 32,
-        temperature: 0,
-        onPayload: (body: unknown) => {
-          payload = body as NonNullable<typeof payload>;
-        },
-        apiKey: requireOllamaRuntimeApiKey(),
-      } as never,
-    );
+          apiKey: requireOllamaRuntimeApiKey(),
+        } as never,
+      );
 
-    const events = await collectStreamEvents(await Promise.resolve(stream));
+    const events = await collectStreamEvents(await Promise.resolve(runNativeChat()));
+    const warmEvents = await collectStreamEvents(await Promise.resolve(runNativeChat()));
     const error = events.find((event) => (event as { type?: string }).type === "error");
+    const warmError = warmEvents.find((event) => (event as { type?: string }).type === "error");
+    const warmDone = warmEvents.find((event) => event.type === "done");
 
     expect(error).toBeUndefined();
+    expect(warmError).toBeUndefined();
     expect(events.map((event) => (event as { type?: string }).type)).toContain("done");
+    expect(warmDone?.type).toBe("done");
+    if (warmDone?.type !== "done") {
+      throw new Error("missing warm Ollama terminal message");
+    }
+    const usage = warmDone.message.usage;
+    expect(usage.totalTokens).toBe(usage.input + usage.cacheRead + usage.cacheWrite + usage.output);
+    console.info(
+      `[ollama:live] usage ${JSON.stringify({
+        input: usage.input,
+        cacheRead: usage.cacheRead,
+        cacheWrite: usage.cacheWrite,
+        output: usage.output,
+        totalTokens: usage.totalTokens,
+        cacheTelemetry: usage.cacheTelemetry,
+      })}`,
+    );
     expect(payload?.model).toBe(CHAT_MODEL);
     expect(payload?.options?.num_ctx).toBe(4096);
     expect(payload?.options?.top_p).toBe(1);

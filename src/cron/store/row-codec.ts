@@ -3,7 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
@@ -187,30 +187,56 @@ export function projectCronJobThroughStorageCodec(job: CronStoredJob): CronStore
 }
 
 /** Loads cron rows in config order with deterministic fallbacks for old rows. */
-export function loadCronRows(db: DatabaseSync, storeKey: string): CronJobRow[] {
-  return executeSqliteQuerySync(
-    db,
-    getCronStoreKysely(db)
-      .selectFrom("cron_jobs")
-      .selectAll()
-      .where("store_key", "=", storeKey)
-      .orderBy("sort_order", "asc")
-      .orderBy("updated_at", "asc")
-      .orderBy("job_id", "asc"),
-  ).rows;
+export function loadCronRows(
+  db: DatabaseSync,
+  storeKey: string,
+  jobIds?: ReadonlySet<string>,
+): CronJobRow[] {
+  let query = getCronStoreKysely(db)
+    .selectFrom("cron_jobs")
+    .selectAll()
+    .where("store_key", "=", storeKey)
+    .orderBy("sort_order", "asc")
+    .orderBy("updated_at", "asc")
+    .orderBy("job_id", "asc");
+  if (jobIds) {
+    const ids = [...jobIds];
+    query =
+      ids.length === 1
+        ? query.where("job_id", "=", ids[0]!)
+        : query.where("job_id", "in", sqliteStringSet(ids));
+  }
+  const rows = executeSqliteQuerySync(db, query).rows;
+  // SQLite replaces lone surrogates in bound IDs; keep exact caller identity
+  // so an invalid ID cannot select the replacement-character job.
+  return jobIds ? rows.filter((row) => jobIds.has(row.job_id)) : rows;
 }
 
-/** Fingerprints definition JSON and order while excluding runtime-owned state. */
+/** Fingerprints raw definition rows without mutating their config order. */
+export function fingerprintCronJobRows(
+  rows: readonly Pick<CronJobRow, "job_id" | "job_json" | "sort_order">[],
+): string {
+  // This internal, transient Doctor token uses one encoding-independent ID order.
+  // Keep raw fields so every definition edit invalidates the snapshot.
+  const ordered = rows
+    .map(({ job_id, job_json, sort_order }) => ({
+      idBytes: Buffer.from(job_id),
+      definition: { job_id, job_json, sort_order },
+    }))
+    .toSorted((left, right) => Buffer.compare(left.idBytes, right.idBytes));
+  return sha256Hex(JSON.stringify(ordered.map(({ definition }) => definition)));
+}
+
+/** Reads only definition JSON and order while excluding runtime-owned state. */
 export function readCronJobsFingerprint(db: DatabaseSync, storeKey: string): string {
   const rows = executeSqliteQuerySync(
     db,
     getCronStoreKysely(db)
       .selectFrom("cron_jobs")
       .select(["job_id", "job_json", "sort_order"])
-      .where("store_key", "=", storeKey)
-      .orderBy("job_id", "asc"),
+      .where("store_key", "=", storeKey),
   ).rows;
-  return sha256Hex(JSON.stringify(rows));
+  return fingerprintCronJobRows(rows);
 }
 
 /** Materializes retired ownership within the caller's write transaction. */

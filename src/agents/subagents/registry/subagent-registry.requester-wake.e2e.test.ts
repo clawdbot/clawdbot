@@ -52,6 +52,17 @@ let releaseAgentCallGate: (() => void) | undefined;
 let chatHistoryBySessionKey = new Map<string, Array<Record<string, unknown>>>();
 let sessionStore: Record<string, SessionStoreEntry> = {};
 let rejectNextRequesterWake = false;
+let emptyGatedAgentReply = false;
+
+const sendMessageMock = vi.fn<typeof import("../../../infra/outbound/message.js").sendMessage>(
+  async () => ({
+    channel: "discord",
+    to: "user-1",
+    via: "direct",
+    mediaUrl: null,
+    result: { messageId: "unexpected-fallback" },
+  }),
+);
 
 const callGatewayMock = vi.fn(async (request: GatewayRequest) => {
   if (request.method === "agent.wait") {
@@ -65,6 +76,9 @@ const callGatewayMock = vi.fn(async (request: GatewayRequest) => {
     const gate = sourceSessionKey ? agentCallGates.get(sourceSessionKey) : undefined;
     if (gate) {
       await gate;
+      if (emptyGatedAgentReply) {
+        return { result: { payloads: [] } };
+      }
     }
     return {
       result: {
@@ -134,6 +148,8 @@ describe("requester settle wake product flow", () => {
     agentCallGates = new Map();
     chatHistoryBySessionKey = new Map();
     rejectNextRequesterWake = false;
+    emptyGatedAgentReply = false;
+    sendMessageMock.mockClear();
     sessionStore = {
       [MAIN_REQUESTER_SESSION_KEY]: {
         sessionId: "sess-main",
@@ -173,6 +189,7 @@ describe("requester settle wake product flow", () => {
       loadSubagentRegistryRuntime: loadSubagentRegistryRuntimeForTest,
     });
     subagentAnnounceDeliveryTesting.setDepsForTest({
+      sendMessage: sendMessageMock,
       callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
       getRuntimeConfig:
         loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
@@ -449,9 +466,19 @@ describe("requester settle wake product flow", () => {
   );
 
   it.each([
-    { name: "delivers the visible requester final", rejectRequesterWake: false },
-    { name: "settles the rejected delivered-row wake", rejectRequesterWake: true },
-  ])("$name", async ({ rejectRequesterWake }) => {
+    { name: "delivers the visible requester final", rejectRequesterWake: false, emptyReply: false },
+    {
+      name: "settles the rejected delivered-row wake",
+      rejectRequesterWake: true,
+      emptyReply: false,
+    },
+    {
+      name: "retires a stale empty announce after requester delivery",
+      rejectRequesterWake: false,
+      emptyReply: true,
+    },
+  ])("$name", async ({ rejectRequesterWake, emptyReply }) => {
+    emptyGatedAgentReply = emptyReply;
     const requesterTurnRunId = "run-requester-yield";
     const alpha = {
       runId: "run-alpha",
@@ -548,6 +575,14 @@ describe("requester settle wake product flow", () => {
     await waitForDeliveredCleanup(beta.runId);
     await registry.testing.sweepOnceForTests();
     expect(getRequesterWakeCalls()).toHaveLength(rejectRequesterWake ? 0 : 1);
+    expect(sendMessageMock).not.toHaveBeenCalled();
+    expect(registry.getSubagentRunByRunId(beta.runId)?.delivery).toMatchObject({
+      status: "delivered",
+      disposition: "delivered",
+      payload: undefined,
+      lastError: undefined,
+      lastDropReason: undefined,
+    });
   });
 
   it("caps a stale requester batch despite foreign active work in a global session", async () => {

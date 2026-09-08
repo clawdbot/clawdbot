@@ -80,7 +80,8 @@ describe("Control UI assistant media e2e", () => {
         expect(ranged.headers.get("accept-ranges")).toBe("bytes");
         expect(ranged.headers.get("content-range")).toBe("bytes 9-15/26");
         expect(ranged.headers.get("content-length")).toBe("7");
-        expect(ranged.headers.get("etag")).toMatch(/^"[A-Za-z0-9_-]+"$/);
+        expect(ranged.headers.get("etag")).toBeNull();
+        expect(ranged.headers.get("last-modified")).toBeNull();
         expect(await ranged.text()).toBe("control");
 
         const head = await fetch(
@@ -90,25 +91,34 @@ describe("Control UI assistant media e2e", () => {
         expect(head.status).toBe(200);
         expect(head.headers.get("accept-ranges")).toBe("bytes");
         expect(head.headers.get("content-length")).toBe("26");
-        expect(head.headers.get("etag")).toBe(ranged.headers.get("etag"));
+        expect(head.headers.get("etag")).toBeNull();
+        expect(head.headers.get("last-modified")).toBeNull();
         expect(await head.text()).toBe("");
 
         for (const method of ["GET", "HEAD"]) {
-          const notModified = await fetch(
+          const fresh = await fetch(
             `${route}?source=${sourceParam}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
             {
               method,
               headers: {
-                "If-None-Match": `W/${ranged.headers.get("etag")}`,
+                "If-None-Match": 'W/"cached-version"',
                 Range: "bytes=9-15",
                 "If-Range": '"stale"',
               },
             },
           );
-          expect(notModified.status).toBe(304);
-          expect(notModified.headers.get("etag")).toBe(ranged.headers.get("etag"));
-          expect(notModified.headers.get("content-length")).toBeNull();
-          expect(await notModified.text()).toBe("");
+          expect(fresh.status).toBe(200);
+          expect(fresh.headers.get("etag")).toBeNull();
+          expect(fresh.headers.get("content-length")).toBe("26");
+          expect(await fresh.text()).toBe(method === "GET" ? "ticketed control ui media\n" : "");
+
+          const exists = await fetch(
+            `${route}?source=${sourceParam}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
+            { method, headers: { "If-None-Match": "*", Range: "bytes=9-15" } },
+          );
+          expect(exists.status).toBe(304);
+          expect(exists.headers.get("content-length")).toBeNull();
+          expect(await exists.text()).toBe("");
         }
 
         const emptyFilePath = path.join(mediaDir, "empty.bin");

@@ -4,7 +4,6 @@ import { vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
-  ChannelMessageActionContext,
   ChannelMessageActionName,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
@@ -263,20 +262,7 @@ export function createPollForwardingPlugin(params: {
 
 async function executePluginAction(params: {
   action: "send" | "poll";
-  ctx: Pick<
-    ChannelMessageActionContext,
-    | "channel"
-    | "cfg"
-    | "params"
-    | "mediaAccess"
-    | "accountId"
-    | "gateway"
-    | "toolContext"
-    | "inboundEventKind"
-  > & {
-    dryRun: boolean;
-    agentId?: string;
-  };
+  ctx: Parameters<typeof import("./outbound-send-service.js").executeSendAction>[0]["ctx"];
 }) {
   const handled = await dispatchChannelMessageAction({
     channel: params.ctx.channel,
@@ -291,8 +277,8 @@ async function executePluginAction(params: {
         : undefined,
     accountId: params.ctx.accountId ?? undefined,
     gateway: params.ctx.gateway,
-    toolContext: params.ctx.toolContext,
-    inboundEventKind: params.ctx.inboundEventKind,
+    toolContext: params.ctx.input.toolContext,
+    inboundEventKind: params.ctx.input.inboundEventKind,
     dryRun: params.ctx.dryRun,
     agentId: params.ctx.agentId,
   });

@@ -114,6 +114,11 @@ export async function waitForDescendantSubagentSummary(params: {
     return initialReply;
   }
 
+  // Delivery text has already lost MEDIA directives. Compare history against
+  // its own text so the unchanged parent cannot masquerade as new synthesis.
+  const initialParentReply = (
+    await readLatestAssistantReply({ sessionKey: params.sessionKey })
+  )?.trim();
   // Wait until no descendant runs remain active. Descendants can finish and
   // spawn more descendants, so the helper refreshes the run set until it drains.
   await waitForAgentRunsToDrain({
@@ -137,7 +142,7 @@ export async function waitForDescendantSubagentSummary(params: {
       // child settles and must not masquerade as descendant output.
       !stripHeartbeatToken(latest, { mode: "heartbeat", maxAckChars: 0 }).shouldSkip &&
       !isSilentReplyPayloadText(latest, HEARTBEAT_TOKEN) &&
-      (latest !== initialReply || !isLikelyInterimCronMessage(latest))
+      (latest !== initialParentReply || !isLikelyInterimCronMessage(latest))
     ) {
       // Ignore the original interim acknowledgement; only a new synthesis or a
       // non-interim reply should replace descendant fallback text.

@@ -34,7 +34,6 @@ describe("SystemAgentChatEngine memory", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
     });
 
@@ -90,7 +89,6 @@ describe("SystemAgentChatEngine memory", () => {
       surface: "gateway",
       verifiedInference,
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: {
         loadOverview: fakeOverviewLoader(),
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
@@ -150,7 +148,6 @@ describe("SystemAgentChatEngine memory", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       appendAuditEntry,
       deps: { loadOverview: fakeOverviewLoader() },
     });
@@ -180,7 +177,6 @@ describe("SystemAgentChatEngine memory", () => {
     const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
     const engine = new SystemAgentChatEngine({
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       appendAuditEntry,
       runMemoryImportWizard: async () => ({ status: "nothing-to-import", providers: [] }),
       deps: { loadOverview: fakeOverviewLoader() },
@@ -198,7 +194,6 @@ describe("SystemAgentChatEngine memory", () => {
     const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
     const engine = new SystemAgentChatEngine({
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       appendAuditEntry,
       runMemoryImportWizard: async () => ({
         status: "completed",
@@ -234,7 +229,6 @@ describe("SystemAgentChatEngine memory", () => {
     const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
     const engine = new SystemAgentChatEngine({
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       appendAuditEntry,
       runMemoryImportWizard: async () => ({
         status: "completed",
@@ -272,7 +266,6 @@ describe("SystemAgentChatEngine memory", () => {
     });
     const engine = new SystemAgentChatEngine({
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       appendAuditEntry,
       runMemoryImportWizard: async () => ({
         status: "completed",

@@ -1,6 +1,6 @@
 // update.run campaign tests cover failure release and concurrent campaign ownership.
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateScheduleState } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -8,6 +8,16 @@ import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import type { UpdateCampaignController } from "../../infra/update-campaign.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
+
+let ledgerHome: TempHomeEnv | undefined;
+beforeEach(async () => {
+  ledgerHome = await createTempHomeEnv("openclaw-update-campaign-rpc-");
+});
+afterEach(async () => {
+  await ledgerHome?.restore();
+  ledgerHome = undefined;
+});
 
 let currentCampaignId: string | undefined;
 let updateSchedule: UpdateScheduleState | null;
@@ -51,6 +61,12 @@ const startManagedServiceUpdateHandoffMock = vi.fn<
   handoffId: "handoff-1",
   installRoot: "/tmp/openclaw",
 }));
+const transferManagedServiceUpdateHandoffMock = vi.fn<
+  typeof import("../../infra/update-managed-service-handoff.js").transferManagedServiceUpdateHandoff
+>(async () => true);
+const cancelManagedServiceUpdateHandoffMock = vi.fn<
+  typeof import("../../infra/update-managed-service-handoff.js").cancelManagedServiceUpdateHandoff
+>(async () => "restored-in-process");
 const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({ scheduled: true }));
 const logGatewayInfoMock = vi.fn();
 const writeRestartSentinelMock = vi.fn(async () => undefined);
@@ -119,15 +135,23 @@ vi.mock("../../infra/update-managed-service-handoff.js", () => ({
   buildManagedServiceHandoffUnavailableMessage: () => "handoff unavailable",
   formatManagedServiceUpdateCommand: () => "openclaw update --yes",
   startManagedServiceUpdateHandoff: startManagedServiceUpdateHandoffMock,
+  transferManagedServiceUpdateHandoff: transferManagedServiceUpdateHandoffMock,
+  cancelManagedServiceUpdateHandoff: cancelManagedServiceUpdateHandoffMock,
 }));
 
-vi.mock("../../infra/update-post-core-finalize.js", () => ({
-  foldPostCoreFinalizeIntoResult: (result: UpdateRunResult) => result,
-  runPostCoreFinalizeAfterGatewayUpdate: async () => ({
-    status: "skipped" as const,
-    reason: "not-git-update",
-  }),
-}));
+vi.mock("../../infra/update-post-core-finalize.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/update-post-core-finalize.js")>(
+    "../../infra/update-post-core-finalize.js",
+  );
+  return {
+    ...actual,
+    foldPostCoreFinalizeIntoResult: (result: UpdateRunResult) => result,
+    runPostCoreFinalizeAfterGatewayUpdate: async () => ({
+      status: "skipped" as const,
+      reason: "not-git-update",
+    }),
+  };
+});
 
 vi.mock("../../infra/update-runner.js", () => ({
   resolveUpdateInstallSurface: resolveUpdateInstallSurfaceMock,
@@ -202,6 +226,8 @@ beforeEach(() => {
   detectRespawnSupervisorMock.mockReset();
   detectRespawnSupervisorMock.mockReturnValue(null);
   startManagedServiceUpdateHandoffMock.mockClear();
+  transferManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue(true);
+  cancelManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue("restored-in-process");
   scheduleGatewaySigusr1RestartMock.mockClear();
   logGatewayInfoMock.mockClear();
   writeRestartSentinelMock.mockClear();
@@ -744,6 +770,13 @@ describe("update.run campaign ownership", () => {
     await withEnvAsync({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, invokeUpdateRun);
 
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledOnce();
+    expect(transferManagedServiceUpdateHandoffMock).toHaveBeenCalledExactlyOnceWith({
+      kind: "managed-update-handoff",
+      handoffId: "handoff-1",
+      installRoot: "/tmp/openclaw",
+    });
+    expect(cancelManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
     expect(clearCampaignMock).not.toHaveBeenCalled();
   });
 });

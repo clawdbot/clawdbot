@@ -134,26 +134,6 @@ const pluginCommandFixtures = vi.hoisted(() => ({
   >,
 }));
 
-const retainNativeCatalog = vi.hoisted(() => vi.fn());
-
-vi.mock("openclaw/plugin-sdk/plugin-command-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/plugin-command-runtime")>();
-  return {
-    ...actual,
-    createPluginCommandRuntime: () => {
-      const runtime = actual.createPluginCommandRuntime();
-      return {
-        ...runtime,
-        retainNativeCatalog: (provider: string) => {
-          retainNativeCatalog(provider);
-          runtime.retainNativeCatalog(provider);
-        },
-      };
-    },
-  };
-});
-
 const skillCommandFixtures = vi.hoisted(() => ({
   commands: [] as Array<{ name: string; skillName: string; description: string }>,
 }));
@@ -213,7 +193,6 @@ beforeEach(() => {
   clearRuntimeConfigSnapshot();
   resetSlackSlashMocks();
   clearPluginCommands();
-  retainNativeCatalog.mockClear();
 });
 
 afterEach(() => {
@@ -829,7 +808,6 @@ describe("Slack native command argument menus", () => {
       ),
     ).toBe(true);
     expect(configuredHarness.commands.has("/usage")).toBe(false);
-    expect(retainNativeCatalog).not.toHaveBeenCalled();
   });
 
   it("does not register native argument handlers for a configured slash command", async () => {
@@ -886,8 +864,6 @@ describe("Slack native command argument menus", () => {
     );
     expect(runtimeLog).not.toHaveBeenCalled();
     expect(runtimeError).not.toHaveBeenCalled();
-    expect(retainNativeCatalog).toHaveBeenCalledOnce();
-    expect(retainNativeCatalog).toHaveBeenCalledWith("slack");
   });
 
   it("executes the exact selected plugin candidate with its native arguments", async () => {
@@ -949,7 +925,6 @@ describe("Slack native command argument menus", () => {
 
       expect(selectedDispatch).toEqual({ kind: "non-plugin" });
       expect(execute).not.toHaveBeenCalled();
-      expect(retainNativeCatalog).not.toHaveBeenCalled();
     },
   );
 

@@ -112,7 +112,7 @@ export function setWorkerTurnSessionTarget(target: typeof sessionTarget): typeof
 type DefaultedWorkerTurnLauncherOption =
   | "reconcileActivePlacement"
   | "redispatchReclaimed"
-  | "resolveWorkspacePath"
+  | "resolveWorkspace"
   | "workspaceOperations";
 
 export function createWorkerSessionTurnPlacementProvider(
@@ -126,7 +126,7 @@ export function createWorkerSessionTurnPlacementProvider(
     redispatchReclaimed: async () => {
       throw new Error("unexpected reclaimed placement redispatch");
     },
-    resolveWorkspacePath: async () => root,
+    resolveWorkspace: async () => ({ kind: "local" as const, path: root }),
     workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     ...options,
   });
@@ -139,6 +139,7 @@ export function openSessionManager(): SessionManager {
 export function seedActivePlacement(
   executionMode: "worker-turn" | "remote-exec" = "worker-turn",
   remoteWorkspaceDir = "/worker/workspace",
+  workspaceBaseManifestRef = MANIFEST_REF,
 ): void {
   let placement = placements.startDispatch({
     sessionId: SESSION_ID,
@@ -167,7 +168,7 @@ export function seedActivePlacement(
     expectedGeneration: placement.generation,
     patch: {
       remoteWorkspaceDir,
-      workspaceBaseManifestRef: MANIFEST_REF,
+      workspaceBaseManifestRef,
     },
   });
   placements.transition({

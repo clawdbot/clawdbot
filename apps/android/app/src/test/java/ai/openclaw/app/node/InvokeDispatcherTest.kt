@@ -499,14 +499,14 @@ private class InvokeDispatcherFakeMotionDataSource : MotionDataSource {
 
   override suspend fun activity(
     context: Context,
-    request: MotionActivityRequest,
+    request: MotionRangeRequest,
   ): MotionActivityRecord {
     error("unused in InvokeDispatcherTest")
   }
 
   override suspend fun pedometer(
     context: Context,
-    request: MotionPedometerRequest,
+    request: MotionRangeRequest,
   ): PedometerRecord {
     error("unused in InvokeDispatcherTest")
   }

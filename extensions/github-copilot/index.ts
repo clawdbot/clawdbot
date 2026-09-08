@@ -6,8 +6,6 @@ import {
   type ProviderAuthContext,
   type ProviderAuthResult,
   type ProviderAuthMethodNonInteractiveContext,
-  type UnifiedModelCatalogEntry,
-  type UnifiedModelCatalogProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,
@@ -423,27 +421,6 @@ export default definePluginEntry({
       discoveryEnabled: (config) => resolveCurrentPluginConfig(config).discovery?.enabled !== false,
     });
 
-    async function runGithubCopilotUnifiedLiveCatalog(
-      ctx: UnifiedModelCatalogProviderContext,
-    ): Promise<UnifiedModelCatalogEntry[] | null> {
-      const result = await dynamicModels.runCatalog(ctx);
-      if (!result || !("provider" in result)) {
-        return null;
-      }
-      return (result.provider.models ?? []).map((model) => {
-        const entry: UnifiedModelCatalogEntry = {
-          kind: "text",
-          provider: PROVIDER_ID,
-          model: model.id,
-          source: "live",
-        };
-        if (model.name) {
-          entry.label = model.name;
-        }
-        return entry;
-      });
-    }
-
     async function promptForEnterpriseDomain(ctx: ProviderAuthContext): Promise<string | null> {
       // COPILOT_GITHUB_DOMAIN is authoritative for every runtime routing path
       // (token refresh, usage, completions). Honor it here too when it is set so
@@ -757,11 +734,6 @@ export default definePluginEntry({
           }),
         );
       },
-    });
-    api.registerModelCatalogProvider({
-      provider: PROVIDER_ID,
-      kinds: ["text"],
-      liveCatalog: runGithubCopilotUnifiedLiveCatalog,
     });
   },
 });

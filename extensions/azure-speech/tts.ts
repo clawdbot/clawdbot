@@ -2,18 +2,11 @@
  * Azure Speech REST helpers. They normalize endpoints, build SSML, list voices,
  * and synthesize speech with response-size and SSRF guards.
  */
-import {
-  assertOkOrThrowProviderError,
-  readProviderBinaryResponse,
-  readProviderJsonResponse,
-} from "openclaw/plugin-sdk/provider-http";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech-core";
-import { trimToUndefined } from "openclaw/plugin-sdk/speech-core";
 import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+  asOptionalRecord,
+  normalizeOptionalString as trimToUndefined,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /** Default Azure Speech neural voice. */
 export const DEFAULT_AZURE_SPEECH_VOICE = "en-US-JennyNeural";
@@ -140,6 +133,10 @@ export async function listAzureSpeechVoices(params: {
   timeoutMs?: number;
 }): Promise<SpeechVoiceOption[]> {
   const url = azureSpeechUrl({ ...params, path: "/cognitiveservices/voices/list" });
+  const { assertOkOrThrowProviderError, readProviderJsonResponse } =
+    await import("openclaw/plugin-sdk/provider-http");
+  const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
+    await import("openclaw/plugin-sdk/ssrf-runtime");
   const { response, release } = await fetchWithSsrFGuard({
     url,
     init: {
@@ -199,6 +196,10 @@ export async function azureSpeechTTS(params: {
   const voice = trimToUndefined(params.voice) ?? DEFAULT_AZURE_SPEECH_VOICE;
   const outputFormat = trimToUndefined(params.outputFormat) ?? DEFAULT_AZURE_SPEECH_AUDIO_FORMAT;
   const url = azureSpeechUrl({ ...params, path: "/cognitiveservices/v1" });
+  const { assertOkOrThrowProviderError, readProviderBinaryResponse } =
+    await import("openclaw/plugin-sdk/provider-http");
+  const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
+    await import("openclaw/plugin-sdk/ssrf-runtime");
   const { response, release } = await fetchWithSsrFGuard({
     url,
     init: {

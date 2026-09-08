@@ -70,6 +70,13 @@ export default definePluginEntry({
   register(api: OpenClawPluginApi) {
     const config = logbookConfigSchema.parse(api.pluginConfig);
     let service: LogbookService | null = null;
+    let stopping: Promise<void> | undefined;
+    let retired = false;
+    const stopService = () => {
+      const current = service;
+      service = null;
+      return (stopping ??= current?.stop());
+    };
 
     const requireService = () => {
       if (!service) {
@@ -129,6 +136,10 @@ export default definePluginEntry({
     api.registerService({
       id: "logbook",
       start: (ctx) => {
+        if (retired) {
+          throw new Error("Logbook plugin runtime has been retired");
+        }
+        stopping = undefined;
         service = new LogbookService(config, {
           runtime: api.runtime,
           fullConfig: ctx.config,
@@ -137,9 +148,21 @@ export default definePluginEntry({
         });
         service.start();
       },
-      stop: () => {
-        service?.stop();
-        service = null;
+      stop: stopService,
+    });
+    api.lifecycle.registerRuntimeLifecycle({
+      id: "logbook-service",
+      cleanup: ({ reason, sessionKey, runId }) => {
+        // Registry-only retirement does not run service.stop; scoped session cleanup stays local.
+        if (
+          sessionKey === undefined &&
+          runId === undefined &&
+          (reason === "restart" || reason === "disable")
+        ) {
+          retired = true;
+          return stopService();
+        }
+        return undefined;
       },
     });
 
@@ -164,11 +187,9 @@ export default definePluginEntry({
     // so they require write scope while derived text stays readable.
     registerRead("logbook.days", () => ({ days: requireService().listDays() }));
 
-    registerRead("logbook.timeline", (params) => {
-      const day = readDayParam(params);
-      const svc = requireService();
-      return { day, cards: svc.cardsForDay(day), stats: svc.dayStats(day) };
-    });
+    registerRead("logbook.timeline", (params) =>
+      requireService().timelineForDay(readDayParam(params)),
+    );
 
     registerWrite("logbook.frames", (params) => {
       const startMs = readNumberParam(params, "startMs");

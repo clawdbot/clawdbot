@@ -9,8 +9,8 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.isClawHubSkillInstalled
 import ai.openclaw.app.isClawHubSkillOperationActive
-import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconButton
+import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPill
@@ -489,7 +489,7 @@ private fun SkillListRow(
   onClick: () -> Unit,
   onSkillEnabledChange: (String, Boolean) -> Unit,
 ) {
-  ClawDetailRow(
+  ClawListItem(
     title = skill.name,
     subtitle = skillSubtitle(skill),
     modifier = Modifier.clickable(onClickLabel = nativeString("Open skill detail"), onClick = onClick),
@@ -573,7 +573,7 @@ private fun ClawHubSkillSearchPanel(
           // An install-only row never opens a review dialog, so the warning has to show here.
           nativeString("Not scanned by ClawHub").takeIf { skill.isUnscannedSource },
         )
-      ClawDetailRow(
+      ClawListItem(
         title = skill.displayName,
         subtitle = subtitleParts.joinToString(" · "),
         leading = { ClawTextBadge(text = skillBadge(skill.displayName)) },

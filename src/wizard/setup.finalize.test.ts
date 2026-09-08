@@ -91,8 +91,6 @@ const gatewayServiceReadCommand = vi.hoisted(() => vi.fn());
 const startGatewayService = vi.hoisted(() => vi.fn());
 const resolveGatewayInstallToken = vi.hoisted(() =>
   vi.fn(async () => ({
-    token: undefined,
-    tokenRefConfigured: true,
     warnings: [],
   })),
 );
@@ -1594,8 +1592,6 @@ describe("finalizeSetupWizard", () => {
       });
       if (failure === "auth") {
         resolveGatewayInstallToken.mockImplementationOnce(async () => ({
-          token: undefined,
-          tokenRefConfigured: true,
           warnings: [],
           unavailableReason: "replacement auth unavailable",
         }));

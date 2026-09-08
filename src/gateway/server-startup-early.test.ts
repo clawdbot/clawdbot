@@ -200,7 +200,14 @@ describe("startGatewayEarlyRuntime", () => {
         throw error;
       });
 
-      await expect(startup).rejects.toBe(startupError);
+      if (cleanupRejects) {
+        await expect(startup).rejects.toMatchObject({
+          name: "AggregateError",
+          errors: [expect.objectContaining({ cause: cleanupError })],
+        });
+      } else {
+        await expect(startup).rejects.toBe(startupError);
+      }
       expect(stopDiscovery).toHaveBeenCalledOnce();
       expect(owner.current).toBeNull();
       expect(onCleanupError).toHaveBeenCalledTimes(cleanupRejects ? 1 : 0);

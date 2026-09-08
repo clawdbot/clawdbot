@@ -4,4 +4,4 @@ export type ManifestModelSuppressionResolver = (input: {
   id?: string | null;
   baseUrl?: string | null;
   unconditionalOnly?: boolean;
-}) => { suppress: true; errorMessage: string } | undefined;
+}) => { suppress: true; errorMessage: string; retirement?: { replacedBy?: string } } | undefined;

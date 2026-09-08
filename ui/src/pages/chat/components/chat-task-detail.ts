@@ -183,7 +183,11 @@ function renderTaskTranscript(params: {
   return html`<div class="sidebar-content chat-task-detail__content">
     <div class="chat-task-detail__transcript">
       ${renderReadOnlyTranscript({
-        chat: { ...params.chat, selectedSession },
+        chat: {
+          ...params.chat,
+          selectedSession,
+          avatarPlacement: params.task.runtime === "subagent" ? "none" : undefined,
+        },
         messages: load.messages,
         paneId: `${params.chat.paneId}:task-sidebar`,
         sessionKey: params.sessionKey,

@@ -60,97 +60,112 @@ describe("Codex app-server main thread cleanup", () => {
     resetSharedCodexAppServerClientForTests();
   });
 
-  it.each([
-    { label: "without a context engine", contextEngine: undefined },
-    {
-      label: "with the default legacy context engine",
-      contextEngine: {
-        info: { id: "legacy", name: "Legacy", version: "1.0.0" },
-      } as EmbeddedRunAttemptParams["contextEngine"],
-    },
-  ])("retains a subscribed persistent Codex thread $label", async ({ contextEngine }) => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const requests: Array<{ method: string; params: unknown }> = [];
-    const turnStarted = createDeferred<void>();
-    const abort = new AbortController();
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      requests.push({ method, params });
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      if (method === "turn/start") {
-        turnStarted.resolve();
-        return turnStartResult();
-      }
-      return {};
-    });
-
-    const clientFactory: CodexAppServerClientFactory = multiplexedClientFactory(async () => {
-      return {
-        ...mockClientRuntimeMethods(),
-        request,
-        addNotificationHandler: (handler: typeof notify) => {
-          notify = handler;
-          return () => undefined;
-        },
-        addRequestHandler: () => () => undefined,
-        addCloseHandler: () => () => undefined,
-      } as never;
-    });
-
-    const run = runCodexAppServerAttempt(
-      { ...createParams(sessionFile, workspaceDir), contextEngine, abortSignal: abort.signal },
-      { bindingStore: testCodexAppServerBindingStore, clientFactory },
-    );
-    let result: Awaited<typeof run>;
-    try {
-      // Cold preparation has no five-second contract. Wait for the native request,
-      // but surface an early run failure instead of leaving its promise unobserved.
-      await Promise.race([
-        turnStarted.promise,
-        run.then(() => {
-          throw new Error("Codex attempt completed before requesting a turn");
-        }),
-      ]);
-      await notify({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          turn: { id: "turn-1", status: "completed" },
-        },
+  it.each(
+    [
+      { label: "without a context engine", contextEngine: undefined },
+      {
+        label: "with the default legacy context engine",
+        contextEngine: {
+          info: { id: "legacy", name: "Legacy", version: "1.0.0" },
+        } as EmbeddedRunAttemptParams["contextEngine"],
+      },
+    ].flatMap((context) =>
+      (["completed", "failed"] as const).map((status) => ({
+        label: context.label,
+        contextEngine: context.contextEngine,
+        status,
+      })),
+    ),
+  )(
+    "retains a subscribed persistent Codex thread $label after $status",
+    async ({ contextEngine, status }) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const requests: Array<{ method: string; params: unknown }> = [];
+      const turnStarted = createDeferred<void>();
+      const abort = new AbortController();
+      let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        requests.push({ method, params });
+        if (method === "thread/start") {
+          return threadStartResult();
+        }
+        if (method === "turn/start") {
+          turnStarted.resolve();
+          return turnStartResult();
+        }
+        return {};
       });
-      result = await run;
-    } finally {
-      abort.abort();
-      await run.catch(() => undefined);
-    }
-    expect(readAttemptTerminal(result).aborted).toBe(false);
-    const firstBinding = await readCodexAppServerBinding(sessionFile);
-    expect({
-      clientId: firstBinding?.clientId,
-      threadId: firstBinding?.threadId,
-      preserveNativeModel: firstBinding?.preserveNativeModel,
-      connectionScope: firstBinding?.connectionScope,
-      ringZeroConfigFingerprint: firstBinding?.ringZeroConfigFingerprint,
-      contextEngine: firstBinding?.contextEngine,
-      pluginAppsFingerprint: firstBinding?.pluginAppsFingerprint,
-    }).toEqual({
-      clientId: "test-client-1",
-      threadId: "thread-1",
-      preserveNativeModel: undefined,
-      connectionScope: undefined,
-      ringZeroConfigFingerprint: undefined,
-      contextEngine: undefined,
-      pluginAppsFingerprint: expect.any(String),
-    });
 
-    expect(requests.map((entry) => entry.method)).toEqual(["thread/start", "turn/start"]);
-  });
+      const clientFactory: CodexAppServerClientFactory = multiplexedClientFactory(async () => {
+        return {
+          ...mockClientRuntimeMethods(),
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: () => () => undefined,
+          addCloseHandler: () => () => undefined,
+        } as never;
+      });
 
-  it("keeps alternating conversations subscribed on their shared physical Codex client", async () => {
+      const run = runCodexAppServerAttempt(
+        { ...createParams(sessionFile, workspaceDir), contextEngine, abortSignal: abort.signal },
+        { bindingStore: testCodexAppServerBindingStore, clientFactory },
+      );
+      let result: Awaited<typeof run>;
+      try {
+        // Cold preparation has no five-second contract. Wait for the native request,
+        // but surface an early run failure instead of leaving its promise unobserved.
+        await Promise.race([
+          turnStarted.promise,
+          run.then(() => {
+            throw new Error("Codex attempt completed before requesting a turn");
+          }),
+        ]);
+        await notify({
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status,
+              ...(status === "failed" ? { error: { message: "Native turn failed" } } : {}),
+            },
+          },
+        });
+        result = await run;
+      } finally {
+        abort.abort();
+        await run.catch(() => undefined);
+      }
+      expect(readAttemptTerminal(result).aborted).toBe(false);
+      const firstBinding = await readCodexAppServerBinding(sessionFile);
+      expect({
+        clientId: firstBinding?.clientId,
+        threadId: firstBinding?.threadId,
+        preserveNativeModel: firstBinding?.preserveNativeModel,
+        connectionScope: firstBinding?.connectionScope,
+        ringZeroConfigFingerprint: firstBinding?.ringZeroConfigFingerprint,
+        contextEngine: firstBinding?.contextEngine,
+        pluginAppsFingerprint: firstBinding?.pluginAppsFingerprint,
+      }).toEqual({
+        clientId: "test-client-1",
+        threadId: "thread-1",
+        preserveNativeModel: undefined,
+        connectionScope: undefined,
+        ringZeroConfigFingerprint: undefined,
+        contextEngine: undefined,
+        pluginAppsFingerprint: expect.any(String),
+      });
+
+      expect(requests.map((entry) => entry.method)).toEqual(["thread/start", "turn/start"]);
+    },
+  );
+
+  it("keeps alternating conversations subscribed after one fails on their shared Codex client", async () => {
     const workspaceDir = path.join(tempDir, "shared-workspace");
     const sessionFiles = {
       a: path.join(tempDir, "session-a.jsonl"),
@@ -205,7 +220,15 @@ describe("Codex app-server main thread cleanup", () => {
       harness.send({ id: turn.id, result: turnStartResult(turnId) });
       harness.send({
         method: "turn/completed",
-        params: { threadId, turnId, turn: { id: turnId, status: "completed" } },
+        params: {
+          threadId,
+          turnId,
+          turn: {
+            id: turnId,
+            status: index === 0 ? "failed" : "completed",
+            ...(index === 0 ? { error: { message: "Native turn failed" } } : {}),
+          },
+        },
       });
       expect(readAttemptTerminal(await run).aborted).toBe(false);
     }

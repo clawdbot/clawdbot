@@ -1,3 +1,4 @@
+import type { RealtimeVoiceProviderCapabilities } from "openclaw/plugin-sdk/realtime-voice";
 // GPT-Live (OpenAI "quicksilver") uses browser or Gateway-owned WebRTC when
 // the host owns delegation, and the Platform-key Frameless Bidi WebSocket elsewhere.
 
@@ -47,3 +48,10 @@ export function isSupportedOpenAIGptLiveModel(model: string | undefined): boolea
   const normalized = model.trim().toLowerCase();
   return OPENAI_GPT_LIVE_MODELS.includes(normalized as (typeof OPENAI_GPT_LIVE_MODELS)[number]);
 }
+
+export const OPENAI_QUICKSILVER_CAPABILITIES = {
+  transports: ["webrtc" as const, "gateway-relay" as const],
+  handlesAgentConsult: true as const,
+  supportsToolCalls: false,
+  supportsVideoFrames: false,
+} satisfies Partial<RealtimeVoiceProviderCapabilities> & { handlesAgentConsult: true };

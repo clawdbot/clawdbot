@@ -154,6 +154,7 @@ type CronAddParams = {
 
 function buildProgram() {
   const program = new Command();
+  program.enablePositionalOptions();
   program.exitOverride();
   registerCronCli(program);
   return program;
@@ -168,7 +169,7 @@ const CRON_GATEWAY_COMMANDS = [
   { name: "disable", args: ["job-1"] },
   { name: "get", args: ["job-1"] },
   { name: "show", args: ["job-1"] },
-  { name: "runs", args: ["--id", "job-1"] },
+  { name: "runs", args: ["job-1"] },
   { name: "run", args: ["job-1"] },
   { name: "scratch", args: ["job-1"] },
   { name: "edit", args: ["job-1"] },
@@ -525,7 +526,7 @@ describe("cron cli", () => {
     { name: "disable", args: ["cron", "disable", "missing"], method: "cron.update" },
     { name: "run", args: ["cron", "run", "missing"], method: "cron.run" },
     { name: "scratch", args: ["cron", "scratch", "missing"], method: "cron.scratch.get" },
-    { name: "runs", args: ["cron", "runs", "--id", "missing"], method: "cron.runs" },
+    { name: "runs", args: ["cron", "runs", "missing"], method: "cron.runs" },
   ])("keeps the canonical lookup miss for cron $name", async ({ args, method }) => {
     resetGatewayMock();
     callGatewayFromCli.mockImplementation(
@@ -568,11 +569,82 @@ describe("cron cli", () => {
     );
 
     const program = buildProgram();
-    await program.parseAsync(["cron", "runs", "--id", "empty-cron"], { from: "user" });
+    await program.parseAsync(["cron", "runs", "empty-cron"], { from: "user" });
 
     expect(stdoutText()).toBe(JSON.stringify(emptyPage, null, 2));
     expect(defaultRuntime.error).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it("accepts a positional job id for run history", async () => {
+    await runCronCommand(["cron", "runs", "job-1"]);
+
+    expect(getGatewayCallParams<{ id: string; limit: number }>("cron.runs")).toEqual({
+      id: "job-1",
+      limit: 50,
+    });
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["runs job-1 --id job-1", ["cron", "runs", "job-1", "--id", "job-1"]],
+    ["runs --id job-1 job-1", ["cron", "runs", "--id", "job-1", "job-1"]],
+  ])("accepts matching positional and --id forms: %s", async (_label, args) => {
+    await runCronCommand(args);
+
+    expect(getGatewayCallParams<{ id: string }>("cron.runs").id).toBe("job-1");
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+  });
+
+  it("composes the automations alias, Gateway options, and run-history filters", async () => {
+    await runCronCommand([
+      "automations",
+      "--port",
+      "65267",
+      "runs",
+      "--limit",
+      "5",
+      "job-1",
+      "--run-id",
+      "run-1",
+      "--json",
+    ]);
+
+    const runsCall = callGatewayFromCli.mock.calls.find(([method]) => method === "cron.runs");
+    expect(runsCall?.[1]).toMatchObject({ port: "65267" });
+    expect(runsCall?.[2]).toEqual({ id: "job-1", runId: "run-1", limit: 5 });
+    expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a missing job id before parsing --limit", async () => {
+    await expectCronCommandExit(["automations", "runs", "--limit", "0"]);
+
+    expectRuntimeErrorContaining("Missing job id. Pass it positionally or with --id.");
+    expectNoRuntimeErrorContaining("Invalid --limit");
+    expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.runs")).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "blank positional id",
+      args: ["cron", "runs", "   "],
+      message: "Missing job id",
+    },
+    {
+      name: "blank --id",
+      args: ["cron", "runs", "--id", "   "],
+      message: "Missing job id",
+    },
+    {
+      name: "conflicting ids",
+      args: ["cron", "runs", "job-1", "--id", "job-2"],
+      message: 'Conflicting job ids: positional "job-1" and --id "job-2".',
+    },
+  ])("rejects $name before calling the Gateway", async ({ args, message }) => {
+    await expectCronCommandExit(args);
+
+    expectRuntimeErrorContaining(message);
+    expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.runs")).toBe(false);
   });
 
   it.each([

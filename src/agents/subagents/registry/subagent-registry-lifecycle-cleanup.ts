@@ -481,6 +481,12 @@ async function completeTerminalCleanup(
   if (!completeParams.triggerCleanup || suppressedForSteerRestart) {
     return;
   }
+  if (entry.resumptionNotice) {
+    // The recovered run may finish before its resumption notice is delivered.
+    // Restart recovery retries that debt for a bounded terminal window, then
+    // clears it and re-enters cleanup so completion cannot remain wedged.
+    return;
+  }
   refreshSessionEffectsSuppression();
   if (!context.isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
     return;

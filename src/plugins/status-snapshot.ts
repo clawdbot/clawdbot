@@ -130,6 +130,8 @@ function buildPluginRecordFromInstalledIndex(
     source: plugin.source ?? plugin.manifestPath,
     rootDir: plugin.rootDir,
     origin: plugin.origin,
+    trustedOfficialInstall: manifest?.trustedOfficialInstall,
+    trust: manifest?.trust,
     enabled: plugin.enabled,
     compat: plugin.compat,
     syntheticAuthRefs: [...(plugin.syntheticAuthRefs ?? manifest?.syntheticAuthRefs ?? [])],

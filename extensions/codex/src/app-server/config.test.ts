@@ -6,9 +6,9 @@ import { withTempDir } from "openclaw/plugin-sdk/test-env";
 // Codex tests cover config plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import { codexAppServerStartOptionsKey } from "./config-runtime.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
-  codexAppServerStartOptionsKey,
   codexSandboxPolicyForTurn,
   isCodexSandboxExecServerEnabled,
   readCodexPluginConfig,
@@ -3252,7 +3252,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     const first = codexAppServerStartOptionsKey(startOptions);
 
     vi.resetModules();
-    const reloaded = await import("./config.js");
+    const reloaded = await import("./config-runtime.js");
 
     expect(reloaded.codexAppServerStartOptionsKey(startOptions)).toEqual(first);
     expect(first).not.toContain("tok_reload");

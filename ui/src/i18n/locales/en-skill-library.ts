@@ -16,6 +16,7 @@ const enSkillLibrary = {
     propose: "Save workspace proposal",
     apply: "Apply to workspace",
     slug: "Skill name",
+    slugHelp: "Use 1–63 lowercase letters, digits, or hyphens; start with a letter or digit.",
     description: "Description",
     file: "File",
     newFile: "New text file path",

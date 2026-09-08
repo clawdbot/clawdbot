@@ -63,7 +63,10 @@ export function formatHealthCheckFailure(err: unknown, opts: { rich?: boolean } 
   return out.join("\n");
 }
 
-const formatProbeLine = (probe: unknown, opts: { botUsernames?: string[] } = {}): string | null => {
+const formatProbeLine = (
+  probe: unknown,
+  accounts?: readonly ChannelAccountHealthSummary[],
+): string | null => {
   const record = asNullableRecord(probe);
   if (!record) {
     return null;
@@ -72,40 +75,38 @@ const formatProbeLine = (probe: unknown, opts: { botUsernames?: string[] } = {})
   if (ok === undefined) {
     return null;
   }
+  if (!ok) {
+    const status = typeof record.status === "number" ? record.status : null;
+    const error = typeof record.error === "string" ? record.error : null;
+    return `failed (${status ?? "unknown"})${error ? ` - ${error}` : ""}`;
+  }
+
   const elapsedMs = typeof record.elapsedMs === "number" ? record.elapsedMs : null;
-  const status = typeof record.status === "number" ? record.status : null;
-  const error = typeof record.error === "string" ? record.error : null;
   const bot = asNullableRecord(record.bot);
   const botUsername = bot && typeof bot.username === "string" ? bot.username : null;
   const webhook = asNullableRecord(record.webhook);
   const webhookUrl = webhook && typeof webhook.url === "string" ? webhook.url : null;
-
   const usernames = new Set<string>();
   if (botUsername) {
     usernames.add(botUsername);
   }
-  for (const extra of opts.botUsernames ?? []) {
-    if (extra) {
-      usernames.add(extra);
+  for (const account of accounts ?? []) {
+    const accountProbe = asNullableRecord(account.probe);
+    const accountBot = accountProbe ? asNullableRecord(accountProbe.bot) : null;
+    if (accountBot && typeof accountBot.username === "string" && accountBot.username) {
+      usernames.add(accountBot.username);
     }
   }
 
-  if (ok) {
-    let label = "ok";
-    if (usernames.size > 0) {
-      label += ` (@${Array.from(usernames).join(", @")})`;
-    }
-    if (elapsedMs != null) {
-      label += ` (${elapsedMs}ms)`;
-    }
-    if (webhookUrl) {
-      label += ` - webhook ${webhookUrl}`;
-    }
-    return label;
+  let label = "ok";
+  if (usernames.size > 0) {
+    label += ` (@${Array.from(usernames).join(", @")})`;
   }
-  let label = `failed (${status ?? "unknown"})`;
-  if (error) {
-    label += ` - ${error}`;
+  if (elapsedMs != null) {
+    label += ` (${elapsedMs}ms)`;
+  }
+  if (webhookUrl) {
+    label += ` - webhook ${webhookUrl}`;
   }
   return label;
 };
@@ -179,13 +180,6 @@ export const formatHealthChannelLines = (
       activeSummaries.find((account) => account.accountId === preferredSummary.accountId) ??
       activeSummaries[0] ??
       preferredSummary;
-    const botUsernames = activeSummaries
-      .map((account) => {
-        const probeRecord = asNullableRecord(account.probe);
-        const bot = probeRecord ? asNullableRecord(probeRecord.bot) : null;
-        return bot && typeof bot.username === "string" ? bot.username : null;
-      })
-      .filter((value): value is string => Boolean(value));
     const statusState =
       typeof selectedSummary.statusState === "string" ? selectedSummary.statusState : null;
     const healthState =
@@ -213,8 +207,23 @@ export const formatHealthChannelLines = (
             ? "not linked"
             : null;
     if (preProbeState) {
-      lines.push(`${label}: ${preProbeState}`);
+      const error =
+        typeof selectedSummary.lastError === "string"
+          ? sanitizeTerminalText(selectedSummary.lastError)
+          : "";
+      lines.push(`${label}: ${preProbeState}${error ? ` (${error})` : ""}`);
       continue;
+    }
+
+    const failedSummary = activeSummaries.find(
+      (account) => asNullableRecord(account.probe)?.ok === false,
+    );
+    if (failedSummary) {
+      const failureLine = formatProbeLine(failedSummary.probe);
+      if (failureLine) {
+        lines.push(`${label}: ${failureLine}`);
+        continue;
+      }
     }
 
     const accountTimings =
@@ -223,25 +232,13 @@ export const formatHealthChannelLines = (
             .map((account) => formatAccountProbeTiming(account))
             .filter((value): value is string => Boolean(value))
         : [];
-    const failedSummary = activeSummaries.find(
-      (account) => asNullableRecord(account.probe)?.ok === false,
-    );
-    if (failedSummary) {
-      const failureLine = formatProbeLine(failedSummary.probe, { botUsernames });
-      if (failureLine) {
-        lines.push(`${label}: ${failureLine}`);
-        continue;
-      }
-    }
 
     if (accountTimings.length > 0) {
       lines.push(`${label}: ok (${accountTimings.join(", ")})`);
       continue;
     }
 
-    const probeLine = formatProbeLine(selectedSummary.probe, {
-      botUsernames,
-    });
+    const probeLine = formatProbeLine(selectedSummary.probe, activeSummaries);
     if (probeLine) {
       lines.push(`${label}: ${probeLine}`);
       continue;

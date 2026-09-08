@@ -129,6 +129,13 @@ describeControlUiE2e("Control UI Custodian channel onboarding mocked Gateway E2E
     try {
       const response = await page.goto(`${server.baseUrl}settings/model-setup?firstRun=1`);
       expect(response?.status()).toBe(200);
+      const providerChoice = page
+        .locator('[data-candidate-kind="openai-api-key"]')
+        .getByRole("button", { name: "Test & use", exact: true });
+      await providerChoice.waitFor();
+      expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
+      await providerChoice.click();
+      await gateway.waitForRequest("openclaw.setup.activate.start");
       await waitForControlUiRoute(page, {
         pathname: "/custodian",
         routeId: "custodian",
@@ -136,7 +143,7 @@ describeControlUiE2e("Control UI Custodian channel onboarding mocked Gateway E2E
       });
       await page.screenshot({
         animations: "disabled",
-        path: path.join(artifactDir, "01-after-automatic-model-setup.png"),
+        path: path.join(artifactDir, "01-after-explicit-model-setup.png"),
       });
       await gateway.waitForRequest("channels.status");
       await gateway.rejectDeferred("channels.status", {

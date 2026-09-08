@@ -8,26 +8,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const retainNativeCatalog = vi.hoisted(() => vi.fn());
-
-vi.mock("openclaw/plugin-sdk/plugin-command-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/plugin-command-runtime")>();
-  return {
-    ...actual,
-    createPluginCommandRuntime: () => {
-      const runtime = actual.createPluginCommandRuntime();
-      return {
-        ...runtime,
-        retainNativeCatalog: (provider: string) => {
-          retainNativeCatalog(provider);
-          runtime.retainNativeCatalog(provider);
-        },
-      };
-    },
-  };
-});
-
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 let createCommandBot: typeof import("./bot-native-commands.menu-test-support.js").createCommandBot;
 let createNativeCommandTestParams: typeof import("./bot-native-commands.menu-test-support.js").createNativeCommandTestParams;
@@ -174,7 +154,6 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
     setActivePluginRegistry(activePluginRegistry as never);
     clearPluginCommands();
     resetNativeCommandMenuMocks();
-    retainNativeCatalog.mockClear();
   });
 
   afterEach(() => {
@@ -363,10 +342,6 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
 
       expect(setMyCommands).not.toHaveBeenCalled();
       expect(commandHandlers.has(command)).toBe(retained);
-      expect(retainNativeCatalog).toHaveBeenCalledTimes(retained ? 1 : 0);
-      if (retained) {
-        expect(retainNativeCatalog).toHaveBeenCalledWith("telegram");
-      }
     },
   );
 

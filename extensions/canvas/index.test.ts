@@ -19,7 +19,7 @@ const mocks = vi.hoisted(() => {
   const toolExecute = vi.fn(async () => ({ content: [{ type: "text", text: "ok" }] }));
   return {
     httpHandler,
-    createCanvasHttpRouteHandler: vi.fn(() => httpHandler),
+    loadRenderer: vi.fn(),
     createDefaultCanvasCliDependencies: vi.fn(() => ({ deps: true })),
     registerNodesCanvasCommands: vi.fn(),
     toolExecute,
@@ -33,9 +33,10 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("./src/http-route.js", () => ({
-  createCanvasHttpRouteHandler: mocks.createCanvasHttpRouteHandler,
-}));
+vi.mock("./src/host/a2ui.js", () => {
+  mocks.loadRenderer();
+  return { handleA2uiHttpRequest: mocks.httpHandler.handleHttpRequest };
+});
 
 vi.mock("./src/cli.js", () => ({
   createDefaultCanvasCliDependencies: mocks.createDefaultCanvasCliDependencies,
@@ -148,12 +149,12 @@ describe("Canvas plugin entry", () => {
 
     expect(routes).toHaveLength(1);
     expect(services).toHaveLength(0);
-    expect(mocks.createCanvasHttpRouteHandler).not.toHaveBeenCalled();
+    expect(mocks.loadRenderer).not.toHaveBeenCalled();
 
     const request = new IncomingMessage(new Socket());
     request.url = "/__openclaw__/a2ui/a2ui.bundle.js";
     await routes[0]?.handler(request, new ServerResponse(request));
-    expect(mocks.createCanvasHttpRouteHandler).toHaveBeenCalledTimes(1);
+    expect(mocks.loadRenderer).toHaveBeenCalledTimes(1);
     expect(mocks.httpHandler.handleHttpRequest).toHaveBeenCalledTimes(1);
   });
 

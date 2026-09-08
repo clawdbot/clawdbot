@@ -4,6 +4,12 @@ export type WorkerWorkspaceResultConflict = {
   totalCount?: number;
 };
 
+export type WorkspaceResultConflictLookup =
+  | { kind: "absent" }
+  | { kind: "conflict"; conflict: Required<WorkerWorkspaceResultConflict> }
+  | { kind: "unknown"; reason: WorkspaceResultConflictUnknownReason };
+type WorkspaceResultConflictUnknownReason = "malformed-report" | "session-unavailable";
+
 export type WorkerWorkspaceRecoveryFailureReport = {
   sessionId: string;
   sessionKey: string;

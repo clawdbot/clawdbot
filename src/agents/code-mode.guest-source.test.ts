@@ -119,6 +119,7 @@ describe("Code Mode guest source validation", () => {
     { code: "NODE_ENV=test\nnpm test" },
     { code: "FOO=bar ./gradlew test" },
     { command: 'GREETING="hello world" npm test' },
+    { code: String.raw`A="\\" ls "file" argument` },
     { command: "whoami" },
     { code: "set -euo pipefail" },
     { command: "exit" },

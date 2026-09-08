@@ -1,6 +1,11 @@
 import type { ProviderNormalizeConfigContext } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeLmstudioTransportReasoningCompat } from "./src/model-reasoning.js";
 
+/** LM Studio serves operator-hosted inference, including networked model hosts. */
+export function resolveToolSearchMode(): "tools" {
+  return "tools";
+}
+
 /** Normalize saved reasoning metadata without activating provider runtime or changing transport. */
 export function normalizeConfig({ provider, providerConfig }: ProviderNormalizeConfigContext) {
   if (provider.trim().toLowerCase() !== "lmstudio" || !Array.isArray(providerConfig.models)) {

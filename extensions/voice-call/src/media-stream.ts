@@ -24,8 +24,9 @@ import {
   type TalkSessionController,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { type RawData, WebSocket, WebSocketServer } from "ws";
+import type { RawData } from "ws";
 import { canonicalizeVoiceCallMediaBase64 } from "./media-base64.js";
+import { WebSocket, WebSocketServer } from "./websocket.js";
 
 /**
  * Configuration for the media stream handler.

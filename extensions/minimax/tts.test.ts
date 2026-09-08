@@ -2,6 +2,7 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { isProviderAuthProfileConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -18,7 +19,7 @@ import {
   buildMinimaxMusicGenerationProvider,
   buildMinimaxPortalMusicGenerationProvider,
 } from "./music-generation-provider.js";
-import { buildMinimaxSpeechProvider } from "./speech-provider.js";
+import { buildMinimaxSpeechProvider } from "./speech-provider-factory.js";
 import { minimaxTTS } from "./tts.js";
 
 describe("minimaxTTS", () => {
@@ -199,7 +200,9 @@ async function runMinimaxLoopbackFixture(fixture: MinimaxWireFixture): Promise<B
       });
     }
     if (fixture.entryPoint === "speech") {
-      const result = await buildMinimaxSpeechProvider().synthesize({
+      const result = await buildMinimaxSpeechProvider({
+        isProviderAuthProfileConfigured,
+      }).synthesize({
         text: "loopback fixture",
         cfg: {},
         providerConfig: { apiKey: "fixture-provider-key", baseUrl: "https://api.minimax.io" },

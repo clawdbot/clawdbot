@@ -71,7 +71,7 @@ export const CEREBRAS_MODEL_DISCOVERY: OpenAICompatibleModelDiscoveryOptions = {
     url: "https://api.cerebras.ai/public/v1/models",
     requireBaseUrl: manifest.modelCatalog.providers.cerebras.baseUrl,
   },
-  buildRequestHeaders: () => ({ Accept: "application/json" }),
+  authentication: "none",
   projectRows: projectCerebrasModels,
 };
 

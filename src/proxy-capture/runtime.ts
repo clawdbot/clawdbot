@@ -12,7 +12,7 @@ import {
   hasRegisteredSecretValuesForRedaction,
   redactRegisteredSecretValues,
 } from "../logging/secret-redaction-registry.js";
-import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
+import { resolveEnabledDebugProxySettings, type DebugProxySettings } from "./env.js";
 import { redactedCaptureHeaders, REDACTED_CAPTURE_HEADER_VALUE } from "./header-redaction.js";
 import {
   closeDebugProxyCaptureStore,
@@ -444,8 +444,8 @@ export function initializeDebugProxyCapture(
   resolved?: DebugProxySettings,
   deps: DebugProxyCaptureRuntimeDeps = {},
 ): void {
-  const settings = resolved ?? resolveDebugProxySettings();
-  if (!settings.enabled) {
+  const settings = resolveEnabledDebugProxySettings(resolved);
+  if (!settings) {
     return;
   }
   resolveRuntimeDeps(deps).getStore().upsertSession({
@@ -465,8 +465,8 @@ export function finalizeDebugProxyCapture(
   resolved?: DebugProxySettings,
   deps: DebugProxyCaptureRuntimeDeps = {},
 ): void {
-  const settings = resolved ?? resolveDebugProxySettings();
-  if (!settings.enabled) {
+  const settings = resolveEnabledDebugProxySettings(resolved);
+  if (!settings) {
     return;
   }
   const runtime = resolveRuntimeDeps(deps);
@@ -489,8 +489,8 @@ export function captureHttpExchange(
   resolved?: DebugProxySettings,
   deps: DebugProxyCaptureRuntimeDeps = {},
 ): void {
-  const settings = resolved ?? resolveDebugProxySettings();
-  if (!settings.enabled) {
+  const settings = resolveEnabledDebugProxySettings(resolved);
+  if (!settings) {
     return;
   }
   const runtime = resolveRuntimeDeps(deps);
@@ -649,8 +649,8 @@ export function captureWsEvent(
   resolved?: DebugProxySettings,
   deps: DebugProxyCaptureRuntimeDeps = {},
 ): void {
-  const settings = resolved ?? resolveDebugProxySettings();
-  if (!settings.enabled) {
+  const settings = resolveEnabledDebugProxySettings(resolved);
+  if (!settings) {
     return;
   }
   const runtime = resolveRuntimeDeps(deps);

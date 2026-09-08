@@ -37,16 +37,16 @@ scenario:
       tuiPtyCases:
         - coverageId: tui.gateway-tui-launch
           testFile: src/tui/tui-pty-local.e2e.test.ts
-          testNamePattern: ^TUI PTY real backends with shared Gateway fixture launches openclaw tui against a real Gateway through a real PTY$
+          testNamePattern: ^TUI PTY real backends > with shared Gateway fixture > launches openclaw tui against a real Gateway through a real PTY$
         - coverageId: tui.local-chat-launch
           testFile: src/tui/tui-pty-local.e2e.test.ts
-          testNamePattern: ^TUI PTY real backends launches openclaw chat as local mode through a real PTY$
+          testNamePattern: ^TUI PTY real backends > launches openclaw chat as local mode through a real PTY$
         - coverageId: tui.terminal-alias-launch
           testFile: src/tui/tui-pty-local.e2e.test.ts
-          testNamePattern: ^TUI PTY real backends launches openclaw terminal as local mode through a real PTY$
+          testNamePattern: ^TUI PTY real backends > launches openclaw terminal as local mode through a real PTY$
         - coverageId: tui.initial-message-launch
           testFile: src/tui/tui-pty-local.e2e.test.ts
-          testNamePattern: ^TUI PTY real backends sends the initial message supplied to openclaw tui through a real local PTY$
+          testNamePattern: ^TUI PTY real backends > sends the initial message supplied to openclaw tui through a real local PTY$
         - coverageId: tui.launch-option-validation
           testFile: src/tui/tui-pty-local.e2e.test.ts
-          testNamePattern: ^TUI PTY real backends rejects Gateway options on a local TUI alias through a real PTY$
+          testNamePattern: ^TUI PTY real backends > rejects Gateway options on a local TUI alias through a real PTY$

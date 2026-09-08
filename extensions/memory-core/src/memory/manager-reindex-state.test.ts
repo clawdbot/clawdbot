@@ -91,6 +91,21 @@ describe("memory reindex state", () => {
     });
   });
 
+  it("invalidates indexes built by a previous chunking implementation", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          meta: createMeta({ chunkingVersion: MEMORY_CHUNKING_VERSION - 1 }),
+        }),
+      ),
+    ).toMatchObject({
+      status: "mismatched",
+      reason: "index chunking implementation changed",
+      code: "chunking_version",
+      owner: "openclaw",
+    });
+  });
+
   it("classifies missing metadata as OpenClaw-owned", () => {
     expect(resolveMemoryIndexIdentityState(createIdentityParams({ meta: null }))).toEqual({
       status: "missing",

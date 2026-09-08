@@ -56,6 +56,7 @@ import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-ind
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { snapshotReaderSlot } from "../plugins/plugin-metadata-snapshot-readers.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
 import { resolveProviderAuthAliasMap, resolveProviderIdForAuth } from "./provider-auth-aliases.js";
@@ -145,14 +146,24 @@ function createPluginMetadataSnapshot(params: {
 }
 
 async function prepareAliasSnapshot(plugins: PluginManifestRecord[]) {
-  const metadata = await vi.importActual<typeof import("../plugins/plugin-metadata-snapshot.js")>(
-    "../plugins/plugin-metadata-snapshot.js",
-  );
-  const source = createPluginMetadataSnapshot({ plugins });
-  const snapshot = metadata.restorePluginMetadataSnapshot(
-    metadata.rebasePluginMetadataSnapshotManifestRegistry(source, source.manifestRegistry),
-  );
-  return { metadata, snapshot };
+  const readers = Object.getOwnPropertyDescriptors(snapshotReaderSlot);
+  try {
+    const metadata = await vi.importActual<typeof import("../plugins/plugin-metadata-snapshot.js")>(
+      "../plugins/plugin-metadata-snapshot.js",
+    );
+    const source = createPluginMetadataSnapshot({ plugins });
+    const snapshot = metadata.restorePluginMetadataSnapshot(
+      metadata.rebasePluginMetadataSnapshotManifestRegistry(source, source.manifestRegistry),
+    );
+    return { metadata, snapshot };
+  } finally {
+    // importActual retains this fixture's mocked dependencies. Its readers must
+    // not outlive the fixture or replace another file's provider metadata.
+    for (const key of Reflect.ownKeys(snapshotReaderSlot)) {
+      Reflect.deleteProperty(snapshotReaderSlot, key);
+    }
+    Object.defineProperties(snapshotReaderSlot, readers);
+  }
 }
 
 describe("provider auth aliases", () => {

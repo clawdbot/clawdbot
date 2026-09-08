@@ -202,7 +202,7 @@ export const DevicePairSetupCodeParamsSchema = closedObject({
   publicUrl: Type.Optional(NonEmptyString),
   preferRemoteUrl: Type.Optional(Type.Boolean()),
   includeQr: Type.Optional(Type.Boolean()),
-  bootstrapProfile: Type.Optional(Type.String({ enum: ["limited", "node"] })),
+  bootstrapProfile: Type.Optional(Type.String({ enum: ["limited", "node", "voice-node"] })),
   joinUrl: Type.Optional(Type.Literal(true)),
 });
 

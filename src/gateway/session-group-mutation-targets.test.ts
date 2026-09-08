@@ -3,9 +3,9 @@ import { performance } from "node:perf_hooks";
 import { expect, test, vi } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as sqliteIntegrity from "../infra/sqlite-integrity.js";
 import * as sqliteWal from "../infra/sqlite-wal.js";
 import * as agentDatabaseLeases from "../state/openclaw-agent-db-lease.js";
-import * as agentDatabaseSchema from "../state/openclaw-agent-db-schema.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   listOpenClawAgentDatabasesForTest,
@@ -39,10 +39,7 @@ test("discovers groups across more than the handle cap without writable database
     }
     closeOpenClawAgentDatabasesForTest();
 
-    const integritySpy = vi.spyOn(
-      agentDatabaseSchema,
-      "assertAgentDatabaseIntegrityBeforeMutation",
-    );
+    const integritySpy = vi.spyOn(sqliteIntegrity, "assertSqliteIntegrity");
     const claimSpy = vi.spyOn(agentDatabaseLeases, "claimOpenClawAgentDatabaseLease");
     const releaseSpy = vi.spyOn(agentDatabaseLeases, "releaseOpenClawAgentDatabaseLease");
     const walSpy = vi.spyOn(sqliteWal, "configureSqliteConnectionPragmas");

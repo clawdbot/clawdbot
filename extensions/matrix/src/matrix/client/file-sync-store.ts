@@ -257,6 +257,7 @@ function createNoopMatrixSyncCacheStore(): PluginStateSyncKeyedStore<MatrixSyncC
     register: () => {},
     registerIfAbsent: () => false,
     lookup: () => undefined,
+    lookupMany: (keys) => keys.map(() => ({ ok: true, value: undefined })),
     consume: () => undefined,
     delete: () => false,
     entries: () => [],

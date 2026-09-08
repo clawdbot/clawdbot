@@ -1,5 +1,4 @@
 // Migrate Claude plugin module implements memory behavior.
-import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -11,6 +10,7 @@ import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import {
   CLAUDE_AUTO_MEMORY_MAX_FILES,
   CLAUDE_AUTO_MEMORY_MAX_SCAN_ENTRIES,
+  readMemoryDir,
   type ClaudeSource,
 } from "./source.js";
 import type { PlannedTargets } from "./targets.js";
@@ -57,16 +57,6 @@ async function addInstructionItem(params: {
       details: { sourceLabel: params.sourceLabel },
     }),
   );
-}
-
-async function readMemoryDir(dir: string): Promise<Dirent[]> {
-  try {
-    return await fs.readdir(dir, { withFileTypes: true });
-  } catch (error) {
-    throw new Error(`Unable to read Claude Code auto-memory directory: ${dir}`, {
-      cause: error,
-    });
-  }
 }
 
 type MarkdownFileScan = {

@@ -113,10 +113,16 @@ suite.define(() => {
         const stop = page.locator(".chat-pane__placement-reclaim");
         await stop.waitFor({ state: "visible" });
         const menuText = (await stop.textContent())?.trim();
-        await captureDeviceRuntimeUiProof(suite, page, "device-startup-menu.png");
+        await captureDeviceRuntimeUiProof(suite, page, "device-startup-menu.png", {
+          surface: page.locator('.chat-pane__placement-menu [part="menu"]'),
+          content: [stop],
+        });
         await stop.click();
         const dialog = await waitForConfirmModal(page);
-        await captureDeviceRuntimeUiProof(suite, page, "device-startup-confirmation.png");
+        await captureDeviceRuntimeUiProof(suite, page, "device-startup-confirmation.png", {
+          surface: dialog.locator("dialog"),
+          content: [dialog.getByRole("button", { name: "Cancel", exact: true })],
+        });
         // Both baseline captures must exist before the labeling regression fails.
         expect(menuText).toBe("Stop device worker…");
         expect(await dialog.textContent()).toContain(

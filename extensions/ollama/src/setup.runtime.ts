@@ -30,6 +30,7 @@ import { readProviderBaseUrl } from "./provider-base-url.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
   buildOllamaProvider,
+  capLocalOllamaProviderContext,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
   isOllamaCloudModel,
@@ -217,12 +218,12 @@ function applyOllamaProviderConfig(
       mode: cfg.models?.mode ?? "merge",
       providers: {
         ...cfg.models?.providers,
-        ollama: {
+        ollama: capLocalOllamaProviderContext({
           baseUrl,
           api: "ollama",
           apiKey,
           models: buildOllamaModelsConfig(modelNames, discoveredModelsByName, defaultModels),
-        },
+        }),
       },
     },
   };

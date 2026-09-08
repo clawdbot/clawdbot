@@ -16,7 +16,6 @@ scripts/lib/merge-head-diff-base.mjs
 scripts/lib/numeric-options.mjs
 scripts/lib/record-shared.mjs
 scripts/lib/repo-root.mjs
-scripts/lib/test-projects-delegation.mts
 scripts/lib/test-selector-source-facts.mts
 scripts/lib/vitest-build-prerequisites.mts
 scripts/lib/vitest-cli-mode.mts
@@ -26,11 +25,11 @@ scripts/lib/vitest-local-scheduling.mts
 scripts/lib/vitest-process-env.mts
 scripts/lib/vitest-process.mts
 scripts/lib/vitest-resource-ownership.mts
+scripts/lib/vitest-runtime-selection.mts
 scripts/lib/vitest-shard-metadata.mts
 scripts/lib/vitest-unhandled-errors.mts
 scripts/lib/vitest-worker-artifacts.mts
 scripts/lib/vitest-worker-run.mts
-scripts/lib/windows-cmd-helpers-runtime.mts
 scripts/lib/windows-taskkill.mjs
 scripts/pnpm-runner.mts
 scripts/run-vitest.mts

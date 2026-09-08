@@ -2,7 +2,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import {
   resolveMergedModelProviderConfig,
-  resolveModelProviderRouteOverridePresence,
+  createModelProviderRouteOverrideResolver,
 } from "../../config/model-provider-config.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
@@ -62,11 +62,10 @@ export function createAgentHarnessCatalogEvaluator(
       Object.values(params.config.auth?.profiles ?? {}).some(
         (profile) => normalizeProviderId(profile.provider) === provider,
       ) ||
-      resolveModelProviderRouteOverridePresence({
+      createModelProviderRouteOverrideResolver({
         authoredConfig: params.config,
         provider,
-        modelId: entry.id,
-      }) === "present" ||
+      })(entry.id) === "present" ||
       hasAuthoredProviderRequestParams({
         config: params.config,
         provider,

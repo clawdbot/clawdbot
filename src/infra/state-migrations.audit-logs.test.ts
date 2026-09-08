@@ -242,7 +242,7 @@ describe("legacy core audit log migration", () => {
 
       expect(result.warnings.join("\n")).toContain("no longer matches its restore journal target");
       await expect(fs.readFile(raw, "utf8")).resolves.toBe(replacementContent);
-      await expect(fs.access(restore)).resolves.toBeUndefined();
+      await fs.access(restore);
     });
   });
 
@@ -258,7 +258,7 @@ describe("legacy core audit log migration", () => {
 
       expect(result.warnings).toEqual([]);
       await expect(fs.access(claim)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.access(raw)).resolves.toBeUndefined();
+      await fs.access(raw);
       expect(audit.systemEntries()).toHaveLength(1);
 
       const tenthRawArchive = `${source}.migrated.10.raw`;
@@ -387,7 +387,7 @@ describe("legacy core audit log migration", () => {
       const result = await audit.migrate();
 
       expect(result.warnings).toEqual([]);
-      await expect(fs.access(raw)).resolves.toBeUndefined();
+      await fs.access(raw);
       await expect(fs.access(`${source}.migrated.2.raw`)).rejects.toMatchObject({
         code: "ENOENT",
       });
@@ -410,7 +410,7 @@ describe("legacy core audit log migration", () => {
       expect(repeated.warnings).toEqual([]);
       expect(repeated.changes.join("\n")).toContain("1 new row");
       await expect(fs.readFile(sanitized, "utf8")).resolves.toBe(firstSanitized);
-      await expect(fs.access(`${source}.migrated.2.raw`)).resolves.toBeUndefined();
+      await fs.access(`${source}.migrated.2.raw`);
       expect(audit.systemEntries()).toHaveLength(2);
     });
   });
@@ -441,7 +441,7 @@ describe("legacy core audit log migration", () => {
       const resumed = await audit.migrate(detected);
 
       expect(resumed.warnings).toEqual([]);
-      await expect(fs.access(`${source}.migrated.2.raw`)).resolves.toBeUndefined();
+      await fs.access(`${source}.migrated.2.raw`);
       expect(audit.systemEntries()).toHaveLength(2);
     });
   });
@@ -454,7 +454,7 @@ describe("legacy core audit log migration", () => {
 
       const result = await audit.migrate(detected);
       expect(result.warnings.join("\n")).toContain("Failed reading system-agent audit log");
-      await expect(fs.access(source)).resolves.toBeUndefined();
+      await fs.access(source);
       expect(audit.systemEntries()).toEqual([]);
     });
   });
@@ -469,7 +469,7 @@ describe("legacy core audit log migration", () => {
 
       expect(blocked.changes).toEqual([]);
       expect(blocked.warnings.join("\n")).toContain("Failed reading system-agent audit log");
-      await expect(fs.access(source)).resolves.toBeUndefined();
+      await fs.access(source);
       expect(audit.systemEntries()).toEqual([]);
 
       await audit.writeJsonLines(raw, [systemAuditEvent("repaired older generation")]);
@@ -503,7 +503,7 @@ describe("legacy core audit log migration", () => {
       const recovered = await audit.migrate();
       expect(recovered.warnings).toEqual([]);
       await expect(fs.access(source)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.access(raw)).resolves.toBeUndefined();
+      await fs.access(raw);
     });
   });
 
@@ -530,7 +530,7 @@ describe("legacy core audit log migration", () => {
       }
 
       expect(result.warnings.join("\n")).toContain("exclusive state ownership is unavailable");
-      await expect(fs.access(source)).resolves.toBeUndefined();
+      await fs.access(source);
       expect(audit.systemEntries()).toEqual([]);
     });
   });

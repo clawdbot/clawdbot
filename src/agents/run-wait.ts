@@ -1,3 +1,7 @@
+import {
+  normalizeAgentRunTimeoutPhase,
+  normalizeProviderStarted,
+} from "@openclaw/normalization-core/agent-run-terminal-outcome";
 /**
  * Gateway-backed agent run wait helpers.
  * Normalizes run wait responses, reads the latest assistant reply, and drains
@@ -25,10 +29,6 @@ import {
 } from "./agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReceipt } from "./agent-run-terminal-receipt.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
-import {
-  normalizeAgentRunTimeoutPhase,
-  normalizeProviderStarted,
-} from "./run-timeout-attribution.js";
 import type { AgentWaitResult } from "./run-wait.types.js";
 import { extractStoredAssistantText, stripToolMessages } from "./tools/chat-history-text.js";
 

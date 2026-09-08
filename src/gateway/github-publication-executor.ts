@@ -7,9 +7,7 @@ import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-id
 import { resolveControlUiSessionUrl } from "../config/control-ui-link-base.js";
 import {
   currentGitHubPublicationConfig,
-  matchesCurrentGitHubPublicationIdentity,
-  prepareCurrentGitHubPublicationIdentity,
-  resolveGitHubPublicationWorktreeOwner,
+  resolveLocalGitHubPublicationWorktreeOwner,
 } from "./github-publication-availability.js";
 import {
   githubPublicationBaseFetchArgs,
@@ -18,6 +16,10 @@ import {
   githubPublicationBranchCreationArgs,
   parseGitHubPublicationBaseRef,
 } from "./github-publication-base.js";
+import {
+  createGitHubPublicationExecutionIdentity,
+  GitHubPublicationAuthorityLostError,
+} from "./github-publication-execution-identity.js";
 import {
   GitHubPublicationKnownFailure,
   GitHubPublicationWorkspaceChangedError,
@@ -42,23 +44,16 @@ import {
 } from "./github-publication-git-transport.js";
 import {
   githubPublicationCreatePullRequestArgs,
-  githubPublicationPullRequestLookupArgs,
-  parseGitHubPublicationPullRequests,
-  resolveGitHubPublicationPullRequest,
+  findGitHubPublicationPullRequest,
 } from "./github-publication-pull-requests.js";
 import { recoverGitHubPublicationWorkspace } from "./github-publication-recovery.js";
-import {
-  matchesGitHubPublicationIdentityRow,
-  type GitHubPublicationExecutionRow,
-} from "./github-publication-store.js";
+import type { GitHubPublicationExecutionRow } from "./github-publication-store.js";
 import { prepareGitHubPublicationTarget } from "./github-publication-target.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 
 const PUBLICATION_MARKER = "OpenClaw-Publication";
 
 type PublicationRow = GitHubPublicationExecutionRow;
-
-class GitHubPublicationAuthorityLostError extends Error {}
 
 function parseJsonObject(value: string, label: string): Record<string, unknown> {
   let parsed: unknown;
@@ -109,38 +104,17 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
   if (initial.status === "published" || initial.status === "failed") {
     return params.projectResult(initial);
   }
-  let activeIdentity: PreparedGitHubPublicationIdentity | undefined;
   let effectPending = false;
-  const currentWorktree = () =>
-    resolveGitHubPublicationWorktreeOwner({
-      sessionId: initial.session_id,
-      sessionKey: initial.session_key,
-      agentId: initial.agent_id,
-      expected: {
-        worktreeId: initial.worktree_id,
-        repositoryFingerprint: initial.repository_fingerprint,
-        branch: initial.branch,
+  const currentWorktree = () => resolveLocalGitHubPublicationWorktreeOwner(initial);
+  const { assertCurrent: assertAuthority, refreshIdentity } =
+    createGitHubPublicationExecutionIdentity({
+      row: initial,
+      identity: params.identity,
+      validateAuthority: params.validateAuthority,
+      assertWorkspace: () => {
+        currentWorktree();
       },
     });
-  const assertAuthority = () => {
-    if (!params.validateAuthority()) {
-      throw new GitHubPublicationAuthorityLostError(
-        "GitHub publication session authority changed.",
-      );
-    }
-    currentWorktree();
-    if (
-      activeIdentity &&
-      !(params.identity
-        ? params.identity.isCurrent(activeIdentity)
-        : matchesCurrentGitHubPublicationIdentity({
-            agentId: initial.agent_id,
-            identity: activeIdentity,
-          }))
-    ) {
-      throw new Error("GitHub publication identity changed.");
-    }
-  };
   const { step, run, require: command } = createGitHubPublicationCommandRunner(assertAuthority);
   try {
     const { loaded, worktree } = currentWorktree();
@@ -188,18 +162,6 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     let headCommit = await command(["git", "rev-parse", "--verify", "HEAD^{commit}"], {
       cwd: worktree.path,
     });
-    const refreshIdentity = async (): Promise<PreparedGitHubPublicationIdentity> => {
-      const identity = await step(
-        () =>
-          params.identity?.prepare() ?? prepareCurrentGitHubPublicationIdentity(initial.agent_id),
-      );
-      if (!matchesGitHubPublicationIdentityRow(initial, identity)) {
-        throw new Error("GitHub publication identity changed.");
-      }
-      activeIdentity = identity;
-      assertAuthority();
-      return identity;
-    };
     let identity = await refreshIdentity();
     const { pushRepository, repository, branch, baseBranch, pushOwner } =
       await prepareGitHubPublicationTarget({ worktree, identity, assertCurrent: assertAuthority });
@@ -265,59 +227,21 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     }
     const marker = `${PUBLICATION_MARKER}: ${row.request_id}`;
     const pullRequestMarker = `<!-- openclaw-publication:${row.request_id} -->`;
-    const findPullRequest = async (): Promise<string | undefined> => {
-      const lookupIdentity = await refreshIdentity();
-      const raw = await requireCommand(
-        githubPublicationPullRequestLookupArgs({
-          repository,
-          owner: pushOwner,
-          branch,
-          baseBranch,
-        }),
-        { env: lookupIdentity.env },
-      );
-      const candidates = parseGitHubPublicationPullRequests(raw);
-      const found = resolveGitHubPublicationPullRequest(candidates, {
-        accountId: lookupIdentity.account.accountId,
-        headCommit,
+    const findPullRequest = () =>
+      findGitHubPublicationPullRequest({
+        repository,
+        pushOwner,
         branch,
         baseBranch,
+        headCommit,
         marker: pullRequestMarker,
+        refreshIdentity,
+        recordObserved: (url) => {
+          params.recordEffect?.("pull_request", { url });
+          effectPending = false;
+        },
+        assertCurrent: assertAuthority,
       });
-      if (found) {
-        // Preserve the authenticated observation even if the action was revoked while awaiting it.
-        params.recordEffect?.("pull_request", { url: found.url });
-        effectPending = false;
-        assertAuthority();
-        if (found.state === "closed") {
-          throw new GitHubPublicationKnownFailure(
-            "GitHub pull request was closed before publication completed.",
-            {
-              code: "github_rejected",
-              nextAction:
-                "Reopen the closed pull request or retry to create a new publication request.",
-            },
-          );
-        }
-      }
-      const occupiedPullRequest = candidates.find(
-        (candidate) =>
-          candidate.state === "open" &&
-          candidate.headRef === branch &&
-          candidate.baseRef === baseBranch,
-      );
-      if (occupiedPullRequest && occupiedPullRequest.userId !== lookupIdentity.account.accountId) {
-        throw new GitHubPublicationKnownFailure(
-          "GitHub pull request is owned by another account.",
-          {
-            code: "github_rejected",
-            nextAction: "Check pull-request permission for the effective account, then retry.",
-          },
-        );
-      }
-
-      return found?.url;
-    };
     const currentMessage = await command(["git", "show", "-s", "--format=%B", "HEAD"], {
       cwd: worktree.path,
     });

@@ -298,7 +298,13 @@ suite.define(() => {
       await page.getByRole("checkbox", { name: `Select session: ${key}` }).check();
       await page.locator(".data-table-bulk-bar").getByRole("button", { name: "Delete" }).click();
       const confirmModal = await waitForConfirmModal(page);
-      await captureUiProof(suite, page, "sessions-bulk-delete-original-confirm.png");
+      await captureUiProof(
+        suite,
+        page,
+        "sessions-bulk-delete-original-confirm.png",
+        confirmModal.locator("dialog"),
+        [confirmModal.getByRole("button", { name: "Delete", exact: true })],
+      );
 
       await gateway.setSessionsListResponse(sessionsListResponse([replacement]));
       await gateway.emitGatewayEvent("sessions.changed", {
@@ -373,7 +379,13 @@ suite.define(() => {
         .click();
 
       const confirmModal = await waitForConfirmModal(page);
-      await captureUiProof(suite, page, "sidebar-delete-session-confirm.png");
+      await captureUiProof(
+        suite,
+        page,
+        "sidebar-delete-session-confirm.png",
+        confirmModal.locator("dialog"),
+        [confirmModal.getByRole("button", { name: "Delete", exact: true })],
+      );
       await gateway.deferNext("sessions.delete");
       await confirmModal.getByRole("button", { name: "Delete", exact: true }).evaluate((button) => {
         if (!(button instanceof HTMLButtonElement)) {
@@ -465,7 +477,13 @@ suite.define(() => {
         .poll(() => worktreeModal.textContent())
         .toContain("OpenClaw could not create a safety snapshot");
       await expect.poll(() => worktreeModal.textContent()).toContain("Remove?");
-      await captureUiProof(suite, page, "sidebar-delete-preserved-snapshot-failed.png");
+      await captureUiProof(
+        suite,
+        page,
+        "sidebar-delete-preserved-snapshot-failed.png",
+        worktreeModal.locator("dialog"),
+        [worktreeModal.getByRole("button", { name: "Cancel", exact: true })],
+      );
       await worktreeModal.getByRole("button", { name: "Cancel", exact: true }).click();
       expect(await gateway.getRequests("worktrees.remove")).toHaveLength(0);
     } finally {

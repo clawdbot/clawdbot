@@ -68,3 +68,4 @@ Usually. Oh dear.
 
 - [SOUL.md template](/reference/templates/SOUL)
 - [SOUL.md personality guide](/concepts/soul)
+- [Lore](/start/lore) - who Clawd and Peter are

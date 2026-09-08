@@ -66,7 +66,12 @@ describe("Gateway node worker bundle installer", () => {
       transfer,
     });
     let settled = false;
-    const pending = ensure({ deviceId: node.nodeId, artifact, signal: controller.signal })
+    const pending = ensure({
+      deviceId: node.nodeId,
+      artifact,
+      prewarm: true,
+      signal: controller.signal,
+    })
       .catch((error: unknown) => error)
       .finally(() => {
         settled = true;
@@ -111,9 +116,11 @@ describe("Gateway node worker bundle installer", () => {
       transfer,
     });
 
-    await expect(ensure({ deviceId: node.nodeId, artifact })).resolves.toMatchObject({
-      bundleHash: artifact.bundleHash,
-    });
+    await expect(ensure({ deviceId: node.nodeId, artifact, prewarm: true })).resolves.toMatchObject(
+      {
+        bundleHash: artifact.bundleHash,
+      },
+    );
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({
         node,
@@ -151,7 +158,7 @@ describe("Gateway node worker bundle installer", () => {
       transfer,
     });
 
-    await expect(ensure({ deviceId: node.nodeId, artifact })).rejects.toThrow(
+    await expect(ensure({ deviceId: node.nodeId, artifact, prewarm: true })).rejects.toThrow(
       "mismatched build receipt",
     );
   });
@@ -178,10 +185,14 @@ describe("Gateway node worker bundle installer", () => {
       transfer,
     });
 
-    await expect(ensure({ deviceId: advertising.nodeId, artifact })).resolves.toMatchObject({
+    await expect(
+      ensure({ deviceId: advertising.nodeId, artifact, prewarm: true }),
+    ).resolves.toMatchObject({
       bundleHash: artifact.bundleHash,
     });
-    await expect(ensure({ deviceId: legacy.nodeId, artifact })).resolves.toMatchObject({
+    await expect(
+      ensure({ deviceId: legacy.nodeId, artifact, prewarm: true }),
+    ).resolves.toMatchObject({
       bundleHash: artifact.bundleHash,
     });
 

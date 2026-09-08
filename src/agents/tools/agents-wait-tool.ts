@@ -25,7 +25,6 @@ const AgentsWaitToolSchema = Type.Object({
 });
 
 type WaitError = { runId: string; error: "not_found" | "not_owner" };
-type WaitTarget = { runId: string; entry: SubagentRunRecord };
 
 function ownsRun(
   entry: SubagentRunRecord,
@@ -152,36 +151,30 @@ export async function waitForCollectorCompletion(params: {
   });
 }
 
-function resolveWaitTargets(
+function readWaitState(
   ids: readonly string[],
   currentSessionKeys: ReadonlySet<string>,
   currentAgentId?: string,
   config?: OpenClawConfig,
 ) {
-  const targets: WaitTarget[] = [];
   const errors: WaitError[] = [];
-  const snapshot = getSubagentRunsByRunIds(ids);
-  for (const runId of ids) {
-    const entry = snapshot.entries.get(runId);
-    if (!entry?.collect) {
-      errors.push({ runId, error: "not_found" });
-    } else if (!ownsRun(entry, currentSessionKeys, currentAgentId, config)) {
-      errors.push({ runId, error: "not_owner" });
-    } else {
-      targets.push({ runId, entry });
-    }
-  }
-  return { targets, errors };
-}
-
-function readResolvedWaitState(targets: readonly WaitTarget[], errors: readonly WaitError[]) {
   const completed: Array<{
     result: NonNullable<ReturnType<typeof completionResult>>;
     completedAt: number;
     inputIndex: number;
   }> = [];
   const pending: string[] = [];
-  for (const [inputIndex, { runId, entry }] of targets.entries()) {
+  const snapshot = getSubagentRunsByRunIds(ids);
+  for (const [inputIndex, runId] of ids.entries()) {
+    const entry = snapshot.entries.get(runId);
+    if (!entry?.collect) {
+      errors.push({ runId, error: "not_found" });
+      continue;
+    }
+    if (!ownsRun(entry, currentSessionKeys, currentAgentId, config)) {
+      errors.push({ runId, error: "not_owner" });
+      continue;
+    }
     const result = completionResult(entry);
     if (result) {
       completed.push({
@@ -202,16 +195,6 @@ function readResolvedWaitState(targets: readonly WaitTarget[], errors: readonly 
     pending,
     ...(errors.length > 0 ? { errors } : {}),
   };
-}
-
-function readWaitState(
-  ids: readonly string[],
-  currentSessionKeys: ReadonlySet<string>,
-  currentAgentId?: string,
-  config?: OpenClawConfig,
-) {
-  const resolved = resolveWaitTargets(ids, currentSessionKeys, currentAgentId, config);
-  return readResolvedWaitState(resolved.targets, resolved.errors);
 }
 
 async function waitForCollector(params: {

@@ -7,7 +7,7 @@ const hoisted = vi.hoisted(() => ({
 vi.mock("./credential-normalize.js", () => ({
   normalizeAuthProfileCredential: (credential: unknown) => credential,
 }));
-vi.mock("./store.js", () => ({
+vi.mock("./store-runtime.js", () => ({
   updateAuthProfileStoreWithLock: hoisted.updateAuthProfileStoreWithLock,
 }));
 

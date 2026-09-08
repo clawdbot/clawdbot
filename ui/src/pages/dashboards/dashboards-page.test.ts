@@ -84,7 +84,10 @@ describe("DashboardsPage", () => {
     const selectionState = { selectedId: "main", scopeId: null as string | null };
     const context = {
       basePath: "",
-      gateway: { snapshot: { client: {}, phase: "connected", hello: null } },
+      gateway: {
+        snapshot: { client: {}, phase: "connected", hello: null },
+        subscribe: () => () => undefined,
+      },
       sessions: {
         listSnapshot(query: SessionListOptions) {
           return snapshots.get(queryKey(query))!;
@@ -194,7 +197,10 @@ describe("DashboardsPage", () => {
     const list = vi.fn(async () => second);
     const context = {
       basePath: "",
-      gateway: { snapshot: { client: {}, phase: "connected", hello: null } },
+      gateway: {
+        snapshot: { client: {}, phase: "connected", hello: null },
+        subscribe: () => () => undefined,
+      },
       sessions: {
         list,
         listSnapshot: () => snapshot,
@@ -266,6 +272,7 @@ describe("DashboardsPage", () => {
     await element.updateComplete;
 
     expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(3);
+    expect(element.querySelector(".dashboard-preview")?.hasAttribute("inert")).toBe(true);
 
     const search = element.querySelector<HTMLInputElement>('input[type="search"]');
     expect(search).not.toBeNull();

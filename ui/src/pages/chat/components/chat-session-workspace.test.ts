@@ -371,6 +371,65 @@ describe("session workspace artifacts", () => {
     return { handleOpenSidebar, request, state };
   }
 
+  it("keeps nested code literal in a decoded text artifact preview", async () => {
+    const source = [
+      "Résumé 東京 🦀",
+      "",
+      "```ts",
+      "const x = 1;",
+      "```",
+      "",
+      "**literal after**",
+    ].join("\n");
+    const { handleOpenSidebar, state } = createArtifactHost({
+      data: btoa(String.fromCharCode(...new TextEncoder().encode(source))),
+      mimeType: "text/markdown",
+      title: "Source notes",
+    });
+    createSessionWorkspaceProps(state).onOpenArtifact("artifact-1");
+    const content = await loadedSidebarContent(handleOpenSidebar);
+    expect(content).toMatchObject({ kind: "markdown", rawText: source });
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: SidebarContent;
+      updateComplete: Promise<unknown>;
+    };
+    panel.content = content;
+    document.body.append(panel);
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const schedule = vi.spyOn(globalThis, "setTimeout");
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    try {
+      await panel.updateComplete;
+      const reader = panel.querySelector(".sidebar-markdown-reader");
+      expect(reader?.querySelector("h1")?.textContent).toBe("Source notes");
+      expect.soft(reader?.querySelectorAll("pre code")).toHaveLength(1);
+      expect.soft(reader?.querySelector("pre code")?.textContent).toBe(`${source}\n`);
+      expect.soft(reader?.querySelector("strong")).toBeNull();
+      const copyButton = reader?.querySelector<HTMLButtonElement>(".code-block-copy");
+      expect(copyButton).toBeInstanceOf(HTMLButtonElement);
+      copyButton!.click();
+      await vi.waitFor(() => expect(copyButton!.getAttribute("aria-label")).toBe("Copied!"));
+      expect(writeText).toHaveBeenCalledWith(source);
+    } finally {
+      for (const [index, [, delay]] of schedule.mock.calls.entries()) {
+        if (delay === 1_500) {
+          globalThis.clearTimeout(schedule.mock.results[index]?.value);
+        }
+      }
+      schedule.mockRestore();
+      if (originalClipboard) {
+        Object.defineProperty(navigator, "clipboard", originalClipboard);
+      } else {
+        Reflect.deleteProperty(navigator, "clipboard");
+      }
+      panel.remove();
+    }
+  });
+
   it.each([
     {
       content: "Résumé 東京 🦀",

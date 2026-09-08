@@ -250,13 +250,13 @@ async function discoverOpenAICompatibleModelRows(
     const probeRows = rows
       .filter(({ model }) => shouldProbeRuntimeProps(model))
       .slice(0, SELF_HOSTED_RUNTIME_CONTEXT_MAX_MODELS);
-    const deadline = Date.now() + timeoutMs;
+    const deadline = performance.now() + timeoutMs;
     await runTasksWithConcurrency({
       limit: SELF_HOSTED_RUNTIME_CONTEXT_CONCURRENCY,
       errorMode: "stop",
       throwOnError: true,
       tasks: probeRows.map((row) => async () => {
-        const remainingMs = deadline - Date.now();
+        const remainingMs = deadline - performance.now();
         if (remainingMs <= 0) {
           return;
         }

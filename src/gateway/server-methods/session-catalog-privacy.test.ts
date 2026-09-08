@@ -256,14 +256,38 @@ describe("catalog delivery uses current canonical privacy", () => {
   it("does not transfer a cached native thread to a replacement session at the same key", async () => {
     await withCatalog(async ({ call, changeForeign, replaceForeign, list }) => {
       await changeForeign({ visibility: "draft" });
-      expect(rows(await call())).toEqual(["owned"]);
-      await replaceForeign();
-      expect.soft(rows(await call())).toEqual(["owned"]);
-      expect(list).toHaveBeenCalledOnce();
-      expect(rows(await call("sessions.catalog.list", { search: "cold-replacement" }))).toEqual([
-        "owned",
-      ]);
-      expect(list).toHaveBeenCalledTimes(2);
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now");
+      try {
+        // Cache observations use logical time; real deletion/recreation keeps native timers.
+        await clock.withImplementation(
+          () => now,
+          async () => {
+            expect(rows(await call())).toEqual(["owned"]);
+          },
+        );
+        await replaceForeign();
+        await clock.withImplementation(
+          () => now + 1,
+          async () => {
+            expect.soft(rows(await call())).toEqual(["owned"]);
+            expect(list).toHaveBeenCalledOnce();
+            expect(
+              rows(await call("sessions.catalog.list", { search: "cold-replacement" })),
+            ).toEqual(["owned"]);
+            expect(list).toHaveBeenCalledTimes(2);
+          },
+        );
+        await clock.withImplementation(
+          () => now + 3_001,
+          async () => {
+            expect(rows(await call())).toEqual(["owned"]);
+            expect(list).toHaveBeenCalledTimes(3);
+          },
+        );
+      } finally {
+        clock.mockRestore();
+      }
     });
   });
 
@@ -279,15 +303,28 @@ describe("catalog delivery uses current canonical privacy", () => {
     });
   });
 
-  it.each([true, false])(
-    "retains the original adoption across replacement before publication (prefetch=%s)",
-    async (prefetch) =>
+  it.each([
+    { prefetch: true, late: false },
+    { prefetch: false, late: false },
+    { prefetch: true, late: true },
+  ])(
+    "retains the original adoption across replacement (prefetch=$prefetch, late=$late)",
+    async ({ prefetch, late }) =>
       withCatalog(async ({ call, changeForeign, replaceForeign, enumerate, list, owner }) => {
         await changeForeign({ visibility: "draft" });
         const entered = createDeferredCore();
         const release = createDeferredCore();
         let observed: SessionCatalogHost | undefined;
-        list.mockImplementation(async ({ sessionEntries, onHost }) => {
+        let publication: Promise<void> | undefined;
+        list.mockImplementation(async ({ sessionEntries, onHost, waitUntil }) => {
+          if (late) {
+            const prepared = enumerate(sessionEntries);
+            observed = prepared;
+            publication = release.promise.then(() => onHost?.(prepared));
+            waitUntil?.(publication);
+            entered.resolve();
+            return [];
+          }
           if (prefetch) {
             observed = enumerate(sessionEntries);
           }
@@ -304,24 +341,36 @@ describe("catalog delivery uses current canonical privacy", () => {
           owner,
           broadcast,
         );
-        await entered.promise;
-        await replaceForeign();
-        release.resolve();
-        const result = await pending;
-        // The provider's request snapshot keeps the original adoption even when first read
-        // after its await; publication must reject that now-replaced instance independently.
-        expect
-          .soft(observed?.sessions.find((session) => session.threadId === "foreign")?.sessionKey)
-          .toBe("agent:main:foreign");
-        expect.soft(rows(result)).toEqual(["owned"]);
-        expect(broadcast).toHaveBeenCalledOnce();
-        expect
-          .soft(
-            broadcast.mock.calls[0]?.[1]?.catalog.hosts[0]?.sessions.map(
-              (session: { threadId: string }) => session.threadId,
-            ),
-          )
-          .toEqual(["owned"]);
+        try {
+          await entered.promise;
+          if (late) {
+            const initial = await pending;
+            expect(initial.mock.calls[0]?.[1]?.catalogs[0]?.hosts).toEqual([]);
+          }
+          await replaceForeign();
+          release.resolve();
+          const result = await pending;
+          await publication;
+          // The provider's request snapshot keeps the original adoption even when first read
+          // after its await; publication must reject that now-replaced instance independently.
+          expect
+            .soft(observed?.sessions.find((session) => session.threadId === "foreign")?.sessionKey)
+            .toBe("agent:main:foreign");
+          if (!late) {
+            expect.soft(rows(result)).toEqual(["owned"]);
+          }
+          expect(broadcast).toHaveBeenCalledOnce();
+          expect
+            .soft(
+              broadcast.mock.calls[0]?.[1]?.catalog.hosts[0]?.sessions.map(
+                (session: { threadId: string }) => session.threadId,
+              ),
+            )
+            .toEqual(["owned"]);
+        } finally {
+          release.resolve();
+          await Promise.allSettled([pending, publication]);
+        }
       }),
   );
 

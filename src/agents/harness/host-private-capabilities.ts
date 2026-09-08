@@ -82,6 +82,31 @@ export function captureAgentQuestionAnswerAuthority(
   return authority;
 }
 
+type RetainedBeforeToolCallRunner = Readonly<{
+  assertActive: () => void;
+  release: () => void;
+  runBeforeToolCall: AgentHarnessHostCapabilities["runBeforeToolCall"];
+}>;
+
+const retainedBeforeToolCallRunners = new WeakMap<
+  AgentHarnessHostCapabilities["runBeforeToolCall"],
+  () => RetainedBeforeToolCallRunner | undefined
+>();
+
+/** Retain issued policy without importing the capability constructor and its tool graph. */
+export function retainBeforeToolCallForNativeHookRelay(
+  runBeforeToolCall: AgentHarnessHostCapabilities["runBeforeToolCall"],
+): RetainedBeforeToolCallRunner | undefined {
+  return retainedBeforeToolCallRunners.get(runBeforeToolCall)?.();
+}
+
+export function registerAgentHarnessBeforeToolCallRetention(
+  runBeforeToolCall: AgentHarnessHostCapabilities["runBeforeToolCall"],
+  retain: () => RetainedBeforeToolCallRunner | undefined,
+): void {
+  retainedBeforeToolCallRunners.set(runBeforeToolCall, retain);
+}
+
 const scheduledToolProjectionCapabilities = new WeakMap<
   AgentHarnessHostCapabilities,
   Readonly<{

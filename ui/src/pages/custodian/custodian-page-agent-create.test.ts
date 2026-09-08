@@ -7,6 +7,7 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import * as uuid from "../../lib/uuid.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { CustodianSessionStore } from "./custodian-session-store.ts";
@@ -96,7 +97,7 @@ async function mountPage(context: ApplicationContext): Promise<TestCustodianPage
 
 describe("custodian new-agent flow", () => {
   beforeEach(() => {
-    vi.spyOn(crypto, "randomUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
+    vi.spyOn(uuid, "generateUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
   });
 
   afterEach(() => {

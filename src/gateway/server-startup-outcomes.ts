@@ -1,7 +1,7 @@
 // Fixed-vocabulary Gateway startup outcomes keep normal boot logs useful
 // without exposing configuration values, paths, or startup errors.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { hasConfiguredInternalHooks } from "../hooks/configured.js";
+import { resolveInternalHookSelection } from "../hooks/configured.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 
 const GATEWAY_STARTUP_SUBSYSTEMS = [
@@ -19,6 +19,7 @@ type GatewayStartupSkippedReason =
   | "no-handlers-loaded"
   | "disabled-by-environment"
   | "hooks-disabled"
+  | "superseded"
   | "no-gmail-account";
 
 type GatewayStartupOutcome =
@@ -61,7 +62,7 @@ function resolveOutcomePlan(
   const internalHooks: GatewayStartupOutcomePlan["internalHooks"] =
     params.cfg.hooks?.internal?.enabled === false
       ? "hooks-disabled"
-      : hasConfiguredInternalHooks(params.cfg)
+      : resolveInternalHookSelection(params.cfg).configured
         ? "configured"
         : "not-configured";
   const gmailWatcher: GatewayStartupOutcomePlan["gmailWatcher"] = !params.cfg.hooks?.enabled

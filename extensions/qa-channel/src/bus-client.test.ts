@@ -1,5 +1,6 @@
 // Qa Channel tests cover bus client plugin behavior.
 import { createServer, type Server } from "node:http";
+import type { Socket } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildQaTarget,
@@ -41,27 +42,20 @@ async function startJsonServer(
     res.end(response.body);
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
-
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("test server failed to bind");
-  }
+  const { port, stop } = await listenLoopbackServer(server);
 
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
-    async stop() {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    },
+    baseUrl: `http://127.0.0.1:${port}`,
+    stop,
   };
 }
 
-async function listenLoopbackServer(server: Server): Promise<number> {
+async function listenLoopbackServer(server: Server) {
+  const sockets = new Set<Socket>();
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", () => {
@@ -73,7 +67,16 @@ async function listenLoopbackServer(server: Server): Promise<number> {
   if (!address || typeof address === "string") {
     throw new Error("test server failed to bind");
   }
-  return address.port;
+  return {
+    port: address.port,
+    stop: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+      }),
+  };
 }
 
 function createOversizedJsonServer(pathname: string): { server: Server; closed: Promise<number> } {
@@ -158,9 +161,12 @@ describe("qa-bus client", () => {
   const stops: Array<() => Promise<void>> = [];
 
   afterEach(async () => {
-    await Promise.all(stops.splice(0).map((stop) => stop()));
-    guardedFetchCalls.length = 0;
-    vi.restoreAllMocks();
+    try {
+      await Promise.all(stops.splice(0).map((stop) => stop()));
+    } finally {
+      guardedFetchCalls.length = 0;
+      vi.restoreAllMocks();
+    }
   });
 
   it("roundtrips explicit group targets", () => {
@@ -235,13 +241,8 @@ describe("qa-bus client", () => {
 
   it("bounds oversized poll responses and closes the stream early", async () => {
     const oversized = createOversizedJsonServer("/v1/poll");
-    const port = await listenLoopbackServer(oversized.server);
-    stops.push(async () => {
-      oversized.server.closeAllConnections?.();
-      await new Promise<void>((resolve, reject) => {
-        oversized.server.close((error) => (error ? reject(error) : resolve()));
-      });
-    });
+    const { port, stop } = await listenLoopbackServer(oversized.server);
+    stops.push(stop);
 
     await expect(
       pollQaBus({
@@ -261,26 +262,12 @@ describe("qa-bus client", () => {
       // Keep the request open so the client abort path owns the outcome.
     });
 
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => resolve());
-    });
-
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("test server failed to bind");
-    }
-
-    stops.push(async () => {
-      server.closeAllConnections?.();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    });
+    const { port, stop } = await listenLoopbackServer(server);
+    stops.push(stop);
 
     const abort = new AbortController();
     const request = pollQaBus({
-      baseUrl: `http://127.0.0.1:${address.port}`,
+      baseUrl: `http://127.0.0.1:${port}`,
       accountId: "acct-a",
       cursor: 0,
       acknowledgedCursor: 0,
@@ -302,13 +289,8 @@ describe("qa-bus client", () => {
     const server = createServer((_req, _res) => {
       // Accept the request without returning headers so the client deadline owns the outcome.
     });
-    const port = await listenLoopbackServer(server);
-    stops.push(async () => {
-      server.closeAllConnections?.();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    });
+    const { port, stop } = await listenLoopbackServer(server);
+    stops.push(stop);
 
     const realAbortSignalTimeout = AbortSignal.timeout.bind(AbortSignal);
     const timeoutSpy = vi
@@ -339,13 +321,8 @@ describe("qa-bus client", () => {
       });
       res.write('{"message":', markBodyStarted);
     });
-    const port = await listenLoopbackServer(server);
-    stops.push(async () => {
-      server.closeAllConnections?.();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    });
+    const { port, stop } = await listenLoopbackServer(server);
+    stops.push(stop);
 
     const timeout = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValueOnce(timeout.signal);
@@ -416,13 +393,8 @@ describe("qa-bus client", () => {
 
   it("bounds oversized qa-bus state responses", async () => {
     const oversized = createOversizedJsonServer("/v1/state");
-    const port = await listenLoopbackServer(oversized.server);
-    stops.push(async () => {
-      oversized.server.closeAllConnections?.();
-      await new Promise<void>((resolve, reject) => {
-        oversized.server.close((error) => (error ? reject(error) : resolve()));
-      });
-    });
+    const { port, stop } = await listenLoopbackServer(oversized.server);
+    stops.push(stop);
 
     await expect(getQaBusState(`http://127.0.0.1:${port}`)).rejects.toThrow(
       "qa-channel.bus-state: JSON response exceeds 16777216 bytes",

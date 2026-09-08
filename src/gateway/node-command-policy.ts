@@ -272,14 +272,17 @@ export function listDangerousPluginNodeCommands(): string[] {
   if (!registry) {
     return [];
   }
-  const commands = [
-    ...registry.nodeHostCommands
-      .filter((entry) => entry.command.dangerous === true)
-      .map((entry) => entry.command.command),
-    ...registry.nodeInvokePolicies
-      .filter((entry) => entry.policy.dangerous === true)
-      .flatMap((entry) => entry.policy.commands),
-  ];
+  const commands: string[] = [];
+  registry.nodeHostCommands.forEach(({ command }) => {
+    if (command.dangerous === true) {
+      commands.push(command.command);
+    }
+  });
+  registry.nodeInvokePolicies.forEach(({ policy }) => {
+    if (policy.dangerous === true) {
+      policy.commands.forEach((command) => commands.push(command));
+    }
+  });
   return normalizeUniqueStringEntries(commands);
 }
 
@@ -293,23 +296,18 @@ function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
   if (!registry) {
     return [];
   }
-  const policyCommands = registry.nodeInvokePolicies.flatMap((entry) => {
-    if (entry.policy.dangerous === true) {
-      return [];
+  const commands: string[] = [];
+  registry.nodeInvokePolicies.forEach(({ policy }) => {
+    if (policy.dangerous !== true && policy.defaultPlatforms?.includes(platformId)) {
+      policy.commands.forEach((command) => commands.push(command));
     }
-    const defaults = entry.policy.defaultPlatforms ?? [];
-    return defaults.includes(platformId) ? entry.policy.commands : [];
   });
-  const nodeHostCommands = registry.nodeHostCommands
-    .filter((entry) => {
-      if (entry.command.dangerous === true) {
-        return false;
-      }
-      const defaults = entry.command.agentTool?.defaultPlatforms ?? [];
-      return defaults.includes(platformId);
-    })
-    .map((entry) => entry.command.command);
-  return normalizeUniqueStringEntries([...policyCommands, ...nodeHostCommands]);
+  registry.nodeHostCommands.forEach(({ command: { dangerous, agentTool, command } }) => {
+    if (dangerous !== true && agentTool?.defaultPlatforms?.includes(platformId)) {
+      commands.push(command);
+    }
+  });
+  return normalizeUniqueStringEntries(commands);
 }
 
 export function isForegroundRestrictedPluginNodeCommand(command: string): boolean {

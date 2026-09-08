@@ -220,7 +220,10 @@ suite.define(() => {
           await expect.poll(() => tooltipTitleText(local)).toBe("Gateway · QA-Gateway");
         }
         await expect.poll(() => pathInput.getAttribute("placeholder")).toBe("Gateway · QA-Gateway");
-        await captureProjectUiProof(suite, page, `gateway-name-${late.replaceAll(" ", "-")}.png`);
+        await captureProjectUiProof(suite, page, `gateway-name-${late.replaceAll(" ", "-")}.png`, {
+          surface: page.locator('.new-session-page__project-popover wa-popup [part="popup"]'),
+          content: [pathInput],
+        });
 
         await page.keyboard.press("Escape");
         await replaceGatewayClient(page);
@@ -233,6 +236,10 @@ suite.define(() => {
             suite,
             page,
             `gateway-name-${late.replaceAll(" ", "-")}-final.png`,
+            {
+              surface: page.locator('.new-session-page__where-popover wa-popup [part="popup"]'),
+              content: [page.locator('.new-session-page__where-popover [data-value="gateway"]')],
+            },
           );
         } finally {
           await context.close();

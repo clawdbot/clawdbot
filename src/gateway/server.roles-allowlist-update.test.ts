@@ -28,8 +28,8 @@ const reloadFixture = vi.hoisted<{
   reconcileRuntimePolicy?: ManagedGatewayConfigReloaderParams["reconcileRuntimePolicy"];
 }>(() => ({}));
 
-vi.mock("./server-reload-handlers.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./server-reload-handlers.js")>();
+vi.mock("./server-reload-managed.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./server-reload-managed.js")>();
   return {
     ...actual,
     startManagedGatewayConfigReloader: (params: ManagedGatewayConfigReloaderParams) => {

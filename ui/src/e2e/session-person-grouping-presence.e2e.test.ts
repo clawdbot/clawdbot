@@ -169,7 +169,9 @@ suite.define(() => {
       await adaSection.locator("[data-person-card]").hover();
       const adaCard = page.getByRole("dialog", { name: "Activity for Ada" });
       await expectBrowser(adaCard).toBeVisible();
-      await captureSessionOwnerPageProof(suite, page, "person-grouping-header-card.png");
+      await captureSessionOwnerPageProof(suite, adaCard, "person-grouping-header-card.png", [
+        adaCard.getByRole("link", { name: "View activity", exact: true }),
+      ]);
       await page.mouse.move(0, 0);
       await adaCard.waitFor({ state: "detached" });
       await bobSection.locator("[data-person-card]").hover();

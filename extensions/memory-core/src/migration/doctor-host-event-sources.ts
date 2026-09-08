@@ -113,6 +113,7 @@ export async function collectLegacyMemoryHostEventSources(
       });
       for (const candidate of candidates) {
         const candidateRelativePath = path.join(directoryRelativePath, candidate.entry);
+        filePath = path.join(canonicalWorkspaceDir, candidateRelativePath);
         const stat = await workspaceRoot.stat(candidateRelativePath);
         if (!stat.isFile) {
           continue;
@@ -122,7 +123,7 @@ export async function collectLegacyMemoryHostEventSources(
         sources.push({
           kind: "ready",
           workspaceDir: canonicalWorkspaceDir,
-          filePath: path.join(canonicalWorkspaceDir, candidateRelativePath),
+          filePath,
           relativePath: candidateRelativePath,
           root: workspaceRoot,
           storage: candidate.storage,
@@ -146,7 +147,7 @@ export async function collectLegacyMemoryHostEventSources(
         kind: "rejected",
         workspaceDir: canonicalWorkspaceDir,
         filePath,
-        reason: String(error),
+        reason: `Skipped unsafe Memory Core host event source ${filePath}: ${String(error)}. Check permissions and use regular files and directories inside the workspace, then rerun openclaw doctor --fix. For shared notes, use canonical paths in memory.search.extraPaths; this does not migrate legacy events.`,
       });
     }
   }

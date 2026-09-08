@@ -61,7 +61,7 @@ function resolvePreparedMetadataSnapshot(
   return params.metadataSnapshot as PluginMetadataSnapshot | undefined;
 }
 
-function resolvePreparedProviderRuntimeHandle(
+export function resolvePreparedProviderRuntimeHandle(
   params: RuntimePlanMetadataParams,
 ): ProviderRuntimePluginHandle & { modelId: string; prepared: true } {
   if (

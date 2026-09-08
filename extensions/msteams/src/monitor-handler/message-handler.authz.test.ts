@@ -47,40 +47,10 @@ const graphThreadMockState = vi.hoisted(() => ({
 let parentMessageSequence = 0;
 let currentParentMessageId = "";
 
-vi.mock("../graph-thread.js", () => {
-  const stripHtmlFromTeamsMessage = (html: string) =>
-    html
-      .replace(/<at[^>]*>(.*?)<\/at>/gi, "@$1")
-      .replace(/<[^>]*>/g, " ")
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/&nbsp;/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-  const formatThreadContext = (messages: GraphThreadMessage[], currentMessageId?: string) => {
-    const lines: string[] = [];
-    for (const msg of messages) {
-      if (msg.id && msg.id === currentMessageId) {
-        continue;
-      }
-      const sender = msg.from?.user?.displayName ?? msg.from?.application?.displayName ?? "unknown";
-      const rawContent = msg.body?.content ?? "";
-      const content =
-        msg.body?.contentType === "html"
-          ? stripHtmlFromTeamsMessage(rawContent)
-          : rawContent.trim();
-      if (content) {
-        lines.push(`${sender}: ${content}`);
-      }
-    }
-    return lines.join("\n");
-  };
+vi.mock("../graph-thread.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../graph-thread.js")>();
   return {
-    stripHtmlFromTeamsMessage,
-    formatThreadContext,
+    ...actual,
     fetchChannelMessage: graphThreadMockState.fetchChannelMessage,
     fetchThreadReplies: graphThreadMockState.fetchThreadReplies,
     fetchChatMessageText: graphThreadMockState.fetchChatMessageText,
@@ -254,10 +224,13 @@ describe("msteams monitor handler authz", () => {
     });
   }
 
-  function createChannelThreadActivity(params?: { attachments?: TestAttachment[] }): HandlerInput {
+  function createChannelThreadActivity(params?: {
+    text?: string;
+    attachments?: TestAttachment[];
+  }): HandlerInput {
     return createMessageActivity({
       id: "current-msg",
-      text: "Current message",
+      text: params?.text ?? "Current message",
       from: {
         id: "alice-botframework-id",
         aadObjectId: "alice-aad",
@@ -898,7 +871,7 @@ describe("msteams monitor handler authz", () => {
     expect(recordFromMockCall(dispatched?.ctxPayload).CommandAuthorized).toBe(true);
   });
 
-  it("filters non-allowlisted thread messages out of BodyForAgent", async () => {
+  it("keeps allowed thread history separate from sender command text", async () => {
     mockThreadContext({
       parent: createThreadMessage({
         id: "parent-msg",
@@ -909,7 +882,7 @@ describe("msteams monitor handler authz", () => {
         createThreadMessage({
           id: "alice-reply",
           user: { id: "alice-aad", displayName: "Alice" },
-          content: "Allowed context",
+          content: "Allowed context /think high /status",
         }),
         createThreadMessage({
           id: "current-msg",
@@ -922,21 +895,32 @@ describe("msteams monitor handler authz", () => {
     const { deps } = createDeps(createThreadAllowlistConfig({ groupAllowFrom: ["alice-aad"] }));
 
     const handler = createMSTeamsMessageHandler(deps);
-    await handler(createChannelThreadActivity());
+    await handler(createChannelThreadActivity({ text: "Current /status message" }));
 
     const dispatched = firstSettledDispatch();
     const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
-    expect(ctxPayload.BodyForAgent).toBe(
-      "[Thread history]\nAlice: Allowed context\n[/Thread history]\n\nCurrent message",
-    );
+    expect(ctxPayload.BodyForAgent).toBe("Current /status message");
+    expect(ctxPayload.commandText).toBe("Current /status message");
+    expect(ctxPayload.ChannelStructuredContext).toEqual([
+      {
+        label: "Thread history",
+        source: "msteams",
+        type: "chat_window",
+        sessionTranscriptMode: "preserve",
+        payload: {
+          order: "chronological",
+          messages: [
+            {
+              message_id: "alice-reply",
+              sender: "Alice",
+              body: "Allowed context /think high /status",
+            },
+          ],
+        },
+      },
+    ]);
     expect(ctxPayload.GroupSpace).toBe("team123");
     expect(ctxPayload.NativeChannelId).toBe("graph-team-123/19:graph-channel@thread.tacv2");
-    expect(String((dispatched.ctxPayload as { BodyForAgent?: string }).BodyForAgent)).not.toContain(
-      "Mallory",
-    );
-    expect(String((dispatched.ctxPayload as { BodyForAgent?: string }).BodyForAgent)).not.toContain(
-      "<<<END_EXTERNAL_UNTRUSTED_CONTENT",
-    );
   });
 
   it("keeps thread messages when allowlist name matching applies without a sender id", async () => {
@@ -966,9 +950,26 @@ describe("msteams monitor handler authz", () => {
     await handler(createChannelThreadActivity());
 
     const dispatched = firstSettledDispatch();
-    expect(recordFromMockCall(dispatched?.ctxPayload).BodyForAgent).toBe(
-      "[Thread history]\nAlice: Allowlisted by display name\n[/Thread history]\n\nCurrent message",
-    );
+    const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
+    expect(ctxPayload.BodyForAgent).toBe("Current message");
+    expect(ctxPayload.ChannelStructuredContext).toEqual([
+      {
+        label: "Thread history",
+        source: "msteams",
+        type: "chat_window",
+        sessionTranscriptMode: "preserve",
+        payload: {
+          order: "chronological",
+          messages: [
+            {
+              message_id: "parent-msg",
+              sender: "Alice",
+              body: "Allowlisted by display name",
+            },
+          ],
+        },
+      },
+    ]);
   });
 
   it("keeps quote context when the parent sender id is allowlisted", async () => {

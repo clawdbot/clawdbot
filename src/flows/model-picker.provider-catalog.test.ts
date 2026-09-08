@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createPluginManifestRecordFixture,
+  createPluginMetadataSnapshotFixture,
+} from "../plugins/plugin-metadata.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   loadPreparedModelCatalogOwnerSnapshot: vi.fn(),
@@ -12,9 +16,14 @@ vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadPreparedModelCatalogSnapshot: mocks.loadPreparedModelCatalogSnapshot,
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
-}));
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
+  const { rebasePluginMetadataSnapshotManifestRegistry } =
+    await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
+  return {
+    rebasePluginMetadataSnapshotManifestRegistry,
+    resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
+  };
+});
 
 import { loadPreferredProviderPickerCatalog } from "./model-picker.provider-catalog.js";
 
@@ -24,13 +33,16 @@ describe("loadPreferredProviderPickerCatalog", () => {
     mocks.loadPreparedModelCatalogOwnerSnapshot.mockImplementation(() => {
       throw new Error("preferred-provider browsing must not load the full catalog owner");
     });
-    mocks.resolvePluginMetadataSnapshot.mockReturnValue({
-      manifestRegistry: { plugins: [] },
-    });
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue(createPluginMetadataSnapshotFixture());
   });
 
   it("loads only the canonical preferred provider through scoped live discovery", async () => {
     mocks.loadPreparedModelCatalogSnapshot.mockResolvedValue({
+      authoritative: false,
+      providerOutcomes: [
+        { provider: "nvidia", status: "unavailable" },
+        { provider: "openai", status: "ready" },
+      ],
       entries: [
         { provider: "nvidia", id: "nvidia/nemotron", name: "Nemotron" },
         { provider: "openai", id: "gpt-5.4", name: "GPT-5.4" },
@@ -59,6 +71,8 @@ describe("loadPreferredProviderPickerCatalog", () => {
         env: { NVIDIA_API_KEY: "test-nvidia-api-key" },
       }),
     ).resolves.toEqual({
+      authoritative: false,
+      providerOutcomes: [{ provider: "nvidia", status: "unavailable" }],
       entries: [{ provider: "nvidia", id: "nvidia/nemotron", name: "Nemotron" }],
       routeVariants: [
         {
@@ -83,16 +97,18 @@ describe("loadPreferredProviderPickerCatalog", () => {
   });
 
   it("canonicalizes provider aliases before scoped discovery", async () => {
-    mocks.resolvePluginMetadataSnapshot.mockReturnValue({
-      manifestRegistry: {
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue(
+      createPluginMetadataSnapshotFixture({
         plugins: [
-          {
+          createPluginManifestRecordFixture({
             id: "moonshot",
+            providers: ["moonshot"],
+            origin: "bundled",
             modelCatalog: { aliases: { kimi: { provider: "moonshot" } } },
-          },
+          }),
         ],
-      },
-    });
+      }),
+    );
     mocks.loadPreparedModelCatalogSnapshot.mockResolvedValue({
       entries: [{ provider: "moonshot", id: "kimi-k2.6", name: "Kimi K2.6" }],
       routeVariants: [],

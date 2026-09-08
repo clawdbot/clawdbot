@@ -13,8 +13,6 @@ import {
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 // This doctor closure must stay dependency-light while accepting legacy array-backed objects.
 import { asOptionalObjectRecord as readLegacyObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-// sqlite-runtime re-exports the agent-db/kysely graph; keep it lazy so doctor
-// enumeration does not cold-load it with this closure.
 import {
   importLegacyMemorySidecarIndex,
   LEGACY_MEMORY_SIDECAR_SUFFIXES,
@@ -169,7 +167,6 @@ async function collectLegacyMemorySidecarSources(params: {
   env: NodeJS.ProcessEnv;
   stateDir: string;
 }): Promise<LegacyMemorySidecarSource[]> {
-  const { resolveOpenClawAgentSqlitePath } = await import("openclaw/plugin-sdk/sqlite-runtime");
   const agentIds = new Set(resolveConfiguredAgentIds(params.config));
   const legacyDir = path.join(params.stateDir, "memory");
   const retrySidecars: Array<{ agentId: string; legacyPath: string }> = [];
@@ -199,6 +196,9 @@ async function collectLegacyMemorySidecarSources(params: {
       return;
     }
     seen.add(key);
+    // Most startups have no legacy sidecars. Load the SQLite graph only after
+    // finding a source that needs its canonical database path checked.
+    const { resolveOpenClawAgentSqlitePath } = await import("openclaw/plugin-sdk/sqlite-runtime");
     const agentDatabasePath = resolveOpenClawAgentSqlitePath({
       agentId,
       env: migrationEnv,

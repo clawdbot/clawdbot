@@ -12,6 +12,22 @@ const location: RouteLocation = {
 };
 
 describe("model setup route", () => {
+  it.each([
+    ["?firstRun=1", true],
+    ["?firstRun=explicit", true],
+    ["?firstRun=0", false],
+    ["?firstRun=0&firstRun=explicit", false],
+    ["", false],
+  ])("interprets first-run link %s without starting provider setup", async (search, expected) => {
+    const context = {} as ApplicationContext;
+    const router = createRouter({ routes: [{ ...page, component: () => null }] });
+    try {
+      await router.navigate("model-setup", context, {}, { ...location, search });
+      expect(router.getState().matches[0]?.data).toEqual({ firstRun: expected });
+    } finally {
+      router.stop();
+    }
+  });
   it("keys loader data by the first-run query", () => {
     const context = {
       agentSelection: { state: { selectedId: "main" } },

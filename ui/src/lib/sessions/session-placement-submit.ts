@@ -47,7 +47,7 @@ export async function advanceSessionPlacementDraft(params: {
   let reason: SessionPlacementPausedRecovery["reason"] = "not-sent";
   const pause = (error: string, next = reason): SessionPlacementDraftAdvanceResult => ({
     status: "paused",
-    recovery: pauseSessionPlacementRecovery(recovery, error, persistRecovery, next),
+    recovery: pauseSessionPlacementRecovery(recovery, error, persistRecovery, next).recovery,
   });
   // Dispatch and send require both fences. After accepted delivery, inspect
   // them separately so lifecycle interruption is not reported as takeover.

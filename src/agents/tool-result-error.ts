@@ -5,6 +5,10 @@ import {
   truncateSanitizedExternalContent,
   wrapExternalContent,
 } from "../security/external-content.js";
+import {
+  consumeToolExecutionNotStarted,
+  markToolExecutionNotStarted,
+} from "./tool-effect-receipt.js";
 import { isTrustedToolInputError } from "./tool-input-error.js";
 
 const TOOL_TIMEOUT_ERROR_CODES = new Set([
@@ -18,7 +22,6 @@ const TOOL_TIMEOUT_ERROR_CODES = new Set([
 const NETWORK_TOOL_ERROR_MAX_CHARS = 4_000;
 const protectedNetworkToolErrors = new WeakSet<object>();
 const protectedNetworkToolTimeoutErrors = new WeakSet<object>();
-const trustedToolNoStartErrors = new WeakSet<object>();
 
 function readToolErrorField(error: object, key: string): unknown {
   try {
@@ -148,15 +151,12 @@ export function isTrustedToolExecutionPreflightError(error: unknown): boolean {
 
 /** Record host-owned proof that the protected operation never started, even if hooks ran. */
 export function registerTrustedToolNoStartError<T>(error: T): T {
-  if (typeof error === "object" && error !== null) {
-    trustedToolNoStartErrors.add(error);
-  }
-  return error;
+  return markToolExecutionNotStarted(error);
 }
 
 /** Consume one private no-start fact at the next authoritative lifecycle boundary. */
 export function consumeTrustedToolNoStartError(error: unknown): boolean {
-  return typeof error === "object" && error !== null && trustedToolNoStartErrors.delete(error);
+  return consumeToolExecutionNotStarted(error);
 }
 
 /** Format a redacted tool error without allowing hostile getters to escape observability. */

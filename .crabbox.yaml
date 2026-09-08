@@ -133,5 +133,9 @@ jobs:
       workflow: .github/workflows/ci-check-testbox.yml
       job: check
       ref: main
-    command: env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed
+    shell: true
+    command: |
+      export CI=1
+      corepack pnpm install --frozen-lockfile >&2 || exit $?
+      env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 corepack pnpm check:changed
     stop: always

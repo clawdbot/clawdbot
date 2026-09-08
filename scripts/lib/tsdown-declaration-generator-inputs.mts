@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { collectModuleReferencesFromSource } from "./guard-inventory-utils.mjs";
 import { STATE_SCHEMA_GENERATOR_INPUTS } from "./state-schema-inline-plugin.mts";
-import { resolveDeclarationInputCaptureModule } from "./tsdown-declaration-inputs.mts";
+import { resolveDeclarationInputCaptureModule } from "./tsdown-declaration-boundary.mts";
 import { resolveTsxImport } from "./tsx-cli-shim.mjs";
 import { resolveWorkerDeployGeneratorInputs } from "./worker-deploy-build-plugin.mts";
 

@@ -103,11 +103,11 @@ export async function synchronizeSessionWorktreeArchive(params: {
   entry: SessionEntry;
   scope: SessionAccessScope;
   commitGuard?: () => void;
-}): Promise<void> {
+}): Promise<() => void> {
   const { entry, scope } = params;
   const id = entry.worktree?.id;
   if (!id) {
-    return;
+    return () => params.commitGuard?.();
   }
   const assertCurrent = () => {
     params.commitGuard?.();
@@ -189,6 +189,7 @@ export async function synchronizeSessionWorktreeArchive(params: {
     }
   }
   assertCurrent();
+  return assertCurrent;
 }
 
 /** Maintenance commits archive metadata first; its released writer lane must never retain Git work. */

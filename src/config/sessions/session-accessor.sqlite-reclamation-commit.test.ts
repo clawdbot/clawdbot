@@ -7,7 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import * as sqliteTransaction from "../../infra/sqlite-transaction.js";
-import { authorizeSqliteReclamationCommit } from "./session-accessor.sqlite-reclamation-commit.js";
+import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -61,6 +61,12 @@ function createCommitFixture(
     requested,
     release,
     value: () => database.prepare("SELECT value FROM proof").get()?.value,
+    withAuthorization<T>(
+      assertCurrent: () => void,
+      run: (authorize: () => unknown[]) => Promise<T>,
+    ) {
+      return withSqliteReclamationAuthorization(gate, database, assertCurrent, run);
+    },
     async close() {
       release();
       await exited;
@@ -94,10 +100,9 @@ test.each(["transient", "permanent", "closed"] as const)(
           return actualTransaction(db, operation, options);
         },
       );
-      const recovered = authorizeSqliteReclamationCommit(
-        fixture.gate,
-        fixture.databasePath,
+      const recovered = await fixture.withAuthorization(
         () => {},
+        async (authorize) => authorize(),
       );
       expect(recovered.length).toBeGreaterThan(0);
       expect(
@@ -122,15 +127,20 @@ test.each([
     let retired = false;
     try {
       await fixture.requested;
-      authorizeSqliteReclamationCommit(fixture.gate, fixture.databasePath, () => {
-        queueMicrotask(() => {
-          retired = true;
-        });
-      });
-      expect(retired).toBe(false);
-      expect(fixture.value()).toBe(value);
-      expect(await fixture.exited).toEqual([exitCode]);
-      expect(retired).toBe(true);
+      await fixture.withAuthorization(
+        () => {
+          queueMicrotask(() => {
+            retired = true;
+          });
+        },
+        async (authorize) => {
+          authorize();
+          expect(retired).toBe(false);
+          expect(fixture.value()).toBe(value);
+          expect(await fixture.exited).toEqual([exitCode]);
+          expect(retired).toBe(true);
+        },
+      );
     } finally {
       await fixture.close();
     }
@@ -141,11 +151,14 @@ test("rolls back when the live authority rejects the prepared deletion", async (
   const fixture = createCommitFixture();
   try {
     await fixture.requested;
-    expect(() =>
-      authorizeSqliteReclamationCommit(fixture.gate, fixture.databasePath, () => {
+    await fixture.withAuthorization(
+      () => {
         throw new Error("retired owner");
-      }),
-    ).toThrow("retired owner");
+      },
+      async (authorize) => {
+        expect(authorize).toThrow("retired owner");
+      },
+    );
     await fixture.exited;
     expect(fixture.value()).toBe(1);
   } finally {
@@ -158,9 +171,12 @@ test("cannot revive a commit checkpoint after its decision deadline", async () =
   try {
     await fixture.requested;
     await fixture.exited;
-    expect(() =>
-      authorizeSqliteReclamationCommit(fixture.gate, fixture.databasePath, () => {}),
-    ).toThrow("checkpoint expired");
+    await fixture.withAuthorization(
+      () => {},
+      async (authorize) => {
+        expect(authorize).toThrow("checkpoint expired");
+      },
+    );
     expect(fixture.value()).toBe(1);
   } finally {
     await fixture.close();
@@ -183,17 +199,20 @@ test.each([false, true])(
         });
         return database;
       });
-      const authorize = () =>
-        authorizeSqliteReclamationCommit(fixture.gate, fixture.databasePath, () => {
+      await fixture.withAuthorization(
+        () => {
           if (rejected) {
             throw new Error("retired owner");
           }
-        });
-      if (rejected) {
-        expect(authorize).toThrow("retired owner");
-      } else {
-        expect(authorize().map(String)).toEqual(["Error: injected close failure"]);
-      }
+        },
+        async (authorize) => {
+          if (rejected) {
+            expect(authorize).toThrow("retired owner");
+          } else {
+            expect(authorize().map(String)).toEqual(["Error: injected close failure"]);
+          }
+        },
+      );
       await fixture.exited;
       expect(fixture.value()).toBe(rejected ? 1 : 2);
     } finally {

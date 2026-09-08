@@ -1,10 +1,8 @@
 import fs from "node:fs";
 // Resolves agent-specific config and workspace directories.
-import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries, resolveAgentConfig } from "../agents/agent-scope-config.js";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { isPathCaseInsensitive } from "../infra/path-case.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
@@ -102,14 +100,11 @@ function resolveEffectiveAgentDir(
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.agentDir;
   const trimmed = configured?.trim();
-  if (trimmed) {
-    return resolveUserPath(trimmed);
-  }
   const env = deps?.env ?? process.env;
-  const root = resolveStateDir(
-    env,
-    deps?.homedir ?? (() => resolveRequiredHomeDir(env, os.homedir)),
-  );
+  if (trimmed) {
+    return resolveUserPath(trimmed, env, deps?.homedir);
+  }
+  const root = resolveStateDir(env, deps?.homedir);
   return path.join(root, "agents", id, "agent");
 }
 

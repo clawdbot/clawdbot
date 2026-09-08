@@ -1,8 +1,8 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import type { HealthFinding, HealthRepairEffect } from "../../../flows/health-checks.js";
+import { resolvePluginInstallSources } from "../../../plugins/install-channel-specs.js";
 import { isPayloadMissing } from "../../../plugins/payload-verification.js";
-import { resolveCompatibilityHostVersion } from "../../../version.js";
 import {
   collectDownloadableInstallCandidates,
   collectUpdateDeferredPluginIds,
@@ -13,10 +13,7 @@ import {
   collectConfiguredChannelIds,
   collectConfiguredPluginIds,
 } from "./missing-configured-plugin-install.ids.js";
-import {
-  resolveCandidateInstallSpec,
-  resolveRecordInstallPath,
-} from "./missing-configured-plugin-install.install.js";
+import { resolveRecordInstallPath } from "./missing-configured-plugin-install.install.js";
 import { isTrustedOfficialInstallRecordForCandidate } from "./missing-configured-plugin-install.records.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";
 
@@ -95,7 +92,6 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
     bundledPluginsById,
     configuredPluginIdsWithStaleDescriptors: staleDescriptorPluginIds,
     records,
-    updateChannel,
     installedPluginIdsWithRepairablePackageDiagnostics: repairablePackageDiagnosticPluginIds,
     installedPluginIdsWithStaleVersionBoundRuntimePackages: staleVersionBoundRuntimePluginIds,
     installedPluginIdsWithRepairablePackages: repairableInstalledPluginIds,
@@ -228,11 +224,7 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
     ) {
       continue;
     }
-    const installSpec = resolveCandidateInstallSpec({
-      candidate,
-      updateChannel,
-      coreVersion: resolveCompatibilityHostVersion(env),
-    });
+    const installSpec = resolvePluginInstallSources(candidate)[0]?.spec;
     if (shouldReplaceBrokenOfficialInstall) {
       const installPath = resolveRecordInstallPath(record, env);
       if (staleVersionBoundRuntimePluginIds.has(candidate.pluginId)) {

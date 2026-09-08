@@ -4834,7 +4834,8 @@ extension TalkModeManager {
             offerHeaders: nil,
             model: "gpt-realtime-2",
             voice: "marin",
-            expiresAt: nil)
+            expiresAt: nil,
+            clientControl: nil)
     }
 
     func _test_prepareLiveRealtimeVoiceSession(
@@ -4852,7 +4853,8 @@ extension TalkModeManager {
             offerHeaders: nil,
             model: "gpt-realtime-2",
             voice: "marin",
-            expiresAt: nil)
+            expiresAt: nil,
+            clientControl: nil)
         self.realtimeSession = TalkRealtimeWebRTCSession(
             gateway: gateway,
             sessionKey: self.mainSessionKey,

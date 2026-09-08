@@ -171,6 +171,7 @@ export type LoadInstalledPluginIndexParams = {
   diagnostics?: PluginDiagnostic[];
   discovery?: PluginDiscoveryResult;
   now?: () => Date;
+  artifactPreservingReadOnly?: boolean;
 };
 
 export type RefreshInstalledPluginIndexParams = LoadInstalledPluginIndexParams & {

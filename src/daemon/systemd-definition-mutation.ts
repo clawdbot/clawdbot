@@ -179,12 +179,12 @@ export async function readSystemdDefinitionMutationCapability(
   const selected = path.basename(resolveSystemdUnitPath(env));
   const names =
     selected === "openclaw-gateway.service" ? [selected, "openclaw.service"] : [selected];
-  const deadlineAt = options?.timeoutMs ? Date.now() + options.timeoutMs : undefined;
+  const deadlineAt = options?.timeoutMs ? performance.now() + options.timeoutMs : undefined;
   for (const name of names) {
     try {
       await assertNoSystemSystemdOwnership(
         name,
-        deadlineAt === undefined ? undefined : Math.max(1, deadlineAt - Date.now()),
+        deadlineAt === undefined ? undefined : Math.max(1, deadlineAt - performance.now()),
       );
     } catch (error) {
       const owned =
@@ -204,9 +204,9 @@ export async function withSystemdDefinitionMutation<T>(
   options?: { timeoutMs?: number },
 ): Promise<T> {
   const deadlineAt =
-    options?.timeoutMs && options.timeoutMs > 0 ? Date.now() + options.timeoutMs : undefined;
+    options?.timeoutMs && options.timeoutMs > 0 ? performance.now() + options.timeoutMs : undefined;
   const remainingTimeoutMs = () =>
-    deadlineAt === undefined ? undefined : Math.max(1, deadlineAt - Date.now());
+    deadlineAt === undefined ? undefined : Math.max(1, deadlineAt - performance.now());
   let initial = await inspect(env, environment, remainingTimeoutMs());
   assertServiceDefinitionWritable(initial.capability);
   const { unit, generated } = resolveMutationTargets(env, environment);

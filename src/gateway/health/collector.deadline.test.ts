@@ -3,6 +3,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 
 type DeadlineAccount = {
   accountId: string;
@@ -118,13 +120,16 @@ describe("gateway health collection deadline", () => {
     expect(probe).not.toHaveBeenCalled();
   }, 1_000);
 
-  it("preserves healthy accounts when one probe never settles", async () => {
+  it("preserves healthy accounts at the deadline and retains unfinished probe work", async () => {
     vi.useFakeTimers();
+    const scope = new AsyncWorkScope();
+    const slowProbe = createDeferredCore<Record<string, unknown>>();
     const accountIds = ["default", "fast-1", "fast-2", "fast-3", "fast-4", "fast-5"];
     const started: string[] = [];
-    let releaseSlowProbe: (() => void) | undefined;
     let active = 0;
     let maxActive = 0;
+    let snapshotPromise: ReturnType<typeof collectDeadlineSnapshot> | undefined;
+    let draining: Promise<void> | undefined;
     healthPluginsForTest = [
       createDeadlinePlugin({
         accountIds,
@@ -133,12 +138,11 @@ describe("gateway health collection deadline", () => {
           active += 1;
           maxActive = Math.max(maxActive, active);
           if (account.accountId === "default") {
-            return await new Promise<Record<string, unknown>>((resolve) => {
-              releaseSlowProbe = () => {
-                active -= 1;
-                resolve({ ok: true });
-              };
-            });
+            try {
+              return await slowProbe.promise;
+            } finally {
+              active -= 1;
+            }
           }
           await Promise.resolve();
           active -= 1;
@@ -147,20 +151,34 @@ describe("gateway health collection deadline", () => {
       }),
     ];
 
-    const snapshotPromise = collectDeadlineSnapshot({ timeoutMs: 50 });
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(50);
-    const snap = await snapshotPromise;
-    const channel = snap.channels["deadline-test"];
+    try {
+      snapshotPromise = scope.track(() => collectDeadlineSnapshot({ timeoutMs: 50 }));
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(50);
+      const snap = await snapshotPromise;
+      const channel = snap.channels["deadline-test"];
 
-    expect(started).toEqual(accountIds);
-    expect(maxActive).toBeLessThanOrEqual(5);
-    expect(channel?.probe).toMatchObject({ ok: false, timedOut: true });
-    for (const accountId of accountIds.slice(1)) {
-      expect(channel?.accounts?.[accountId]?.probe).toMatchObject({ ok: true });
+      expect(started).toEqual(accountIds);
+      expect(maxActive).toBeLessThanOrEqual(5);
+      expect(channel?.probe).toMatchObject({ ok: false, timedOut: true });
+      for (const accountId of accountIds.slice(1)) {
+        expect(channel?.accounts?.[accountId]?.probe).toMatchObject({ ok: true });
+      }
+      let drained = false;
+      draining = scope.drain().then(() => {
+        drained = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(drained).toBe(false);
+      slowProbe.resolve({ ok: true });
+      await draining;
+      expect(active).toBe(0);
+    } finally {
+      slowProbe.resolve({ ok: true });
+      await Promise.allSettled([snapshotPromise, slowProbe.promise]);
+      await (draining ?? scope.drain());
+      await vi.advanceTimersByTimeAsync(0);
     }
-    releaseSlowProbe?.();
-    await vi.advanceTimersByTimeAsync(0);
   }, 1_000);
 
   it("does not start queued probes after the aggregate deadline", async () => {

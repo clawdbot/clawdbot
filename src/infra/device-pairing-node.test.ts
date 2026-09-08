@@ -1,5 +1,4 @@
 // Tests node-role capability approvals stored on canonical paired-device records.
-import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -24,6 +23,7 @@ import {
   requestNodePairing,
   reusePendingNodePairingForReconnect,
 } from "./device-pairing-node.js";
+import { seedNodeDevice, setupPairedNode } from "./device-pairing-node.test-support.js";
 import {
   getPairedDevice,
   listDevicePairingReadOnly,
@@ -50,42 +50,6 @@ const hostStats: NodeHostStats = {
 
 async function withNodePairingDir<T>(run: (baseDir: string) => Promise<T>): Promise<T> {
   return await run(await tempDirs.make("case"));
-}
-
-async function seedNodeDevice(baseDir: string, nodeId: string): Promise<void> {
-  const request = await requestDevicePairing(
-    {
-      deviceId: nodeId,
-      publicKey: `test-key-${nodeId}`,
-      role: "node",
-      roles: ["node"],
-      scopes: [],
-    },
-    baseDir,
-  );
-  await approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir);
-}
-
-async function setupPairedNode(baseDir: string, displayName?: string) {
-  await seedNodeDevice(baseDir, "node-1");
-  const request = await requestNodePairing(
-    {
-      nodeId: "node-1",
-      displayName,
-      platform: "darwin",
-      commands: ["system.run"],
-    },
-    baseDir,
-  );
-  await approveNodePairing(
-    request.request.requestId,
-    { callerScopes: ["operator.pairing", "operator.admin"] },
-    baseDir,
-  );
-  return expectDefined(
-    resolveNodePairingGeneration(await getPairedDevice("node-1", baseDir)),
-    "node pairing generation",
-  );
 }
 
 async function findPairedNode(nodeId: string, baseDir: string) {

@@ -14,6 +14,7 @@ type CoreToolFactoryDescriptor = {
 const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "edit", family: "base-coding" },
   { name: "read", family: "base-coding" },
+  { name: "ls", family: "base-coding" },
   { name: "write", family: "base-coding" },
   { name: "apply_patch", family: "shell" },
   { name: "exec", family: "shell" },

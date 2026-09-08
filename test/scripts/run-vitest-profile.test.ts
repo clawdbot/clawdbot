@@ -139,7 +139,7 @@ export default { test: {
   ${custom && !projects ? 'runner: "./custom-runner.ts",' : ""}
   dangerouslyIgnoreUnhandledErrors: ${errorPolicy === "ignore"},
   ${errorPolicy === "filter" ? 'onUnhandledError(error) { console.error("filtered workload error:", error.message); return false; },' : ""}
-  ${projects ? `projects: ["first", "second"].map(name => ({ test: { name, include: [name + ".test.ts"], runner: ${JSON.stringify(path.join(root, "custom-runner.ts"))} } })),` : ""}
+  ${projects ? `projects: ["first", "second"].map(name => ({ extends: false, test: { name, include: [name + ".test.ts"], exclude: ["config-excluded.test.ts"], runner: ${JSON.stringify(path.join(root, "custom-runner.ts"))} } })),` : ""}
 } };`,
       );
       for (const name of ["config-excluded", "cli-excluded"]) {

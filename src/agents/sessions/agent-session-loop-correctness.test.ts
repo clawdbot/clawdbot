@@ -440,7 +440,12 @@ describe("AgentSession loop correctness", () => {
     const compactionEvents: AgentSessionEvent[] = [];
     streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
       createAssistantResultStream(
-        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+        createAssistant(
+          activeModel,
+          [{ type: "text", text: "complete answer" }],
+          "stop",
+          activeModel.contextWindow,
+        ),
       ),
     );
     const { session } = await createTestSession({
@@ -473,7 +478,12 @@ describe("AgentSession loop correctness", () => {
     const compactionEvents: AgentSessionEvent[] = [];
     streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
       createAssistantResultStream(
-        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+        createAssistant(
+          activeModel,
+          [{ type: "text", text: "complete answer" }],
+          "stop",
+          activeModel.contextWindow,
+        ),
       ),
     );
     const { session, sessionManager } = await createTestSession({
@@ -560,7 +570,12 @@ describe("AgentSession loop correctness", () => {
     const compactionEvents: AgentSessionEvent[] = [];
     streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
       createAssistantResultStream(
-        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+        createAssistant(
+          activeModel,
+          [{ type: "text", text: "complete answer" }],
+          "stop",
+          activeModel.contextWindow,
+        ),
       ),
     );
     const { session } = await createTestSession({
@@ -672,7 +687,7 @@ describe("AgentSession loop correctness", () => {
           activeModel,
           [{ type: "toolCall", id: "call-finish", name: "finish", arguments: {} }],
           "toolUse",
-          100,
+          activeModel.contextWindow,
         ),
       ),
     );
@@ -782,7 +797,8 @@ describe("AgentSession loop correctness", () => {
       createAssistant(testModel, [{ type: "text", text: "historical answer to summarize" }]),
     );
     const settingsManager = createAutoCompactionSettings();
-    const getSummaryRequests = mockInvalidThenTextSummary("recovered caller-owned summary");
+    const summary = "recovered caller-owned summary";
+    const getSummaryRequests = mockInvalidThenTextSummary(summary);
     const { session } = await createTestSession({
       sessionManager,
       settingsManager,
@@ -792,7 +808,7 @@ describe("AgentSession loop correctness", () => {
     const result = await session[agentSessionAutomaticCompaction]();
 
     expect(getSummaryRequests()).toBe(2);
-    expect(result.summary).toContain("recovered caller-owned summary");
+    expect(result.status === "completed" && result.result.summary).toContain(summary);
     const compactions = sessionManager.getBranch().filter((entry) => entry.type === "compaction");
     expect(compactions).toHaveLength(1);
   });
@@ -1000,7 +1016,12 @@ describe("AgentSession loop correctness", () => {
     const compactionEvents: AgentSessionEvent[] = [];
     streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
       createAssistantResultStream(
-        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+        createAssistant(
+          activeModel,
+          [{ type: "text", text: "complete answer" }],
+          "stop",
+          activeModel.contextWindow,
+        ),
       ),
     );
     const { session } = await createTestSession({
@@ -1024,7 +1045,12 @@ describe("AgentSession loop correctness", () => {
     const sessionManager = SessionManager.inMemory();
     appendHistory(
       sessionManager,
-      createAssistant(testModel, [{ type: "text", text: "old answer" }], "stop", 100),
+      createAssistant(
+        testModel,
+        [{ type: "text", text: "old answer" }],
+        "stop",
+        testModel.contextWindow,
+      ),
     );
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: true, reserveTokens: 0, keepRecentTokens: 1 },

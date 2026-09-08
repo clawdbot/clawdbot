@@ -5,7 +5,7 @@ read_when:
   - You want OpenClaw config credentials to resolve from 1Password
   - You need per-secret approval policy and audit history
   - You are configuring a 1Password service account for OpenClaw
-title: "1Password"
+title: "1Password plugin"
 ---
 
 # 1Password

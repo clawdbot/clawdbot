@@ -8,10 +8,7 @@ import {
 } from "../../daemon/constants.js";
 import { resolveDaemonContainerContext } from "../../daemon/container-context.js";
 import { formatRuntimeStatus } from "../../daemon/runtime-format.js";
-import {
-  buildPlatformRuntimeLogHints,
-  buildPlatformServiceStartHints,
-} from "../../daemon/runtime-hints.js";
+import { buildPlatformServiceStartHints } from "../../daemon/runtime-hints.js";
 import { hasSudoToRootSystemdUserManagerMismatch } from "../../daemon/systemd-exec.js";
 import { resolveGatewayServiceMutationError } from "../../infra/gateway-supervision.js";
 import { formatCliCommand } from "../command-format.js";
@@ -145,62 +142,6 @@ export function normalizeListenerAddress(raw: string): string {
   value = value.replace(/^TCP\s+/i, "");
   value = value.replace(/\s+\(LISTEN\)\s*$/i, "");
   return value.trim();
-}
-
-/** Render platform-specific hints for unloaded/stopped Gateway runtimes. */
-export function renderRuntimeHints(
-  runtime:
-    | {
-        missingSupervision?: boolean;
-        missingGuiSession?: boolean;
-        status?: string;
-      }
-    | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-  logFile?: string | null,
-): string[] {
-  if (!runtime) {
-    return [];
-  }
-  const hints: string[] = [];
-  const fileLog = logFile ?? null;
-  if (runtime.missingGuiSession) {
-    hints.push(
-      "LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.",
-    );
-    hints.push(
-      `Sign in to the macOS desktop as this user, then run: ${formatCliCommand("openclaw gateway restart", env)}`,
-    );
-    hints.push(
-      "For headless VM setups, enable auto-login for the target user or use a custom LaunchDaemon (not shipped).",
-    );
-    if (fileLog) {
-      hints.push(`File logs: ${fileLog}`);
-    }
-    return hints;
-  }
-  if (runtime.missingSupervision) {
-    hints.push(
-      `LaunchAgent installed but not loaded. Run: ${formatCliCommand("openclaw gateway restart", env)}`,
-    );
-    if (fileLog) {
-      hints.push(`File logs: ${fileLog}`);
-    }
-    return hints;
-  }
-  if (runtime.status === "stopped") {
-    if (fileLog) {
-      hints.push(`File logs: ${fileLog}`);
-    }
-    hints.push(
-      ...buildPlatformRuntimeLogHints({
-        env,
-        systemdServiceName: resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE),
-        windowsTaskName: resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE),
-      }),
-    );
-  }
-  return hints;
 }
 
 /** Render install/start hints for the current service platform/container context. */

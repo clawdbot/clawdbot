@@ -490,9 +490,7 @@ export async function resumeMainSession(params: {
           return { result: false };
         }
         entry.restartRecoveryDeliveryRunId = recoveryRunId;
-        if (params.forceRestartSafeTools) {
-          entry.restartRecoveryForceSafeTools = true;
-        }
+        entry.restartRecoveryForceSafeTools = params.forceRestartSafeTools ? true : undefined;
         entry.updatedAt = Date.now();
         return {
           result: true,
@@ -562,11 +560,8 @@ export async function resumeMainSession(params: {
     }
     dispatchStarted = true;
     const dispatchOutcome = await dispatchRestartRecoveryUntilStarted({
-      agentId: params.agentId,
       agentParams,
       gatewayRuntime: params.gatewayRuntime,
-      recoveryRunId,
-      sessionKey: dispatchSessionKey,
     });
     ({ dispatchAccepted, executionStarted, preStartAbortAttempted, preStartAbortConfirmed } =
       dispatchOutcome.observation);

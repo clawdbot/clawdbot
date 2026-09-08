@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { ArchiveExtractLimits } from "openclaw/plugin-sdk/archive";
 import { resolveLlamaCppDataDir } from "./defaults.js";
 
 export const LLAMA_SERVER_RELEASE = "b10534";
@@ -7,16 +8,30 @@ export const LLAMA_SERVER_COMMIT = "2b5621094ef383cdcd8428ef6d22efe5df976532";
 
 type RegularFileAliases = ReadonlyArray<readonly [source: string, aliases: readonly string[]]>;
 
-export type LlamaServerAsset = {
-  platform: NodeJS.Platform;
-  arch: string;
-  backend: "metal" | "cpu";
+export type LlamaServerArchive = {
   archive: "tar.gz" | "zip";
   archiveRoot: string;
   name: string;
   sha256: string;
-  executable: string;
   regularFileAliases: RegularFileAliases;
+  limits?: ArchiveExtractLimits;
+};
+
+export type LlamaServerAsset = LlamaServerArchive & {
+  platform: NodeJS.Platform;
+  arch: string;
+  backend: "metal" | "cpu" | "cuda";
+  executable: string;
+  dependencies?: ReadonlyArray<LlamaServerArchive & { files: readonly string[] }>;
+};
+
+const MEBIBYTE = 1024 * 1024;
+// CUDA's verified ggml-cuda.dll is 538 MB; its separate runtime contains 574 MB of DLLs.
+// Keep the larger budget local to these pinned archives, not every managed download.
+const CUDA_ARCHIVE_LIMITS = {
+  maxArchiveBytes: 400 * MEBIBYTE,
+  maxExtractedBytes: 600 * MEBIBYTE,
+  maxEntryBytes: 520 * MEBIBYTE,
 };
 
 // These basenames are authenticated by the adjacent release checksum. Archive-provided
@@ -92,6 +107,29 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
   },
   {
     platform: "win32",
+    arch: "x64",
+    backend: "cuda",
+    archive: "zip",
+    archiveRoot: ".",
+    name: `llama-${LLAMA_SERVER_RELEASE}-bin-win-cuda-12.4-x64.zip`,
+    sha256: "f4964cec6c96e90a5f7379e4c2d0c437d8f1fe4263cbb8f39c7625f7c5937986",
+    executable: "llama-server.exe",
+    regularFileAliases: [],
+    limits: CUDA_ARCHIVE_LIMITS,
+    dependencies: [
+      {
+        archive: "zip",
+        archiveRoot: ".",
+        name: "cudart-llama-bin-win-cuda-12.4-x64.zip",
+        sha256: "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
+        regularFileAliases: [],
+        files: ["cublas64_12.dll", "cublasLt64_12.dll", "cudart64_12.dll"],
+        limits: { ...CUDA_ARCHIVE_LIMITS, maxEntries: 3 },
+      },
+    ],
+  },
+  {
+    platform: "win32",
     arch: "arm64",
     backend: "cpu",
     archive: "zip",
@@ -116,10 +154,39 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
 
 export function selectLlamaServerAsset(
   platform: NodeJS.Platform = process.platform,
-  arch = process.arch,
+  arch: string = process.arch,
+  acceleration?:
+    | { kind: "cpu" | "metal" }
+    | { kind: "cuda"; devices: readonly { driverVersion: string; computeCapability?: number }[] },
 ): LlamaServerAsset {
+  const backend =
+    acceleration?.kind ?? (platform === "darwin" && arch === "arm64" ? "metal" : "cpu");
+  if (backend === "cuda" && acceleration?.kind === "cuda") {
+    if (platform !== "win32" || arch !== "x64") {
+      throw new Error(
+        `No verified CUDA llama-server ${LLAMA_SERVER_RELEASE} build is available for ${platform}/${arch}. Install a CUDA-enabled llama-server manually and configure its absolute path, or explicitly choose CPU setup.`,
+      );
+    }
+    // The upstream build uses CUDA 12.4 Update 1 with PTX. Require its full driver
+    // level: CUDA minor-version compatibility does not guarantee PTX JIT support.
+    const compatible =
+      acceleration.devices.length > 0 &&
+      acceleration.devices.every((device) => {
+        const version = /^(\d+)\.(\d+)(?:\.\d+)?$/u.exec(device.driverVersion);
+        const driver =
+          version &&
+          (Number(version[1]) > 551 || (Number(version[1]) === 551 && Number(version[2]) >= 78));
+        return driver && (device.computeCapability === undefined || device.computeCapability >= 5);
+      });
+    if (!compatible) {
+      throw new Error(
+        "The verified CUDA 12.4 build requires NVIDIA driver 551.78 or newer and compute capability 5.0 or newer. Update the NVIDIA driver, configure a compatible llama-server manually, or explicitly choose CPU setup.",
+      );
+    }
+  }
   const asset = LLAMA_SERVER_ASSETS.find(
-    (candidate) => candidate.platform === platform && candidate.arch === arch,
+    (candidate) =>
+      candidate.platform === platform && candidate.arch === arch && candidate.backend === backend,
   );
   if (!asset) {
     throw new Error(
@@ -137,7 +204,7 @@ export function resolveManagedLlamaServerPaths(asset = selectLlamaServerAsset())
   const installDir = path.join(
     resolveLlamaCppDataDir(),
     LLAMA_SERVER_RELEASE,
-    `${asset.platform}-${asset.arch}`,
+    `${asset.platform}-${asset.arch}${asset.backend === "cuda" ? "-cuda-12.4" : ""}`,
   );
   return {
     installDir,

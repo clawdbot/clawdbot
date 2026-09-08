@@ -60,7 +60,6 @@ export async function resolveMatrixIngressContent(config: {
   const {
     client,
     core,
-    cfg,
     accountId,
     accountConfig,
     logger,
@@ -72,6 +71,8 @@ export async function resolveMatrixIngressContent(config: {
   } = handler;
 
   const {
+    cfg,
+    liveDmAllowFrom,
     content: accessContent,
     messageId,
     audioPreflightMode,
@@ -497,6 +498,8 @@ export async function resolveMatrixIngressContent(config: {
   const triggerSnapshot = preparedTrigger;
 
   return {
+    cfg,
+    liveDmAllowFrom,
     messageIngress,
     resolveMessageIngress,
     route: _route,

@@ -3,11 +3,12 @@ import type { ModelCatalogEntry } from "../../api/types.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { createSessionCapability } from "../../lib/sessions/index.ts";
+import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
   type GatewayRequestMock,
+  type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
@@ -54,7 +55,7 @@ export function createBrowserAnnotationAttachment(
 }
 
 export function findChatSendPayload(host: {
-  request: { mock: { calls: ReadonlyArray<readonly [string, unknown?]> } };
+  request: { mock: { calls: ReadonlyArray<Readonly<Parameters<GatewayRequestHandler>>> } };
 }): Record<string, unknown> {
   const call = host.request.mock.calls.find(([method]) => method === "chat.send");
   if (!call?.[1] || typeof call[1] !== "object") {
@@ -69,7 +70,7 @@ export function createImmediateCommandHost(
   overrides: Partial<ChatHost> = {},
 ): ChatHost {
   const host = {
-    sessions: createSessionCapability({
+    sessions: createTestSessionCapability({
       snapshot: { client: null, phase: "reconnecting", hello: null },
       subscribe: () => () => undefined,
       subscribeEvents: () => () => undefined,
@@ -244,7 +245,7 @@ export function makeChatHost(
   };
   const sessions =
     hostOverrides.sessions ??
-    createSessionCapability({
+    createTestSessionCapability({
       snapshot: {
         client: host.client,
         phase: host.connected ? "connected" : "reconnecting",

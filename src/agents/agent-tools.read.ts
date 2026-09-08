@@ -25,6 +25,7 @@ import {
 } from "../media/media-reference.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { clampNumber } from "../utils.js";
+import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import {
   REQUIRED_PARAM_GROUPS,
   assertRequiredParams,
@@ -695,9 +696,11 @@ async function appendMemoryFlushContent(params: {
   content: string;
   sandbox?: MemoryFlushAppendOnlyWriteOptions["sandbox"];
   signal?: AbortSignal;
+  assertCurrent: () => void;
 }) {
   if (!params.sandbox) {
     const root = await fsRoot(params.root);
+    params.assertCurrent();
     await root.append(params.relativePath, params.content, {
       mkdir: true,
       prependNewlineIfNeeded: true,
@@ -714,26 +717,23 @@ async function appendMemoryFlushContent(params: {
   const separator =
     existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n") ? "\n" : "";
   const next = `${existing}${separator}${params.content}`;
-  if (params.sandbox) {
-    const parent = path.posix.dirname(params.relativePath);
-    if (parent && parent !== ".") {
-      await params.sandbox.bridge.mkdirp({
-        filePath: parent,
-        cwd: params.sandbox.root,
-        signal: params.signal,
-      });
-    }
-    await params.sandbox.bridge.writeFile({
-      filePath: params.relativePath,
+  const parent = path.posix.dirname(params.relativePath);
+  params.assertCurrent();
+  if (parent && parent !== ".") {
+    await params.sandbox.bridge.mkdirp({
+      filePath: parent,
       cwd: params.sandbox.root,
-      data: next,
-      mkdir: true,
       signal: params.signal,
     });
-    return;
   }
-  await fs.mkdir(path.dirname(params.absolutePath), { recursive: true });
-  await fs.writeFile(params.absolutePath, next, "utf-8");
+  params.assertCurrent();
+  await params.sandbox.bridge.writeFile({
+    filePath: params.relativePath,
+    cwd: params.sandbox.root,
+    data: next,
+    mkdir: true,
+    signal: params.signal,
+  });
 }
 
 /** Restrict a write tool to appending memory-flush content to one path. */
@@ -746,6 +746,7 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
     ...tool,
     description: `${tool.description} During memory flush, this tool may only append to ${options.relativePath}.`,
     execute: async (toolCallId, args, signal, onUpdate) => {
+      const assertCurrent = captureAgentToolSourceExecutionGuard(signal);
       const record = getToolParamsRecord(args);
       const normalizedRecord = record
         ? await normalizeFileToolPathParamsFromKeys(
@@ -794,6 +795,7 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
           content,
           sandbox: options.sandbox,
           signal,
+          assertCurrent,
         });
       const memoryWriteProvenance = options.memoryWriteProvenance;
       if (memoryWriteProvenance && (await memoryWriteProvenance.classifies(allowedAbsolutePath))) {
@@ -806,6 +808,7 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
       } else {
         await commit();
       }
+      assertCurrent();
       // This wrapper inherits the write tool's output schema, so report only
       // the authoritative `changed`; deriving `created` before append is racy.
       return {
@@ -1372,6 +1375,7 @@ async function writeWorkspaceFile(
   content: string,
   abortSignal?: AbortSignal,
 ) {
+  const assertCurrent = captureAgentToolSourceExecutionGuard(abortSignal);
   // Validate the path before starting the fs-safe root: call getRoot() (which opens the
   // root dir, rejecting if the workspace is missing) only after toCanonicalRelativeWorkspacePath
   // succeeds. Eagerly starting it would orphan a rejecting root promise as an unhandled
@@ -1385,7 +1389,7 @@ async function writeWorkspaceFile(
     throw new FsSafeError("symlink", `refusing to write to symlink: ${absolutePath}`);
   }
   const rootHandle = await getRoot();
-  abortSignal?.throwIfAborted();
+  assertCurrent();
   await rootHandle.write(relative, content, { mkdir: true });
 }
 
@@ -1405,7 +1409,7 @@ function createHostWriteOperations(
       {
         mkdir: async (dir: string) => {
           const resolved = resolveHostPath(dir);
-          options?.abortSignal?.throwIfAborted();
+          captureAgentToolSourceExecutionGuard(options?.abortSignal)();
           await fs.mkdir(resolved, { recursive: true });
         },
         writeFile: (filePath: string, content: string) =>
@@ -1428,10 +1432,11 @@ function createHostWriteOperations(
   return withMemoryWriteProvenance(
     {
       mkdir: async (dir: string) => {
+        const assertCurrent = captureAgentToolSourceExecutionGuard(options?.abortSignal);
         const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
         const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
         await assertSandboxPath({ filePath: resolved, cwd: root, root });
-        options?.abortSignal?.throwIfAborted();
+        assertCurrent();
         await fs.mkdir(resolved, { recursive: true });
       },
       writeFile: (absolutePath: string, content: string) =>

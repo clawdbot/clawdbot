@@ -276,6 +276,7 @@ export async function loadMoreSessionCatalog(
     const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
       agentId,
       catalogId,
+      hostIds: Object.keys(cursors),
       cursors,
     });
     if (!isCurrentSessionCatalogRequest(owner, catalogId, client, generation, revision)) {

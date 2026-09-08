@@ -577,9 +577,9 @@ scene_ready_text() {
   fi
   case "$1" in
     home) printf '%s\n' "Overview" ;;
-    # The screenshot fixture seeds chat history and restores at the latest user
-    # turn, so wait for that visible anchor instead of empty-chat copy.
-    chat) printf '%s\n' "Draft a short status update for the team." ;;
+    # The screenshot fixture seeds chat history and restores at the live edge,
+    # so wait for the latest reply instead of empty-chat copy.
+    chat) printf '%s\n' "The Android release is close." ;;
     settings) printf '%s\n' "OpenClaw mobile" ;;
     voice-wake) printf '%s\n' "Wake listener" ;;
     # Connected fixtures can push Add Gateway below the composed viewport, so

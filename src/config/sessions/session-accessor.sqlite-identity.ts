@@ -24,14 +24,20 @@ function toSessionIdentityTarget(entry: SessionEntry | undefined, sessionKeys: r
   return { ...(sessionId ? { sessionId } : {}), sessionKeys };
 }
 
-function emitCommittedSessionEntryRemoval(sessionKey: string, entry?: SessionEntry): void {
+function emitCommittedSessionEntryRemoval(
+  agentId: string,
+  sessionKey: string,
+  entry?: SessionEntry,
+): void {
   emitSessionIdentityMutation({
+    agentId,
     kind: "delete",
     previous: toSessionIdentityTarget(entry, [sessionKey]),
   });
 }
 
 export function emitCommittedSessionEntryRemovals(
+  agentId: string,
   removals: readonly SqliteSessionEntryRemovalIdentity[],
 ): void {
   const emittedKeys = new Set<string>();
@@ -40,11 +46,12 @@ export function emitCommittedSessionEntryRemovals(
       continue;
     }
     emittedKeys.add(removal.sessionKey);
-    emitCommittedSessionEntryRemoval(removal.sessionKey, removal.expectedEntry);
+    emitCommittedSessionEntryRemoval(agentId, removal.sessionKey, removal.expectedEntry);
   }
 }
 
 function emitCommittedSessionEntryChange(params: {
+  agentId: string;
   currentKey: string;
   currentEntry: SessionEntry;
   previousKey: string;
@@ -57,6 +64,7 @@ function emitCommittedSessionEntryChange(params: {
     return;
   }
   emitSessionIdentityMutation({
+    agentId: params.agentId,
     kind: moved ? "move" : "replace",
     previous,
     current,
@@ -64,6 +72,7 @@ function emitCommittedSessionEntryChange(params: {
 }
 
 export function emitCommittedSessionIdentityDiff(
+  agentId: string,
   previous: ReadonlyMap<string, SessionEntry>,
   current: ReadonlyMap<string, SessionEntry>,
 ): void {
@@ -105,6 +114,7 @@ export function emitCommittedSessionIdentityDiff(
     const currentEntry = current.get(currentKey);
     if (currentEntry) {
       emitSessionIdentityMutation({
+        agentId,
         kind: "move",
         previous: toSessionIdentityTarget(currentEntry, previousKeys),
         current: toSessionIdentityTarget(currentEntry, [currentKey]),
@@ -117,13 +127,14 @@ export function emitCommittedSessionIdentityDiff(
     if (currentEntry) {
       handledCurrentKeys.add(sessionKey);
       emitCommittedSessionEntryChange({
+        agentId,
         currentEntry,
         currentKey: sessionKey,
         previousEntry,
         previousKey: sessionKey,
       });
     } else if (!handledPreviousKeys.has(sessionKey)) {
-      emitCommittedSessionEntryRemoval(sessionKey, previousEntry);
+      emitCommittedSessionEntryRemoval(agentId, sessionKey, previousEntry);
     }
   }
 
@@ -132,6 +143,7 @@ export function emitCommittedSessionIdentityDiff(
       continue;
     }
     emitSessionIdentityMutation({
+      agentId,
       kind: "create",
       previous: { sessionKeys: [] },
       current: toSessionIdentityTarget(currentEntry, [sessionKey]),
@@ -140,6 +152,7 @@ export function emitCommittedSessionIdentityDiff(
 }
 
 export function emitCommittedLifecycleIdentityMutations(params: {
+  agentId: string;
   projected: SqliteProjectedLifecycleIdentityMutation;
   removedSessionKeys: readonly string[];
 }): void {
@@ -156,5 +169,5 @@ export function emitCommittedLifecycleIdentityMutations(params: {
     }
     current.set(upsert.sessionKey, upsert.entry);
   }
-  emitCommittedSessionIdentityDiff(previous, current);
+  emitCommittedSessionIdentityDiff(params.agentId, previous, current);
 }

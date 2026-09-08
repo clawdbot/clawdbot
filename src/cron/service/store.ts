@@ -200,12 +200,9 @@ export async function ensureLoaded(
     const hydratedRaw = normalized ?? raw;
     let invalidReason = rawInvalidReason ?? getInvalidPersistedCronJobReason(hydratedRaw);
     const hydratedSchedule = isRecord(hydratedRaw.schedule) ? hydratedRaw.schedule : {};
-    if (
-      !invalidReason &&
-      isValidatedCronJob(hydratedRaw) &&
-      hydratedRaw.enabled &&
-      hydratedSchedule.kind === "every"
-    ) {
+    // The satisfiability probe below does not mutate this row, so its typed validation stays valid.
+    const hydratedIsValid = !invalidReason && isValidatedCronJob(hydratedRaw);
+    if (hydratedIsValid && hydratedRaw.enabled && hydratedSchedule.kind === "every") {
       try {
         assertTimeScheduleSatisfiable(
           { ...hydratedRaw, state: {} },
@@ -240,7 +237,7 @@ export async function ensureLoaded(
       continue;
     }
     // Validated above, so the raw record is now a trusted CronJob.
-    if (!isValidatedCronJob(hydratedRaw)) {
+    if (!hydratedIsValid) {
       continue;
     }
     const hydrated = hydratedRaw;

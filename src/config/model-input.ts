@@ -10,6 +10,7 @@ import {
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { modelKey } from "../shared/model-key.js";
+import type { AgentModelEntryConfig } from "./types.agent-defaults.js";
 import type { AgentModelConfig, AgentToolModelConfig } from "./types.agents-shared.js";
 
 type AgentModelListLike = {
@@ -106,7 +107,12 @@ export function normalizeAgentModelSelectionForConfig(value: unknown): unknown {
   return next;
 }
 
-function mergeAgentModelEntryForConfig(existing: unknown, incoming: unknown): unknown {
+export function mergeAgentModelEntryForConfig(
+  existing: AgentModelEntryConfig | undefined,
+  incoming: AgentModelEntryConfig,
+): AgentModelEntryConfig;
+export function mergeAgentModelEntryForConfig(existing: unknown, incoming: unknown): unknown;
+export function mergeAgentModelEntryForConfig(existing: unknown, incoming: unknown): unknown {
   if (!isPlainRecord(existing) || !isPlainRecord(incoming)) {
     return incoming;
   }
