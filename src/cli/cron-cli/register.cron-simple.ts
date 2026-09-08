@@ -1,11 +1,12 @@
 // Cron simple command registration: remove, toggle, show, runs, and run-now.
 import {
+  parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
   resolvePositiveTimerTimeoutMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { resolveCronCompletionStatus } from "../../cron/completion-status.js";
 import type { CronRunLogEntry } from "../../cron/run-log-types.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -199,6 +200,25 @@ export function registerCronSimpleCommands(cron: Command) {
       .argument("[id]", "Job id")
       .option("--id <id>", "Job id (alternative to positional argument)")
       .option("--run-id <runId>", "Filter by cron run id")
+      .addOption(
+        new Option("--status <status>", "Filter by run status").choices([
+          "all",
+          "ok",
+          "error",
+          "skipped",
+        ]),
+      )
+      .addOption(
+        new Option("--delivery-status <status>", "Filter by delivery status").choices([
+          "delivered",
+          "not-delivered",
+          "unknown",
+          "not-requested",
+        ]),
+      )
+      .option("--query <text>", "Filter by run summary or error text")
+      .option("--offset <n>", "Entries to skip before returning results")
+      .addOption(new Option("--sort <direction>", "Sort by run time").choices(["asc", "desc"]))
       .option("--limit <n>", "Max entries (default 50)", "50")
       .action(async (idArg, opts) => {
         try {
@@ -215,12 +235,24 @@ export function registerCronSimpleCommands(cron: Command) {
           if (limit === undefined) {
             throw new Error("Invalid --limit (must be a positive integer).");
           }
+          const offset =
+            opts.offset === undefined ? undefined : parseStrictNonNegativeInteger(opts.offset);
+          if (opts.offset !== undefined && offset === undefined) {
+            throw new Error("Invalid --offset (must be a non-negative integer).");
+          }
           if (typeof opts.runId === "string" && !opts.runId.trim()) {
             throw new Error("--run-id must not be blank");
           }
           const res = await callGatewayFromCli("cron.runs", opts, {
             id,
             ...(typeof opts.runId === "string" && opts.runId.trim() ? { runId: opts.runId } : {}),
+            ...(typeof opts.status === "string" ? { status: opts.status } : {}),
+            ...(typeof opts.deliveryStatus === "string"
+              ? { deliveryStatus: opts.deliveryStatus }
+              : {}),
+            ...(typeof opts.query === "string" ? { query: opts.query } : {}),
+            ...(offset !== undefined ? { offset } : {}),
+            ...(typeof opts.sort === "string" ? { sortDir: opts.sort } : {}),
             limit,
           });
           printCronJson(res);
