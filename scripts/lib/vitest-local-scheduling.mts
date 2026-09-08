@@ -79,7 +79,7 @@ let schedulingHostInfoCache: ReturnType<typeof detectVitestHostInfo> | undefined
  * tests. Size every project in a process against one snapshot; live readings stay on
  * detectVitestHostInfo for the resource reporter.
  */
-export function schedulingHostInfo(): ReturnType<typeof detectVitestHostInfo> {
+function schedulingHostInfo(): ReturnType<typeof detectVitestHostInfo> {
   schedulingHostInfoCache ??= detectVitestHostInfo();
   return schedulingHostInfoCache;
 }
