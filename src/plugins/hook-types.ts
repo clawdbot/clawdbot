@@ -292,6 +292,8 @@ export type PluginHookToolAuthority = {
   readonly fingerprint: string;
   /** Checks whether the finalized turn surface contains this exact tool. */
   allows(toolName: string): boolean;
+  /** Lists the normalized, deduplicated, sorted names in the finalized turn surface. */
+  list?(): readonly string[];
   /** Rejects retained or timed-out capabilities after the host dispatch closes. */
   assertActive(): void;
 };
