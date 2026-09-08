@@ -10,6 +10,7 @@ vi.mock("./lancedb-runtime.js", () => ({
     connect: vi.fn(async () => ({
       tableNames: vi.fn(async () => ["memories"]),
       openTable: vi.fn(async () => ({
+        checkoutLatest: vi.fn(async () => undefined),
         schema: vi.fn(async () => ({ fields: [{ name: "agentId" }] })),
         countRows: lanceMocks.countRows,
         delete: lanceMocks.deleteRows,
