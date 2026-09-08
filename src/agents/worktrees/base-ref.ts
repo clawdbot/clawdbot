@@ -1,3 +1,4 @@
+import { requireGitCommandOutput } from "../../infra/git-exec.js";
 import { commandError, runGit } from "./git.js";
 
 type ResolvedWorktreeBase = {
@@ -36,8 +37,17 @@ export async function resolveWorktreeBase(
       { signal },
     );
     signal?.throwIfAborted();
-    const commit = verified.stdout.trim();
-    if (verified.code !== 0 || !commit || commit.includes("\n") || verified.stderr.trim()) {
+    if (
+      verified.termination === "exit" &&
+      typeof verified.code === "number" &&
+      verified.code !== 0
+    ) {
+      throw new InvalidWorktreeBaseRefError({
+        cause: commandError("git rev-parse --verify", verified),
+      });
+    }
+    const commit = requireGitCommandOutput("git rev-parse --verify", verified).trim();
+    if (!commit || commit.includes("\n") || verified.stderr.trim()) {
       throw new InvalidWorktreeBaseRefError({
         cause: commandError("git rev-parse --verify", verified),
       });
