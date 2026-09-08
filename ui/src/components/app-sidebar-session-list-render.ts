@@ -6,7 +6,11 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
-import { isPresenceViewerIdle, projectPresenceViewers } from "../lib/presence-users.ts";
+import {
+  isPresenceViewerIdle,
+  presenceViewerLabel,
+  projectPresenceViewers,
+} from "../lib/presence-users.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
@@ -90,7 +94,9 @@ function renderSessionSection(params: {
   // section owns collapse UI or sits directly below the global toolbar.
   const collapsed = section.renderHeader && host.collapsedSessionSections.has(section.id);
   const label = personOwner
-    ? personOwner.label || personOwner.id
+    ? personIdentity?.type === "profile"
+      ? presenceViewerLabel({ id: personIdentity.id, name: personOwner.label || personOwner.id })
+      : personOwner.label || personOwner.id
     : section.project
       ? section.project.name
       : section.groups

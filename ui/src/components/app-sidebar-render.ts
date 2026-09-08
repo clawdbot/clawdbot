@@ -340,7 +340,11 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
           ? nothing
           : html`<div class="sidebar-online__list">
               ${repeat(users, presenceUserKey, (user) => {
-                const activity = personActivityLink(user.identity?.id, routing, user.name);
+                const activity = personActivityLink(
+                  user.identity?.id,
+                  routing,
+                  presenceViewerLabel(user),
+                );
                 const tag = activity ? literal`a` : literal`button`;
                 return staticHtml`<div
                   class="sidebar-online__row"

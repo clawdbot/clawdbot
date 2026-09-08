@@ -5,7 +5,7 @@ import { selectApplicationSession } from "../app/agent-selection.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { i18n, t } from "../i18n/index.ts";
-import { projectOnlinePresenceViewers } from "../lib/presence-users.ts";
+import { presenceUserLabel, projectOnlinePresenceViewers } from "../lib/presence-users.ts";
 import { runSessionNavigationIntent } from "../lib/sessions/navigation-handoff.ts";
 import {
   resolveSessionPreferredFace,
@@ -242,10 +242,8 @@ export class SidebarPeopleRuntime {
         "session-progress-hovercard person-activity-hovercard",
       );
     const focused = card.contains(document.activeElement) ? document.activeElement : null;
-    card.setAttribute(
-      "aria-label",
-      t("presence.card.ariaLabel", { name: user.name ?? user.email ?? t("presence.card.person") }),
-    );
+    const label = presenceUserLabel(user, t("presence.card.person"));
+    card.setAttribute("aria-label", t("presence.card.ariaLabel", { name: label.name }));
     render(
       renderPersonActivityCard({
         user,

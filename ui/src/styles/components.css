@@ -1574,6 +1574,10 @@ openclaw-session-progress-hovercard-provider {
   line-height: 1;
 }
 
+.person-activity-card__hint {
+  padding: 0 16px 12px;
+}
+
 .person-activity-card__status > span {
   width: 6px;
   height: 6px;
