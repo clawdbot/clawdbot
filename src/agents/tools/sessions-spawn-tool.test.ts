@@ -714,6 +714,52 @@ describe("sessions_spawn tool", () => {
     });
   });
 
+  it("binds the caller's gateway instance to the visible run for completion announce", async () => {
+    await withTestDir({ prefix: "openclaw-visible-spawn-binding-" }, async (dir) => {
+      const callGateway = vi.fn(async () => ({
+        key: "agent:main:dashboard:child",
+        runStarted: true,
+        runId: "run-visible-bound",
+      }));
+      const registerRun = vi.fn();
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        config: {
+          session: { store: path.join(dir, "sessions.json") },
+          agents: {
+            defaults: { subagents: { model: "openai/gpt-5.4", runTimeoutSeconds: 120 } },
+            list: [{ id: "main" }],
+          },
+        },
+        callGateway: callGateway as never,
+        registerRun,
+        countActiveRuns: () => 0,
+      });
+      const gatewayContext = { owner: "gateway-a" } as never;
+      const resolveGatewayContext = () => gatewayContext;
+
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          gatewayContextResolver: resolveGatewayContext,
+        },
+        () =>
+          tool.execute("visible", {
+            task: "inspect issue",
+            visible: true,
+          }),
+      );
+
+      // The detached completion announce reads this resolver off the registry
+      // row; dropping it here is what leaves the requester never told.
+      const registration = registerRun.mock.calls[0]?.[0] as {
+        gatewayContextResolver?: () => unknown;
+      };
+      expect(registration?.gatewayContextResolver?.()).toBe(gatewayContext);
+    });
+  });
+
   it.each([
     { label: "default", mode: undefined },
     { label: "read-only", mode: "read-only" },

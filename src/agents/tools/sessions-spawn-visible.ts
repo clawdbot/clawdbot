@@ -34,6 +34,7 @@ import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "../subagents/spawn/subagent-spawn-plan.js";
 import { resolveSubagentTargetPolicy } from "../subagents/spawn/subagent-target-policy.js";
 import { normalizeToolModelOverride, readToolStringParam, ToolInputError } from "./common.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   callInProcessGatewayTool,
   callInProcessGatewayToolWithCreation,
@@ -173,6 +174,7 @@ export async function maybeSpawnVisibleSession(params: {
   }
 
   const cfg = params.options?.config ?? getRuntimeConfig();
+  const gatewayContextResolver = getGatewayToolCallerIdentity()?.gatewayContextResolver;
   const ownership = resolveSubagentSpawnOwnership({
     cfg,
     agentSessionKey: params.options?.agentSessionKey,
@@ -422,6 +424,11 @@ export async function maybeSpawnVisibleSession(params: {
         runTimeoutSeconds,
         expectsCompletionMessage: params.expectsCompletionMessage,
         spawnMode: "run",
+        // Hidden spawns bind the caller's Gateway instance to the registry row
+        // (subagent-spawn.ts). Without the same binding here, the detached
+        // completion announce has no instance to dispatch `agent` against and
+        // the requester never learns the visible child finished.
+        ...(gatewayContextResolver ? { gatewayContextResolver } : {}),
       });
     } catch (error) {
       return {
