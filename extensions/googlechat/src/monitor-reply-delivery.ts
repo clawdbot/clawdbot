@@ -146,9 +146,9 @@ export async function deliverGoogleChatReply(params: {
       deliveryThreadName = sent?.threadName?.trim() || deliveryThreadName;
     }
   };
-  const chunks = core.channel.text
-    .chunkMarkdownTextWithMode(reply.text, chunkLimit, chunkMode)
-    .flatMap((chunk) => formatGoogleChatTextChunks(chunk, chunkLimit));
+  const chunks = formatGoogleChatTextChunks(reply.text, chunkLimit).flatMap((chunk) =>
+    core.channel.text.chunkMarkdownTextWithMode(chunk, chunkLimit, chunkMode),
+  );
   if (reply.hasText && !chunks.some((chunk) => chunk)) {
     try {
       if (typingMessage) {
