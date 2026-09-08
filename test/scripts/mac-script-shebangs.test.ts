@@ -1,5 +1,5 @@
-import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -151,7 +151,128 @@ const portableScripts = [
 const guard =
   '# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.\nif [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then\n  exec /bin/bash "$0" "$@"\nfi\n';
 
+// bash -n accepts unknown builtins and expansions that only fail at runtime.
+// This deliberately conservative scan includes embedded shell payloads, ignores
+// full-line comments, and is not a shell parser. Keep compatibility exceptions
+// empty; a future exception must name its file and explain its interpreter boundary.
+const bash4Patterns: [string, RegExp][] = [
+  ["modern builtin", /\b(?:mapfile|readarray|coproc)\b/u],
+  [
+    "associative array, nameref, or case attribute",
+    /(?<![\w-])(?:declare|typeset|local|readonly)\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*[Anlu]/u,
+  ],
+  ["case conversion", /\$\{[a-zA-Z_][\w]*(?:\[[^\]]*\])?[,^]/u],
+  ["negative array index", /\$\{[^}\n]*\[\s*-\s*\d/u],
+  ["name enumeration", /\$\{![a-zA-Z_]\w*[@*]\}/u],
+  ["parameter transformation", /\$\{[^}\n]*@[a-zA-Z]\}/u],
+  ["modern redirection or case fallthrough", /\|&|&>>|;;&|;&/u],
+  ["array printf destination", /\bprintf\s+-v\s+["']?[^\s"']*\[/u],
+  ["variable existence conditional", /(?:\[\[|&&|\|\|)\s*(?:!\s*)?(?:\(\s*)?-v\s/u],
+  ["modern wait option", /\bwait\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*[npf]\b/u],
+  ["allocated file descriptor", /(?<![$\w])\{[a-zA-Z_]\w*\}\s*[<>]/u],
+  ["fixed-length read", /\bread\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*N/u],
+  [
+    "modern shell option",
+    /\bshopt\s+[^\n]*\b(?:globstar|lastpipe|inherit_errexit|assoc_expand_once|localvar_inherit|localvar_unset)\b/u,
+  ],
+];
+
+function bash4Findings(source: string): string[] {
+  return source.split("\n").flatMap((line, index) => {
+    if (line.trimStart().startsWith("#")) {
+      return [];
+    }
+    return bash4Patterns
+      .filter(([, pattern]) => pattern.test(line))
+      .map(([name]) => `${index + 1}: ${name}: ${line.trim()}`);
+  });
+}
+
+function bash32Sources(): Map<string, string> {
+  const files = execFileSync(
+    "git",
+    ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+    {
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+    },
+  )
+    .split("\0")
+    .filter(
+      (file) =>
+        file &&
+        (!path.extname(file) || file.endsWith(".sh")) &&
+        existsSync(file) &&
+        statSync(file).isFile(),
+    );
+  const shells = new Map(files.map((file) => [file, readFileSync(file, "utf8")]));
+  const selected = new Map(
+    [...shells].filter(
+      ([file, source]) =>
+        source.startsWith("#!/bin/bash\n") ||
+        /exec \/bin\/bash/u.test(source) ||
+        // Include whole helper directories: some callers select a helper via a
+        // variable, and Docker payloads source scripts inside their container.
+        /^scripts\/(?:lib|pr-lib|e2e\/lib|docker\/install-sh-common)\/.*\.sh$/u.test(file),
+    ),
+  );
+  for (const source of selected.values()) {
+    // Match literal source basenames regardless of ROOT_DIR/SCRIPT_DIR spelling.
+    // Include all matches when a basename is shared, then visit their sources too.
+    // Operator profiles and generated env files are not repository libraries.
+    for (const match of source.matchAll(
+      /(?:^|[;\s])(?:source|\.)\s+["']?[^\s"']*?([\w.-]+\.sh)(?=["'\s;]|$)/gmu,
+    )) {
+      for (const [file, contents] of shells) {
+        if (path.posix.basename(file) === match[1]) {
+          selected.set(file, contents);
+        }
+      }
+    }
+  }
+  return selected;
+}
+
 describe("macOS Bash selection", () => {
+  it("keeps system-Bash entrypoints and their sourced libraries compatible with Bash 3.2", () => {
+    const findings = [...bash32Sources()].flatMap(([file, source]) =>
+      bash4Findings(source).map((finding) => `${file}:${finding}`),
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it.each([
+    'mapfile -t fields <<<"$metadata"',
+    "readarray fields",
+    "coproc worker",
+    "declare -A values",
+    "local -rA values",
+    "declare -n ref=value",
+    "${value,,}",
+    "${value^}",
+    "${values[-1]}",
+    "${!prefix@}",
+    "${value@Q}",
+    "cmd |& reader",
+    "cmd &>>log",
+    "case x in x) cmd ;;& esac",
+    "case x in x) cmd ;& esac",
+    'printf -v "values[0]" %s x',
+    "[[ -v value ]]",
+    "wait -n",
+    "exec {fd}<file",
+    "read -N 3 value",
+    "shopt -s globstar",
+  ])("rejects runtime-incompatible syntax: %s", (source) => {
+    expect(bash4Findings(source).length).toBeGreaterThan(0);
+  });
+
+  it("allows Bash 3.2 array reads, scalar printf, negative substrings, and explanatory comments", () => {
+    expect(
+      bash4Findings("read -a fields\nprintf -v value %s x\n${value: -1}\n# avoid mapfile"),
+    ).toEqual([]);
+  });
+
   it("keeps package commands from overriding native script shebangs through PATH", () => {
     const { scripts } = JSON.parse(readFileSync("package.json", "utf8")) as {
       scripts: Record<string, string>;

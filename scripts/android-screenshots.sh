@@ -505,7 +505,7 @@ boot_emulator() {
   emulator_args=(-avd "$avd" -no-window -no-audio -no-boot-anim)
   if [[ -n "${ANDROID_SCREENSHOT_EMULATOR_ARGS:-}" ]]; then
     read -r -a extra_args <<<"$ANDROID_SCREENSHOT_EMULATOR_ARGS"
-    emulator_args+=("${extra_args[@]}")
+    emulator_args+=(${extra_args[@]+"${extra_args[@]}"})
   fi
   "$emulator" "${emulator_args[@]}" >"$EMULATOR_LOG" 2>&1 &
   EMULATOR_PID="$!"

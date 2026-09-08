@@ -63,7 +63,7 @@ run_suspension_phase() {
   local stage="$1"
   DOCKER_COMMAND_TIMEOUT="$CLIENT_TIMEOUT" run_logged_print "gateway-network-suspension-$stage" \
     docker_e2e_docker_cmd exec \
-    "${CLIENT_LIMIT_ENV_ARGS[@]}" \
+    ${CLIENT_LIMIT_ENV_ARGS[@]+"${CLIENT_LIMIT_ENV_ARGS[@]}"} \
     -e "GW_URL=ws://127.0.0.1:$PORT" \
     -e "GW_TOKEN=$TOKEN" \
     -e "GW_MODE=suspension-$stage-restart" \
@@ -109,7 +109,7 @@ if [[ -n "$LEGACY_GATEWAY_LIB" ]]; then
   DOCKER_COMMAND_TIMEOUT="$CLIENT_TIMEOUT" run_logged gateway-network-client docker_e2e_docker_run_cmd run --rm \
     "${DOCKER_E2E_HARNESS_ARGS[@]}" \
     --network "$NET_NAME" \
-    "${CLIENT_LIMIT_ENV_ARGS[@]}" \
+    ${CLIENT_LIMIT_ENV_ARGS[@]+"${CLIENT_LIMIT_ENV_ARGS[@]}"} \
     -v "$LEGACY_GATEWAY_LIB:/app/scripts/e2e/lib:ro" \
     -e "GW_URL=ws://$GW_NAME:$PORT" \
     -e "GW_TOKEN=$TOKEN" \
@@ -128,7 +128,7 @@ DOCKER_COMMAND_TIMEOUT="$CLIENT_TIMEOUT" run_logged gateway-network-client docke
   "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   --user "$CAPABILITIES_HOST_USER:$CAPABILITIES_HOST_GROUP" \
   --network "$NET_NAME" \
-  "${CLIENT_LIMIT_ENV_ARGS[@]}" \
+  ${CLIENT_LIMIT_ENV_ARGS[@]+"${CLIENT_LIMIT_ENV_ARGS[@]}"} \
   -v "$CAPABILITIES_DIR:/tmp/gateway-network-output" \
   -e "GW_URL=ws://$GW_NAME:$PORT" \
   -e "GW_TOKEN=$TOKEN" \

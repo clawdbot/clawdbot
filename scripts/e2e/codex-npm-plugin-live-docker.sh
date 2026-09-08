@@ -231,8 +231,8 @@ if ! docker_e2e_run_with_harness \
   -e OPENAI_BASE_URL \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
-  "${CODEX_PLUGIN_MOUNT[@]}" \
-  "${PROFILE_MOUNT[@]}" \
+  ${CODEX_PLUGIN_MOUNT[@]+"${CODEX_PLUGIN_MOUNT[@]}"} \
+  ${PROFILE_MOUNT[@]+"${PROFILE_MOUNT[@]}"} \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
 set -Eeuo pipefail
 

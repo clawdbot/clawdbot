@@ -70,4 +70,4 @@ fi
 
 echo "==> Build live-test image: $LIVE_IMAGE_NAME (target=build)"
 echo "==> Bundled plugins: ${DOCKER_BUILD_EXTENSIONS}"
-docker_build_run live-build "${DOCKER_BUILD_ARGS[@]}" --target build -t "$LIVE_IMAGE_NAME" -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR"
+docker_build_run live-build ${DOCKER_BUILD_ARGS[@]+"${DOCKER_BUILD_ARGS[@]}"} --target build -t "$LIVE_IMAGE_NAME" -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR"

@@ -362,7 +362,10 @@ process.stdin.on("end", () => {
 });
 '
     )"
-    mapfile -t package_fields <<<"$package_metadata"
+    package_fields=()
+    while IFS= read -r package_field; do
+      package_fields+=("$package_field")
+    done <<<"$package_metadata"
     registry_args+=("${package_fields[0]}" "${package_fields[1]}" "$package_tgz")
   done
   registry_port_file="$(mktemp)"

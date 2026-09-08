@@ -238,7 +238,7 @@ fi
 
 (
   cleanup_files=()
-  trap 'rm -f "${cleanup_files[@]}"' EXIT
+  trap 'rm -f ${cleanup_files[@]+"${cleanup_files[@]}"}' EXIT
   run_with_manifest_overlay() {
     (
       cd "${repo_root}"

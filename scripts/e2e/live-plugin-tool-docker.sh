@@ -84,7 +84,7 @@ if ! docker_e2e_run_with_harness \
   -e "OPENCLAW_E2E_COMMAND_TIMEOUT=$COMMAND_TIMEOUT" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
-  "${PROFILE_MOUNT[@]}" \
+  ${PROFILE_MOUNT[@]+"${PROFILE_MOUNT[@]}"} \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
 set -euo pipefail
 

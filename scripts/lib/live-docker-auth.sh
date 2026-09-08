@@ -577,7 +577,7 @@ openclaw_live_chown_bind_dirs_for_container_user() {
   openclaw_live_docker_run_resource_args resource_args || return $?
 
   docker run --rm \
-    "${resource_args[@]}" \
+    ${resource_args[@]+"${resource_args[@]}"} \
     -u 0:0 \
     --entrypoint sh \
     -e OPENCLAW_BIND_DIR_USER="$container_user" \

@@ -1674,7 +1674,7 @@ install_openclaw_from_git() {
     pnpm_prefer_offline_args=(--prefer-offline)
   fi
   emit_json step name dependencies status start
-  CI="${CI:-true}" run_pnpm -C "$repo_dir" install "${pnpm_prefer_offline_args[@]}" "$install_lockfile_flag"
+  CI="${CI:-true}" run_pnpm -C "$repo_dir" install ${pnpm_prefer_offline_args[@]+"${pnpm_prefer_offline_args[@]}"} "$install_lockfile_flag"
   emit_json step name dependencies status ok
 
   emit_json step name control-ui status start
