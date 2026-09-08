@@ -5,7 +5,11 @@ import {
   resolveActiveFallbackState,
   type FallbackNoticeState,
 } from "../status/fallback-notice-state.js";
-import { buildFallbackNotice, resolveFallbackTransition } from "./fallback-state.js";
+import {
+  buildFallbackClearedNotice,
+  buildFallbackNotice,
+  resolveFallbackTransition,
+} from "./fallback-state.js";
 
 const baseAttempt = {
   provider: "demo-primary",
@@ -150,6 +154,45 @@ describe("fallback-state", () => {
     expect(resolved.reasonSummary).toBe("rate limit");
     expect(resolved.nextState.selectedModel).toBe("demo-primary/model-a");
     expect(resolved.nextState.activeModel).toBe("demo-fallback/model-b");
+  });
+
+  it("preserves provider-local model prefixes through fallback and recovery", () => {
+    const refs = {
+      selectedProvider: "custom",
+      selectedModel: "custom/model",
+      activeProvider: "custom",
+      activeModel: "model",
+      attempts: [{ ...baseAttempt, provider: "custom", model: "custom/model" }],
+    };
+    const activated = resolveDemoFallbackTransition(refs);
+    expect(activated).toMatchObject({
+      fallbackActive: true,
+      fallbackTransitioned: true,
+      nextState: { selectedModel: "custom/custom/model", activeModel: "custom/model" },
+      attemptSummaries: ["custom/custom/model rate limit"],
+    });
+    const state: FallbackNoticeState = {
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: activated.selectedModelRef,
+        activeModel: activated.activeModelRef,
+        reason: activated.reasonSummary,
+      },
+    };
+    expect(resolveDemoFallbackTransition({ ...refs, state })).toMatchObject({
+      fallbackTransitioned: false,
+      stateChanged: false,
+    });
+    expect(
+      resolveDemoFallbackTransition({ ...refs, activeModel: refs.selectedModel, state }),
+    ).toMatchObject({
+      fallbackCleared: true,
+      nextState: { selectedModel: undefined, activeModel: undefined, reason: undefined },
+    });
+    expect(buildFallbackNotice(refs)).toContain("selected custom/custom/model");
+    expect(
+      buildFallbackClearedNotice({ ...refs, previousActiveModel: activated.activeModelRef }),
+    ).toBe("↪️ Model Fallback cleared: custom/custom/model (was custom/model)");
   });
 
   it("prefers formatted transient error details over generic rate-limit labels", () => {

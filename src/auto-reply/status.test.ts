@@ -1443,41 +1443,50 @@ describe("buildStatusMessage", () => {
     expect(optionsLine).not.toContain("elevated");
   });
 
-  it("shows selected model and active runtime model when they differ", () => {
-    const text = buildStatusMessage({
-      agent: {
-        model: "anthropic/claude-opus-4-6",
-      },
-      sessionEntry: {
-        sessionId: "override-1",
-        updatedAt: 0,
-        providerOverride: "openai",
-        modelOverride: "gpt-4.1-mini",
-        modelProvider: "anthropic",
-        model: "claude-haiku-4-5",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "openai/gpt-4.1-mini",
-          activeModel: "anthropic/claude-haiku-4-5",
-          reason: "rate limit",
+  it.each([
+    ["openai", "gpt-4.1-mini", "anthropic", "claude-haiku-4-5"],
+    ["custom", "model", "custom", "custom/model"],
+    [undefined, "custom/model", "custom", "custom/model"],
+  ] as const)(
+    "shows selected %s/%s and active %s/%s when they differ",
+    (selectedProvider, selectedModel, activeProvider, activeModel) => {
+      const selectedRef = selectedProvider ? `${selectedProvider}/${selectedModel}` : selectedModel;
+      const activeRef = `${activeProvider}/${activeModel}`;
+      const text = buildStatusMessage({
+        agent: {
+          model: "anthropic/claude-opus-4-6",
         },
-        contextTokens: 32_000,
-      },
-      sessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      queue: { mode: "collect", depth: 0 },
-      modelAuth: "api-key",
-      activeModelAuth: "api-key di_123…abc (deepinfra:default)",
-    });
+        sessionEntry: {
+          sessionId: "override-1",
+          updatedAt: 0,
+          providerOverride: selectedProvider,
+          modelOverride: selectedModel,
+          modelProvider: activeProvider,
+          model: activeModel,
+          fallbackNotice: {
+            kind: "active",
+            selectedModel: selectedRef,
+            activeModel: activeRef,
+            reason: "rate limit",
+          },
+          contextTokens: 32_000,
+        },
+        sessionKey: "agent:main:main",
+        sessionScope: "per-sender",
+        queue: { mode: "collect", depth: 0 },
+        modelAuth: "api-key",
+        activeModelAuth: "api-key di_123…abc (deepinfra:default)",
+      });
 
-    const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Model: openai/gpt-4.1-mini");
-    expect(normalized).toContain("Fallback: anthropic/claude-haiku-4-5");
-    expect(normalized).toContain("(rate limit)");
-    expect(normalized).not.toContain(" - Reason:");
-    expect(normalized).not.toContain("Active:");
-    expect(normalized).toContain("di_123...abc");
-  });
+      const normalized = normalizeTestText(text);
+      expect(normalized).toContain(`Model: ${selectedRef}`);
+      expect(normalized).toContain(`Fallback: ${activeRef}`);
+      expect(normalized).toContain("(rate limit)");
+      expect(normalized).not.toContain(" - Reason:");
+      expect(normalized).not.toContain("Active:");
+      expect(normalized).toContain("di_123...abc");
+    },
+  );
 
   it("omits active fallback details when runtime drift does not match fallback state", () => {
     const text = buildStatusMessage({

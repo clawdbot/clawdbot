@@ -1032,23 +1032,32 @@ describe("/model chat UX", () => {
     );
   });
 
-  it("shows active runtime model when different from selected model", async () => {
-    const reply = await resolveModelInfoReply({
-      provider: "fireworks",
-      model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-      defaultProvider: "fireworks",
-      defaultModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-      sessionEntry: {
-        modelProvider: "deepinfra",
-        model: "moonshotai/Kimi-K2.5",
-      },
-    });
+  it.each([
+    [
+      "fireworks",
+      "accounts/fireworks/routers/kimi-k2p5-turbo",
+      "deepinfra",
+      "moonshotai/Kimi-K2.5",
+    ],
+    ["custom", "custom/model", "custom", "model"],
+  ])(
+    "shows selected %s/%s and active %s/%s when they differ",
+    async (selectedProvider, selectedModel, activeProvider, activeModel) => {
+      const reply = await resolveModelInfoReply({
+        provider: selectedProvider,
+        model: selectedModel,
+        defaultProvider: selectedProvider,
+        defaultModel: selectedModel,
+        sessionEntry: {
+          modelProvider: activeProvider,
+          model: activeModel,
+        },
+      });
 
-    expect(reply?.text).toContain(
-      "Current: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo (selected)",
-    );
-    expect(reply?.text).toContain("Active: deepinfra/moonshotai/Kimi-K2.5 (runtime)");
-  });
+      expect(reply?.text).toContain(`Current: ${selectedProvider}/${selectedModel} (selected)`);
+      expect(reply?.text).toContain(`Active: ${activeProvider}/${activeModel} (runtime)`);
+    },
+  );
 
   it("shows status for the allowed catalog without duplicate missing auth labels", async () => {
     const reply = await resolveModelInfoReply({

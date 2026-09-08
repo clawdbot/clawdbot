@@ -1,50 +1,13 @@
 // Model reference formatting helpers for auto-reply runtime status.
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
-
-/** Format a provider/model pair without duplicating provider prefixes already in the model id. */
-export function formatProviderModelRef(providerRaw: string, modelRaw: string): string {
-  const provider = normalizeOptionalString(providerRaw) ?? "";
-  const model = normalizeOptionalString(modelRaw) ?? "";
-  if (!provider) {
-    return model;
-  }
-  if (!model) {
-    return provider;
-  }
-  const prefix = `${provider}/`;
-  if (normalizeLowercaseStringOrEmpty(model).startsWith(normalizeLowercaseStringOrEmpty(prefix))) {
-    const normalizedModel = model.slice(prefix.length).trim();
-    if (normalizedModel) {
-      return `${provider}/${normalizedModel}`;
-    }
-  }
-  return `${provider}/${model}`;
-}
 
 type ModelRef = {
   provider: string;
   model: string;
   label: string;
 };
-
-function normalizeModelWithinProvider(provider: string, modelRaw: string): string {
-  const model = normalizeOptionalString(modelRaw) ?? "";
-  if (!provider || !model) {
-    return model;
-  }
-  const prefix = `${provider}/`;
-  if (normalizeLowercaseStringOrEmpty(model).startsWith(normalizeLowercaseStringOrEmpty(prefix))) {
-    const withoutPrefix = model.slice(prefix.length).trim();
-    if (withoutPrefix) {
-      return withoutPrefix;
-    }
-  }
-  return model;
-}
 
 function normalizeModelRef(
   rawModel: string,
@@ -64,12 +27,12 @@ function normalizeModelRef(
       };
     }
   }
+  // With a separate provider, the model ID is already provider-local; its prefix is literal.
   const provider = normalizeOptionalString(fallbackProvider) ?? "";
-  const dedupedModel = normalizeModelWithinProvider(provider, trimmed);
   return {
     provider,
-    model: dedupedModel || trimmed,
-    label: provider ? formatProviderModelRef(provider, dedupedModel || trimmed) : trimmed,
+    model: trimmed,
+    label: provider ? buildModelCatalogRef(provider, trimmed) : trimmed,
   };
 }
 

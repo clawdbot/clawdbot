@@ -1,4 +1,5 @@
 // Status message helpers read and format stored status messages.
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   type FastMode,
@@ -25,10 +26,7 @@ import {
 } from "../agents/model-selection.js";
 import { resolveOpenAITextVerbosity } from "../agents/openai-text-verbosity.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
-import {
-  formatProviderModelRef,
-  resolveSelectedAndActiveModel,
-} from "../auto-reply/model-runtime.js";
+import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import type {
   ElevatedLevel,
   ReasoningLevel,
@@ -730,7 +728,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     }
   }
 
-  const activeModelLabel = formatProviderModelRef(activeProvider, activeModel) || "unknown";
+  const activeModelLabel = buildModelCatalogRef(activeProvider, activeModel) || "unknown";
   const runtimeDiffersFromSelected = activeModelLabel !== (modelRefs.selected.label || "unknown");
   const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
     modelRefs.selected.label || "unknown",
