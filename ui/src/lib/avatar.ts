@@ -50,12 +50,8 @@ export function resolveChatAvatarRenderUrl(
 }
 
 export function deriveAvatarInitial(value: string | null | undefined): string {
-  const source = value ?? "";
-  if (!source) {
-    return "";
-  }
   // Keep the whole leading grapheme so emoji names never expose a broken surrogate.
-  return takeGraphemes(source, 1).toUpperCase();
+  return takeGraphemes(value ?? "", 1).toUpperCase();
 }
 
 export function resolveAssistantTextAvatar(value: string | null | undefined): string | null {

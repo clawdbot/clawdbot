@@ -8,6 +8,7 @@ import { renderPanelRefreshStatus } from "../../components/panel-refresh-status.
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { takeGraphemes } from "../../lib/graphemes.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import "../../styles/dashboards.css";
@@ -104,7 +105,7 @@ function renderDashboardCard(
   });
   const author = dashboardAuthor(row, data.fallbackAgentId);
   const title = resolveSessionDisplayName(row.key, row);
-  const initial = author.label.trim().charAt(0).toLocaleUpperCase() || "?";
+  const initial = takeGraphemes(author.label.trim(), 1).toLocaleUpperCase() || "?";
   return html`<article class="dashboard-card" data-dashboard-session=${row.key}>
     <a class="dashboard-card__main" href=${target.href} aria-label=${title}>
       ${renderDashboardPreview(row, gatewaySnapshot, previewError)}
