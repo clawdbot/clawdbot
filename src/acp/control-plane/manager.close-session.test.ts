@@ -38,10 +38,7 @@ describe("AcpSessionManager closeSession", () => {
       // The backend close is unavailable; the recovery path must still clear the
       // acpx FileSessionStore resume pointer via prepareFreshSession.
       runtimeState.close.mockImplementation(async () => {
-        throw new AcpRuntimeError(
-          "ACP_BACKEND_UNAVAILABLE",
-          "backend unavailable on close",
-        );
+        throw new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "backend unavailable on close");
       });
 
       const manager = new AcpSessionManager();
