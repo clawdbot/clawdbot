@@ -76,6 +76,13 @@ async function executeFetchedNodeFile(params: {
       node: "node-1",
       path: params.requestedPath ?? filePath,
     });
+    expect(saveMediaBuffer).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      payload.mimeType,
+      FILE_TRANSFER_SUBDIR,
+      expect.any(Number),
+      filePath,
+    );
     return { result, payload, savedPath };
   } finally {
     await fs.rm(rootDir, { recursive: true, force: true });
