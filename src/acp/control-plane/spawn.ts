@@ -41,6 +41,7 @@ export async function cleanupFailedAcpSpawn(params: {
   };
   let deletionStarted = false;
   const cancellation = new AbortController();
+  let admissionTimeout: ReturnType<typeof setTimeout> | undefined;
   try {
     await runWithGatewayToolCleanupContext(async () => {
       assertCurrent();
@@ -48,6 +49,11 @@ export async function cleanupFailedAcpSpawn(params: {
       if (!context) {
         throw new Error("ACP provisional cleanup Gateway is unavailable.");
       }
+      // Bound lazy preparation, but join canonical deletion once it owns cleanup.
+      // A caller-only deadline would leave the provisional row after spawn returns.
+      admissionTimeout = setTimeout(() => {
+        cancellation.abort(new Error("ACP provisional cleanup admission timed out."));
+      }, 10_000);
       await callInProcessGatewayTool(
         "sessions.delete",
         {
@@ -67,9 +73,10 @@ export async function cleanupFailedAcpSpawn(params: {
             assertCurrent();
             // The router calls this after lazy preparation, before handler entry.
             deletionStarted = true;
+            clearTimeout(admissionTimeout);
           },
           signal: cancellation.signal,
-          timeoutMs: 10_000,
+          timeoutMs: null,
         },
       );
     });
@@ -96,5 +103,7 @@ export async function cleanupFailedAcpSpawn(params: {
       });
     }
     logVerbose(`acp-spawn: provisional session cleanup failed: ${String(error)}`);
+  } finally {
+    clearTimeout(admissionTimeout);
   }
 }

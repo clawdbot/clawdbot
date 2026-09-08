@@ -316,7 +316,7 @@ describe("failed ACP provisional cleanup", () => {
   });
 
   it.each(["before admission", "after admission"] as const)(
-    "does not repeat resource cleanup after a deadline %s",
+    "bounds preparation but joins admitted cleanup after a deadline %s",
     async (boundary) => {
       await withCleanupFixture(async ({ initialize, cleanup, close, ensureSession, socket }) => {
         const scope = getPluginRuntimeGatewayRequestScope();
@@ -367,11 +367,26 @@ describe("failed ACP provisional cleanup", () => {
           { ...scope, context, resolveGatewayContext: () => context },
           async () => {
             vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-            const cleaning = cleanup({ ...initialized, closeRuntimeOnFailure: retainedRelease });
+            let settled = false;
+            const cleaning = cleanup({
+              ...initialized,
+              closeRuntimeOnFailure: retainedRelease,
+            }).finally(() => {
+              settled = true;
+            });
             try {
               await entered.promise;
               await vi.advanceTimersByTimeAsync(10_001);
-              await cleaning;
+              if (boundary === "before admission") {
+                await cleaning;
+              } else {
+                expect
+                  .soft(settled, "admitted deletion must complete before cleanup returns")
+                  .toBe(false);
+                expect(loadSessionEntry({ sessionKey, agentId })?.sessionId).toBe(
+                  initialized.sessionEntry.sessionId,
+                );
+              }
               expect(retainedRelease).toHaveBeenCalledTimes(
                 boundary === "before admission" ? 1 : 0,
               );
@@ -380,6 +395,9 @@ describe("failed ACP provisional cleanup", () => {
               vi.useRealTimers();
               release.resolve();
               await cleaning;
+              expect
+                .soft(loadSessionEntry({ sessionKey, agentId }))
+                .toEqual(boundary === "before admission" ? before : undefined);
               await Promise.allSettled(executions);
             }
             expect(deletion).toHaveBeenCalledTimes(boundary === "before admission" ? 0 : 1);

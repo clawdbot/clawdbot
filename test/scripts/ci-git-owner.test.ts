@@ -277,20 +277,68 @@ releasePolicyIt("deepens past a provisional shallow merge base", () => {
   }
 });
 
-releasePolicyIt("accepts a newly proven relation when deepening only moves a boundary", () => {
-  const fixture = createAncestryFixture({
-    sourceDistance: 64,
-    targetDistance: 8,
-    related: true,
-  });
-  try {
-    const checkout = cloneAncestrySource(fixture, "checkout");
-    expectPolicySuccess(runReleaseAncestry(checkout, "merge-base"), "merge-base");
-    expect(fixtureGit(checkout, ["merge-base", fixture.source, fixture.target])).not.toBe("");
-  } finally {
-    rmSync(fixture.root, { force: true, recursive: true });
-  }
-});
+releasePolicyIt.each(["native", "changed-refs-only"])(
+  "accepts a newly proven relation when deepening only moves a boundary: %s",
+  (transport) => {
+    const fixture = createAncestryFixture({
+      sourceDistance: 64,
+      targetDistance: 8,
+      related: true,
+    });
+    try {
+      const checkout = cloneAncestrySource(fixture, "checkout");
+      const proxy =
+        transport === "changed-refs-only"
+          ? writeGitProxy(
+              fixture,
+              "changed-refs-only-git",
+              `exec python3 - "$@" <<'PYTHON'
+import os, subprocess, sys
+args = sys.argv[1:]
+real_git = os.environ["REAL_GIT"]
+if "fetch" in args and any(arg.startswith("--deepen=") for arg in args):
+    wanted = {os.environ["FIXTURE_SOURCE"]: os.environ["FIXTURE_SOURCE"],
+              "refs/heads/main": os.environ["FIXTURE_TARGET"]}
+    selected = []
+    for arg in args:
+        source, separator, destination = arg.removeprefix("+").partition(":")
+        if source not in wanted:
+            continue
+        local = subprocess.run([real_git, "rev-parse", "--verify", destination],
+                               capture_output=True, text=True) if separator else None
+        if local is None or local.returncode != 0 or local.stdout.strip() != wanted[source]:
+            selected.append(wanted[source])
+    # Git transport omits unchanged peers if another requested ref changes.
+    # This fixture's target history is already complete; fetching that target
+    # alone creates its local ref without moving the source's shallow boundary.
+    if selected == [os.environ["FIXTURE_TARGET"]]:
+        args = [arg for arg in args if not arg.startswith("--deepen=")]
+os.execv(real_git, [real_git, *args])
+PYTHON`,
+            )
+          : undefined;
+      expectPolicySuccess(
+        runReleaseAncestry(
+          checkout,
+          "merge-base",
+          proxy
+            ? {
+                FIXTURE_SOURCE: fixture.source,
+                FIXTURE_TARGET: fixture.target,
+                PATH: `${proxy.binDir}:${process.env.PATH ?? ""}`,
+                REAL_GIT: proxy.realGit,
+              }
+            : {},
+        ),
+        "merge-base",
+      );
+      expect(fixtureGit(checkout, ["merge-base", fixture.source, fixture.target])).not.toBe("");
+      expect(fixtureGit(checkout, ["rev-parse", "refs/remotes/origin/main"])).toBe(fixture.target);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  },
+);
 
 releasePolicyIt("hydrates a Tideclaw target more than 180 commits beyond its source", () => {
   const fixture = createAncestryFixture({
