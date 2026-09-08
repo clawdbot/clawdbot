@@ -287,6 +287,54 @@ describe("readScheduledTaskCommand", () => {
     );
   });
 
+  it("reads a quoted working directory that ends with a backslash", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", 'cd /d "C:\\Program Files\\OpenClaw\\\\"', "node gateway.js"],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js"],
+          workingDirectory: "C:\\Program Files\\OpenClaw\\",
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("reads an unquoted working directory that contains spaces", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", "cd /d C:\\Program Files\\OpenClaw", "node gateway.js"],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js"],
+          workingDirectory: "C:\\Program Files\\OpenClaw",
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("reads legacy quoted working directories that ended with a single backslash", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", 'cd /d "C:\\Program Files\\OpenClaw\\"', "node gateway.js"],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js"],
+          workingDirectory: "C:\\Program Files\\OpenClaw\\",
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
   it("reads legacy UTF-8 scripts with CJK paths written before the encoding fix", async () => {
     await withScheduledTaskScript(
       {

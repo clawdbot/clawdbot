@@ -1,5 +1,5 @@
 /** Shared argument splitter for service command lines rendered by platform adapters. */
-type ArgSplitEscapeMode = "none" | "backslash" | "backslash-quote-only";
+type ArgSplitEscapeMode = "none" | "backslash" | "backslash-quote-only" | "windows-cmd";
 type ArgSplitQuoteChar = '"' | "'";
 type ArgSplitQuoteStart = "anywhere" | "item-start";
 
@@ -39,6 +39,35 @@ export function splitArgsPreservingQuotes(
       // their backslashes literal.
       current += '"';
       i++;
+      continue;
+    }
+    if (escapeMode === "windows-cmd" && char === "\\") {
+      // CommandLineToArgvW: 2n backslashes + " closes the quote with n
+      // backslashes; 2n+1 backslashes + " is n backslashes and a literal ".
+      let slashCount = 1;
+      while (i + slashCount < value.length && value.charAt(i + slashCount) === "\\") {
+        slashCount += 1;
+      }
+      const quoteIndex = i + slashCount;
+      if (quoteIndex < value.length && value.charAt(quoteIndex) === '"') {
+        current += "\\".repeat(Math.floor(slashCount / 2));
+        if (slashCount % 2 === 1) {
+          current += '"';
+        } else if (quoteChar === '"') {
+          quoteChar = null;
+        } else {
+          const canOpenQuote = quoteStart === "anywhere" || current.length === 0;
+          if (!quoteChar && canOpenQuote) {
+            quoteChar = '"';
+          } else {
+            current += '"';
+          }
+        }
+        i = quoteIndex;
+        continue;
+      }
+      current += "\\".repeat(slashCount);
+      i += slashCount - 1;
       continue;
     }
     if (quoteChars.has(char as ArgSplitQuoteChar)) {

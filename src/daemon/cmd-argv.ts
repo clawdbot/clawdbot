@@ -10,12 +10,14 @@ export function quoteCmdScriptArg(
   if (!value) {
     return '""';
   }
-  const quoted = value.replace(/"/g, '\\"').replace(/%/g, "%%");
-  const escaped = options.delayedExpansion === false ? quoted : quoted.replace(/!/g, "^!");
+  const quoted = value.replace(/(\\*)"/g, (_match, slashes: string) => `${slashes}${slashes}\\"`);
+  const expanded = quoted.replace(/%/g, "%%");
+  const escaped = options.delayedExpansion === false ? expanded : expanded.replace(/!/g, "^!");
   if (!/[ \t"&|<>^()%!]/g.test(value)) {
     return escaped;
   }
-  return `"${escaped}"`;
+  // A trailing backslash would otherwise escape the wrapper quote (`\"`).
+  return `"${escaped.replace(/(\\+)$/, (slashes) => slashes + slashes)}"`;
 }
 
 function unescapeCmdScriptArg(value: string): string {
@@ -23,9 +25,7 @@ function unescapeCmdScriptArg(value: string): string {
 }
 
 export function parseCmdScriptCommandLine(value: string): string[] {
-  // Script renderer escapes quotes (`\"`) and cmd expansions (`%%`, `^!`).
-  // Keep all other backslashes literal so Windows drive/UNC paths survive.
-  return splitArgsPreservingQuotes(value, { escapeMode: "backslash-quote-only" }).map(
-    unescapeCmdScriptArg,
-  );
+  // Script renderer uses CommandLineToArgvW quote rules plus cmd expansions
+  // (`%%`, `^!`). Drive and UNC backslashes stay literal unless they precede ".
+  return splitArgsPreservingQuotes(value, { escapeMode: "windows-cmd" }).map(unescapeCmdScriptArg);
 }
