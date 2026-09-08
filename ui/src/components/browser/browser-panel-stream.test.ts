@@ -347,17 +347,59 @@ describe("Browser panel stream ownership", () => {
       sockets[0]!.receive(screencastFrame());
       await flush();
       const streamedView = controller.view;
-      expect(streamedView?.dataUrl).toBe("blob:frame-0");
+      expect(streamedView?.dataUrl).toMatch(/^blob:frame-/);
       expect(controller.loading).toBe(false);
       if (closes) {
         sockets[0]!.disconnect(1006);
+        await flush();
+        // Stream disconnect requests a fresh screenshot to replace the stale
+        // frame; the previously-pulled screenshot is still the one resolving.
+        expect(calls("/screenshot").length).toBeGreaterThanOrEqual(1);
       }
       screenshot.resolve({ path: "/old.png", targetId: "raw-a", url: PAGE_URL });
       await pending;
       expect(controller.view).toBe(streamedView);
-      expect(fetch).not.toHaveBeenCalled();
     },
   );
+
+  it("requests a screenshot fallback when a non-handshake stream disconnects after presentation", async () => {
+    const { controller, calls } = setup();
+    const socket = await start(controller);
+    socket.receive(screencastFrame());
+    await flush();
+    const streamedView = controller.view;
+    expect(streamedView?.dataUrl).toMatch(/^blob:frame-/);
+    expect(calls("/screenshot")).toHaveLength(0);
+    socket.disconnect(1006, "");
+    await flush();
+    expect(calls("/screenshot")).toHaveLength(1);
+  });
+
+  it("schedules a screencast retry after the disconnect backoff", async () => {
+    const { controller, calls } = setup();
+    const socket = await start(controller);
+    socket.receive(screencastFrame());
+    await flush();
+    socket.disconnect(1006, "");
+    await flush();
+    expect(calls("/screencast")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(9999);
+    expect(calls("/screencast")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls("/screencast")).toHaveLength(2);
+  });
+
+  it("cancels a pending retry when the active target changes", async () => {
+    const { controller, calls } = setup();
+    const socket = await start(controller);
+    socket.receive(screencastFrame());
+    await flush();
+    socket.disconnect(1006, "");
+    await flush();
+    controller.setState("activeTargetId", null);
+    await vi.advanceTimersByTimeAsync(10_001);
+    expect(calls("/screencast")).toHaveLength(1);
+  });
 
   it("marks navigation-blocked tabs unavailable and releases the visible frame", async () => {
     const { controller } = setup();

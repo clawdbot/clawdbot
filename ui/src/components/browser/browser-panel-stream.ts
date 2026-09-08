@@ -29,7 +29,13 @@ interface BrowserPanelStreamHost extends StreamState {
   readonly mode: "interact" | "annotate" | "inspect";
   readonly operations: Pick<
     BrowserPanelOperationOwnership,
-    "epoch" | "route" | "isLive" | "hasPendingCapture" | "capturedTabs" | "markNavigationReconciled"
+    | "epoch"
+    | "route"
+    | "isLive"
+    | "hasPendingCapture"
+    | "capturedTabs"
+    | "markNavigationReconciled"
+    | "captureClient"
   >;
   readonly urlDraftEditing: boolean;
   readonly observedViewportSize: { width: number; height: number } | null;
@@ -60,6 +66,8 @@ type Attempt = {
 /** Owns stream attachment and the object URLs of the active browser surface. */
 export class BrowserPanelStream {
   private attempt?: Attempt;
+  /** Target the stream should retry once the existing close + retry timer fires. */
+  private retrying?: { targetId: string; epoch: number };
   frameRevision = 0;
   private scope?: { client: BrowserPanelControllerHost["client"]; route: string };
   private unsupported = false;
@@ -69,6 +77,7 @@ export class BrowserPanelStream {
   private resizeTimer?: ReturnType<typeof setTimeout>;
   private recoveryTimer?: ReturnType<typeof setTimeout>;
   private recovery?: Recovery;
+  private retryTimer?: ReturnType<typeof setTimeout>;
   private viewportSyncPending = false;
   private readonly retiringUrls = new Set<string>();
 
@@ -178,24 +187,33 @@ export class BrowserPanelStream {
           if (!this.current(attempt)) {
             return;
           }
-          if (code !== 4003 && code !== 4004) {
-            this.recover(attempt);
+          const streamRetriable = code !== 4003 && code !== 4004;
+          // Preserve the last frame so the user keeps a view while the fallback
+          // screenshot and the 10s reconnect attempt complete.
+          this.close(false);
+          if (!streamRetriable) {
+            if (code === 4003) {
+              this.host.setState(
+                "tabs",
+                this.host.tabs.map((tab) =>
+                  tab.id === attempt.targetId
+                    ? { ...tab, url: "", urlUnavailableReason: "navigation_blocked" }
+                    : tab,
+                ),
+              );
+              this.host.clearUnavailableView();
+            } else if (code === 4004) {
+              // The remote target restarted; refresh everything and let the
+              // regular ensure() flow reschedule a new stream at once.
+              void this.host.refreshAll();
+            }
             return;
           }
-          this.close();
-          if (code === 4003) {
-            this.host.setState(
-              "tabs",
-              this.host.tabs.map((tab) =>
-                tab.id === attempt.targetId
-                  ? { ...tab, url: "", urlUnavailableReason: "navigation_blocked" }
-                  : tab,
-              ),
-            );
-            this.host.clearUnavailableView();
-          } else if (code === 4004) {
-            void this.host.refreshAll();
-          }
+          this.lastFailures.set(attempt.targetId, Date.now());
+          // Fallback: request a one-shot screenshot to replace the stale frame,
+          // and schedule a follow-up ensure() after the existing backoff window.
+          void this.host.refreshView(attempt.targetId, attempt.epoch);
+          this.scheduleRetry(attempt.targetId, attempt.epoch);
         },
       });
     } catch (error) {
@@ -400,6 +418,23 @@ export class BrowserPanelStream {
     }, RESIZE_RESTART_DEBOUNCE_MS);
   }
 
+  private scheduleRetry(targetId: string, epoch: number): void {
+    clearTimeout(this.retryTimer);
+    this.retrying = { targetId, epoch };
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = undefined;
+      const pending = this.retrying;
+      this.retrying = undefined;
+      if (!pending || this.host.activeTargetId !== pending.targetId) {
+        return;
+      }
+      const client = this.host.operations.captureClient();
+      if (client) {
+        void this.ensure(pending.targetId, client, pending.epoch);
+      }
+    }, RETRY_DELAY_MS);
+  }
+
   releaseReplacedView(): void {
     const previousUrl = this.objectUrl;
     this.objectUrl = undefined;
@@ -427,6 +462,9 @@ export class BrowserPanelStream {
     this.recovery = undefined;
     clearTimeout(this.resizeTimer);
     this.resizeTimer = undefined;
+    clearTimeout(this.retryTimer);
+    this.retryTimer = undefined;
+    this.retrying = undefined;
     // Invalidation cancels the pending sync timer; the next stream must be able to schedule one.
     this.viewportSyncPending = false;
     const attempt = this.attempt;
