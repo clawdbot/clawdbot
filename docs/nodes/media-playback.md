@@ -75,6 +75,9 @@ artifact through `artifacts.download`, which returns inline base64 bytes when
 the artifact is byte-backed or a short-lived, ticketed URL when it is
 Gateway-managed.
 
+Download filenames preserve Unicode characters and literal percent sequences
+such as `%20`.
+
 Native clients resolve ticketed media against the connected Gateway URL,
 preserving its reverse-proxy path prefix. A Gateway reached at
 `wss://gateway.example/openclaw` loads managed media beneath
@@ -83,8 +86,16 @@ preserving its reverse-proxy path prefix. A Gateway reached at
 The ticketed byte routes support:
 
 - `Range` requests with HTTP `206 Partial Content` for seeking
-- `ETag` and `If-Range` for safe resume behavior
+- `ETag` and `If-Range` for safe resume of immutable managed originals
 - `HEAD` requests with the same content metadata and no response body
+
+For immutable originals, `If-None-Match` compares complete quoted tags using weak comparison. Commas and asterisks inside a quoted tag are literal; only a standalone `*` is a wildcard. A nonmatching tag leaves the normal full or ranged response intact.
+
+Local assistant files can change, and playback renditions can become available
+after a conversion retry. These responses revalidate without reusable validators:
+cached ETags or modification dates cannot suppress fresh bytes, and `If-Range`
+requests receive the full representation. Ordinary `Range` requests still support
+seeking. Managed playback responses remain private to the client cache.
 
 Do not copy a ticketed URL into durable configuration. Clients reacquire a
 ticket from the authenticated Gateway when needed.

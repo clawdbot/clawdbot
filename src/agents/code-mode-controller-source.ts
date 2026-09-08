@@ -24,11 +24,17 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   // can clear it; an unawaited failure must not become a successful cell.
   const unhandledRejections = new Map();
   let nextTimerId = 0;
+  const GuestPromise = Promise;
+  const promiseOutput = "[Unawaited Promise: use await or Promise.all(...) before emitting or returning values.]";
 
-  function safe(value) {
+  function outputReplacer(_key, value) {
+    return value instanceof GuestPromise ? promiseOutput : value;
+  }
+
+  function safe(value, diagnosePromises = false) {
     if (value === undefined) return null;
     try {
-      return JSON.parse(JSON.stringify(value));
+      return JSON.parse(JSON.stringify(value, diagnosePromises ? outputReplacer : undefined));
     } catch {
       if (value instanceof Error) {
         return { name: value.name, message: value.message };
@@ -42,7 +48,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
 
   function asText(value) {
     if (typeof value === "string") return value;
-    const encoded = JSON.stringify(safe(value));
+    const encoded = JSON.stringify(safe(value, true));
     return typeof encoded === "string" ? encoded : String(value);
   }
 
@@ -58,12 +64,13 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       hostRequest(methodName, argsJson, id);
       pending.set(id, callbacks);
     };
-    if (queue && pending.size >= maxPending) queued.push(admit);
+    if (queue) queued.push(admit);
     else admit();
     return { id, promise };
   }
 
-  // Swarm queues before admission; raw tools retain all-or-nothing overflow rejection.
+  // Refill after guest continuations run so collector results can trigger ordinary
+  // tools before queued Swarm work takes their released slots.
   // Closures and stable IDs live in the bounded VM snapshot, never a second host queue.
   function drainQueuedRequests() {
     while (queued.length > 0 && pending.size < maxPending) queued.shift()();
@@ -98,7 +105,6 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     if (!entry) return;
     pending.delete(requestId);
     entry.resolve(null);
-    drainQueuedRequests();
   }
 
   ${CODE_MODE_SWARM_CONTROLLER_SOURCE}
@@ -147,7 +153,6 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       const error = new Error(typeof parsed === "string" ? parsed : parsed?.message ?? "nested tool failed");
       entry.reject(error);
     }
-    drainQueuedRequests();
     return true;
   }
 
@@ -268,6 +273,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   // Final values may nest handles (Promise.all of searches, keyed maps); an
   // unserialized handle dumps as null and the model never learns the tool name.
   function serializeCatalogHandles(value, seen = new Set()) {
+    if (value instanceof GuestPromise) return promiseOutput;
     const metadata = callableMetadata.get(value);
     if (metadata) return metadata;
     if (value === null || typeof value !== "object" || seen.has(value)) return value;
@@ -334,9 +340,10 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     setTimeout: { value: (callback, delay, ...args) => scheduleTimer(callback, delay, args), enumerable: true },
     clearTimeout: { value: cancelTimer, enumerable: true },
     text: { value: (value) => output.push({ type: "text", text: asText(value) }), enumerable: true },
-    json: { value: (value) => output.push({ type: "json", value: safe(value) }), enumerable: true },
+    json: { value: (value) => output.push({ type: "json", value: safe(value, true) }), enumerable: true },
     yield_control: { value: (reason) => request("yield", [reason]), enumerable: true },
     __openclawSettleBridge: { value: settle },
+    __openclawDrainQueuedRequests: { value: drainQueuedRequests },
     __openclawSerializeCatalogHandles: { value: serializeCatalogHandles },
     __openclawTakeOutput: { value: () => output.splice(0) },
     __openclawTrackRejection: {

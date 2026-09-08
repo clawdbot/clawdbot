@@ -2,10 +2,13 @@
 summary: "Adds ClawRouter model provider support to OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the clawrouter plugin
-title: "ClawRouter plugin"
+title: "ClawRouter plugin reference"
 ---
 
-# ClawRouter plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Adds ClawRouter model provider support to OpenClaw.
 
@@ -16,7 +19,8 @@ Adds ClawRouter model provider support to OpenClaw.
 
 ## Surface
 
-providers: `clawrouter`; contracts: `usageProviders`
+- Providers: `clawrouter`
+- Contracts: `usageProviders`
 
 ## Related docs
 

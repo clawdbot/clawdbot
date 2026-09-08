@@ -2,7 +2,7 @@ import { PLATFORM_SEND_OWNER_LEASE_MS } from "../delivery-queue-sqlite-claim.js"
 
 const PLATFORM_SEND_OWNER_HEARTBEAT_MS = Math.floor(PLATFORM_SEND_OWNER_LEASE_MS / 3);
 
-type DeliveryProducerLease = {
+export type DeliveryProducerLease = {
   signal: AbortSignal;
   stop: () => void;
 };

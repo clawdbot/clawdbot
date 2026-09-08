@@ -40,9 +40,9 @@ import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreWithoutExternalProfiles,
-  resolvePersistedAuthProfileOwnerAgentDir,
   updateAuthProfileStoreWithLock,
-} from "./store.js";
+} from "./store-runtime.js";
+import { resolvePersistedAuthProfileOwnerAgentDir } from "./store.js";
 import type { AuthProfileStore, OAuthCredential, OAuthCredentials } from "./types.js";
 
 type OAuthManagerAdapter = {

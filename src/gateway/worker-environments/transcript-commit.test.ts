@@ -57,6 +57,8 @@ const IDENTITY: WorkerConnectionIdentity = {
   credentialExpiresAtMs: 10_000,
 };
 
+const ADMITTED_OWNER = { identity: IDENTITY, assertCurrent: () => undefined };
+
 const ZERO_USAGE = {
   input: 0,
   output: 0,
@@ -230,12 +232,12 @@ describe("worker transcript commit application", () => {
     }
     toolResult.content.push(image);
     const request = createRequest({ messages });
-    const outcome = await committer.commit({ identity: IDENTITY, request });
+    const outcome = await committer.commit({ ...ADMITTED_OWNER, request });
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) {
       throw new Error(`expected image transcript commit success: ${outcome.reason}`);
     }
-    await expect(committer.commit({ identity: IDENTITY, request })).resolves.toEqual(outcome);
+    await expect(committer.commit({ ...ADMITTED_OWNER, request })).resolves.toEqual(outcome);
     const reopened = SessionManager.open(sessionTarget);
     const entry = reopened.getEntry(outcome.result.newLeafId);
     expect(entry).toMatchObject({
@@ -265,7 +267,7 @@ describe("worker transcript commit application", () => {
     }
     toolResult.content.push(image);
     const outcome = await committer.commit({
-      identity: IDENTITY,
+      ...ADMITTED_OWNER,
       request: createRequest({ messages }),
     });
 
@@ -369,7 +371,7 @@ describe("worker transcript commit application", () => {
 
   it("durably materializes a user-only commit", async () => {
     const outcome = await committer.commit({
-      identity: IDENTITY,
+      ...ADMITTED_OWNER,
       request: createRequest({
         messages: [
           {
@@ -396,14 +398,74 @@ describe("worker transcript commit application", () => {
     expect(reopened.getLeafId()).toBe(outcome.result.newLeafId);
   });
 
+  it("commits a non-default agent's global session", async () => {
+    const updates: Parameters<Parameters<typeof onSessionTranscriptUpdate>[0]>[0][] = [];
+    unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
+    const workStorePath = path.join(root, "agents", "work", "sessions", "sessions.json");
+    cfg = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "work" }],
+      },
+      session: {
+        scope: "global",
+        store: path.join(root, "agents", "{agentId}", "sessions", "sessions.json"),
+      },
+    };
+    await upsertSessionEntryCore(
+      { agentId: "work", sessionKey: "global", storePath: workStorePath },
+      { sessionId: SESSION_ID, updatedAt: 20 },
+    );
+    const workTarget = await resolveSessionTranscriptRuntimeTarget({
+      agentId: "work",
+      sessionId: SESSION_ID,
+      sessionKey: "global",
+      storePath: workStorePath,
+    });
+    const outcome = await committer.commit({
+      ...ADMITTED_OWNER,
+      request: createRequest({
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "Persist in the owning agent" }],
+            timestamp: 100,
+          },
+        ],
+      }),
+    });
+
+    expect(outcome.ok, "WORKER_OWNER_COMMIT_139216").toBe(true);
+    if (!outcome.ok) {
+      throw new Error(`expected global transcript commit, received ${outcome.reason}`);
+    }
+    expect(SessionManager.open(workTarget).getEntries()).toEqual([
+      expect.objectContaining({
+        id: outcome.result.newLeafId,
+        message: expect.objectContaining({
+          role: "user",
+          content: [{ type: "text", text: "Persist in the owning agent" }],
+        }),
+      }),
+    ]);
+    expect(SessionManager.open(sessionTarget).getEntries()).toEqual([]);
+    expect(updates).toEqual([
+      expect.objectContaining({
+        agentId: "work",
+        sessionId: SESSION_ID,
+        sessionKey: "global",
+        messageId: outcome.result.newLeafId,
+      }),
+    ]);
+  });
+
   it("rejects a stale base leaf without appending", async () => {
-    const first = await committer.commit({ identity: IDENTITY, request: createRequest() });
+    const first = await committer.commit({ ...ADMITTED_OWNER, request: createRequest() });
     if (!first.ok) {
       throw new Error(`expected initial transcript commit success, received ${first.reason}`);
     }
 
     const stale = await committer.commit({
-      identity: IDENTITY,
+      ...ADMITTED_OWNER,
       request: createRequest({
         baseLeafId: null,
         messages: [
@@ -457,7 +519,7 @@ describe("worker transcript commit application", () => {
     // not move the active worker's base while that worker is still producing output.
     const second = await admit("next-worker-run", "Second input");
     const completed = await committer.commit({
-      identity: IDENTITY,
+      ...ADMITTED_OWNER,
       request: createRequest({
         baseLeafId: firstUser.messageId,
         messages: createTurnMessages().slice(1),
@@ -506,7 +568,7 @@ describe("worker transcript commit application", () => {
     );
     await ownerChangeStarted;
 
-    const commit = committer.commit({ identity: IDENTITY, request: createRequest() });
+    const commit = committer.commit({ ...ADMITTED_OWNER, request: createRequest() });
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -525,13 +587,13 @@ describe("worker transcript commit application", () => {
 
   it("replays the same tuple without duplicates and rejects a changed payload", async () => {
     const request = createRequest();
-    const first = await committer.commit({ identity: IDENTITY, request });
+    const first = await committer.commit({ ...ADMITTED_OWNER, request });
     const replay = await committer.commit({
-      identity: IDENTITY,
+      ...ADMITTED_OWNER,
       request: structuredClone(request),
     });
     const changed = await committer.commit({
-      identity: IDENTITY,
+      ...ADMITTED_OWNER,
       request: createRequest({ messages: createTurnMessages("Changed payload") }),
     });
 
@@ -548,7 +610,7 @@ describe("worker transcript commit application", () => {
   it("recovers an interrupted terminal write after later transcript activity", async () => {
     let interruptCompletion = true;
     const interruptedStore: WorkerTranscriptCommitStore = {
-      begin: ledgerStore.begin,
+      ...ledgerStore,
       complete: (input) => {
         if (interruptCompletion) {
           interruptCompletion = false;
@@ -563,7 +625,7 @@ describe("worker transcript commit application", () => {
     });
     const request = createRequest();
 
-    await expect(interruptedCommitter.commit({ identity: IDENTITY, request })).rejects.toThrow(
+    await expect(interruptedCommitter.commit({ ...ADMITTED_OWNER, request })).rejects.toThrow(
       "simulated commit-result interruption",
     );
     const afterInterruption = SessionManager.open(sessionTarget);
@@ -575,7 +637,7 @@ describe("worker transcript commit application", () => {
       timestamp: 400,
     });
 
-    const replay = await committer.commit({ identity: IDENTITY, request });
+    const replay = await committer.commit({ ...ADMITTED_OWNER, request });
 
     expect(replay).toEqual({
       ok: true,
@@ -599,7 +661,7 @@ describe("worker transcript commit application", () => {
     });
     let interruptCompletion = true;
     const interruptedStore: WorkerTranscriptCommitStore = {
-      begin: ledgerStore.begin,
+      ...ledgerStore,
       complete: (input) => {
         if (interruptCompletion) {
           interruptCompletion = false;
@@ -617,7 +679,7 @@ describe("worker transcript commit application", () => {
       messages: createTurnMessages("my key is sk-abcdef1234567890xyz"),
     });
 
-    await expect(interruptedCommitter.commit({ identity: IDENTITY, request })).rejects.toThrow(
+    await expect(interruptedCommitter.commit({ ...ADMITTED_OWNER, request })).rejects.toThrow(
       "simulated off-branch terminal interruption",
     );
     const afterInterruption = SessionManager.open(sessionTarget);
@@ -652,7 +714,20 @@ describe("worker transcript commit application", () => {
     unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
     cfg = { ...cfg };
 
-    const replay = await committer.commit({ identity: IDENTITY, request });
+    let authorityChecks = 0;
+    await expect(
+      committer.commit({
+        identity: IDENTITY,
+        request,
+        assertCurrent: () => {
+          if (++authorityChecks === 2) {
+            throw new Error("claim closed before pending batch recovery");
+          }
+        },
+      }),
+    ).rejects.toThrow("claim closed before pending batch recovery");
+
+    const replay = await committer.commit({ ...ADMITTED_OWNER, request });
 
     expect(replay).toEqual({
       ok: true,
@@ -681,7 +756,7 @@ describe("worker transcript commit application", () => {
     const interruptedCommitter = createWorkerTranscriptCommitter({
       getConfig: () => cfg,
       store: {
-        begin: ledgerStore.begin,
+        ...ledgerStore,
         complete: (input) => {
           if (interruptCompletion) {
             interruptCompletion = false;
@@ -693,7 +768,7 @@ describe("worker transcript commit application", () => {
     });
     const request = createRequest({ baseLeafId });
 
-    await expect(interruptedCommitter.commit({ identity: IDENTITY, request })).rejects.toThrow(
+    await expect(interruptedCommitter.commit({ ...ADMITTED_OWNER, request })).rejects.toThrow(
       "simulated ambiguous terminal interruption",
     );
     const manager = SessionManager.open(sessionTarget);
@@ -718,7 +793,7 @@ describe("worker transcript commit application", () => {
     const updates: Parameters<Parameters<typeof onSessionTranscriptUpdate>[0]>[0][] = [];
     unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
 
-    const replay = await committer.commit({ identity: IDENTITY, request });
+    const replay = await committer.commit({ ...ADMITTED_OWNER, request });
 
     expect(replay).toEqual({ ok: false, reason: "invalid-batch" });
     const reopened = SessionManager.open(sessionTarget);
@@ -756,7 +831,7 @@ describe("worker transcript commit application", () => {
     });
 
     try {
-      await expect(committer.commit({ identity: IDENTITY, request })).rejects.toThrow(
+      await expect(committer.commit({ ...ADMITTED_OWNER, request })).rejects.toThrow(
         "simulated mid-batch interruption",
       );
     } finally {
@@ -776,7 +851,7 @@ describe("worker transcript commit application", () => {
       content: [{ type: "text", text: "Local activity after interruption" }],
       timestamp: 400,
     });
-    const retry = await committer.commit({ identity: IDENTITY, request });
+    const retry = await committer.commit({ ...ADMITTED_OWNER, request });
 
     expect(retry).toEqual({ ok: false, reason: "stale-base-leaf" });
     const reopened = SessionManager.open(sessionTarget);
@@ -789,7 +864,7 @@ describe("worker transcript commit application", () => {
   });
 
   it("does not reuse an idempotency key from an abandoned transcript branch", async () => {
-    const first = await committer.commit({ identity: IDENTITY, request: createRequest() });
+    const first = await committer.commit({ ...ADMITTED_OWNER, request: createRequest() });
     if (!first.ok) {
       throw new Error(`expected initial transcript commit success, received ${first.reason}`);
     }
@@ -811,7 +886,7 @@ describe("worker transcript commit application", () => {
     });
 
     const outcome = await committer.commit({
-      identity: IDENTITY,
+      ...ADMITTED_OWNER,
       request: createRequest({
         baseLeafId: activeLeafId,
         messages: [
@@ -841,7 +916,7 @@ describe("worker transcript commit application", () => {
   it("persists run ownership on worker output while only the terminal envelope completes it", async () => {
     const updates: Parameters<Parameters<typeof onSessionTranscriptUpdate>[0]>[0][] = [];
     unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
-    const first = await committer.commit({ identity: IDENTITY, request: createRequest() });
+    const first = await committer.commit({ ...ADMITTED_OWNER, request: createRequest() });
     if (!first.ok) {
       throw new Error(`expected initial transcript commit success, received ${first.reason}`);
     }
@@ -857,7 +932,7 @@ describe("worker transcript commit application", () => {
     };
 
     const second = await committer.commit({
-      identity: IDENTITY,
+      ...ADMITTED_OWNER,
       request: createRequest({
         baseLeafId: first.result.newLeafId,
         messages: [nextMessage],

@@ -1334,6 +1334,7 @@ describe("host-hook fixture plugin contract", () => {
 
     const row = buildGatewaySessionRow({
       cfg: config,
+      agentId: "main",
       storePath: "/tmp/sessions.json",
       store: {},
       key: "agent:main:main",
@@ -1401,6 +1402,7 @@ describe("host-hook fixture plugin contract", () => {
 
     const row = buildGatewaySessionRow({
       cfg: config,
+      agentId: "main",
       storePath: "/tmp/sessions.json",
       store: {},
       key: "agent:main:main",
@@ -1646,6 +1648,7 @@ describe("host-hook fixture plugin contract", () => {
     ]);
     const row = buildGatewaySessionRow({
       cfg: config,
+      agentId: "main",
       storePath: "/tmp/sessions.json",
       store: {},
       key: "agent:main:main",

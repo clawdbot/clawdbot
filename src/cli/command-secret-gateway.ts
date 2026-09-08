@@ -509,6 +509,7 @@ async function callGatewaySecretsResolve(params: {
   allowedPaths?: ReadonlySet<string>;
   forcedActivePaths?: ReadonlySet<string>;
   optionalActivePaths?: ReadonlySet<string>;
+  timeoutMs?: number;
 }): Promise<GatewaySecretsResolveResult> {
   const request = {
     config: params.config,
@@ -523,7 +524,7 @@ async function callGatewaySecretsResolve(params: {
         ? { optionalActivePaths: [...params.optionalActivePaths] }
         : {}),
     },
-    timeoutMs: 30_000,
+    timeoutMs: params.timeoutMs ?? 30_000,
     clientName: GATEWAY_CLIENT_NAMES.CLI,
     mode: GATEWAY_CLIENT_MODES.CLI,
   };
@@ -859,6 +860,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
   optionalActivePaths?: ReadonlySet<string>;
   allowLocalExecSecretRefs?: boolean;
   scrubUnresolvedSecretRefs?: boolean;
+  gatewaySecretResolveTimeoutMs?: number;
 }): Promise<ResolveCommandSecretsResult> {
   const mode = normalizeCommandSecretResolutionMode(params.mode);
   const resolutionPolicy = resolveLocalResolutionPolicy({
@@ -921,6 +923,9 @@ export async function resolveCommandSecretRefsViaGateway(params: {
       allowedPaths: params.allowedPaths,
       forcedActivePaths: params.forcedActivePaths,
       optionalActivePaths: params.optionalActivePaths,
+      ...(params.gatewaySecretResolveTimeoutMs !== undefined
+        ? { timeoutMs: params.gatewaySecretResolveTimeoutMs }
+        : {}),
     });
   } catch (err) {
     let forcedActiveCompatFailure: Error | undefined;

@@ -10,10 +10,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMatrixAccountStorageRoot } from "../../storage-paths.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
 import { SqliteBackedMatrixSyncStore } from "./file-sync-store.js";
+import { openMatrixStorageMetaStoreOptions } from "./storage-metadata.js";
 import {
   claimCurrentTokenStorageState,
   maybeMigrateLegacyStorage,
-  openMatrixStorageMetaStoreOptions,
   recordCurrentStorageMetaDeviceId,
   repairCurrentTokenStorageMetaDeviceId,
   resolveMatrixStateFilePath,
@@ -478,6 +478,73 @@ describe("matrix client storage paths", () => {
         populatedRootCount: 2,
       },
     );
+  });
+
+  it("selects the canonical active root without inspecting archived siblings", () => {
+    const logger = createTestLogger();
+    const stateDir = setupStateDir(undefined, logger);
+    const canonicalPaths = seedCanonicalStorageRoot({
+      stateDir,
+      accessToken: "secret-token-new",
+      storageMeta: {
+        homeserver: defaultStorageAuth.homeserver,
+        userId: defaultStorageAuth.userId,
+        accountId: "default",
+        accessTokenHash: resolveDefaultStoragePaths({ accessToken: "secret-token-new" }).tokenHash,
+        deviceId: "DEVICE123",
+      },
+    });
+    const previousPaths = seedCanonicalStorageRoot({
+      stateDir,
+      accessToken: "secret-token-old",
+      storageMeta: {
+        homeserver: defaultStorageAuth.homeserver,
+        userId: defaultStorageAuth.userId,
+        accountId: "default",
+        accessTokenHash: resolveDefaultStoragePaths({ accessToken: "secret-token-old" }).tokenHash,
+        deviceId: "DEVICE123",
+      },
+    });
+    fs.mkdirSync(path.join(previousPaths.rootDir, "crypto"), { recursive: true });
+    const archivedTokenRoot = `${previousPaths.rootDir}.apr24-cutover-20260424`;
+    fs.renameSync(previousPaths.rootDir, archivedTokenRoot);
+    const archivedBackupRoot = path.join(
+      path.dirname(canonicalPaths.rootDir),
+      "sync-cache-backup-after-limit1-20260720",
+    );
+    fs.mkdirSync(archivedBackupRoot, { recursive: true });
+    seedStorageMeta(archivedBackupRoot, {
+      homeserver: defaultStorageAuth.homeserver,
+      userId: defaultStorageAuth.userId,
+      accountId: "default",
+      accessTokenHash: "fedcba9876543210",
+      deviceId: "DEVICE123",
+    });
+    fs.mkdirSync(path.join(archivedBackupRoot, "crypto"), { recursive: true });
+    const archivedRoots = [archivedTokenRoot, archivedBackupRoot];
+    resetPluginStateStoreForTests();
+
+    const existsSync = vi.spyOn(fs, "existsSync");
+    const resolvedPaths = resolveDefaultStoragePaths({
+      accessToken: "secret-token-new",
+      deviceId: "DEVICE123",
+    });
+
+    expect(resolvedPaths.rootDir).toBe(canonicalPaths.rootDir);
+    expect(resolvedPaths.tokenHash).toBe(canonicalPaths.tokenHash);
+    const inspectedPaths = existsSync.mock.calls.map(([filePath]) =>
+      path.resolve(String(filePath)),
+    );
+    for (const storageRootDir of archivedRoots) {
+      expect(
+        inspectedPaths.some(
+          (inspectedPath) =>
+            inspectedPath === path.resolve(storageRootDir) ||
+            inspectedPath.startsWith(`${path.resolve(storageRootDir)}${path.sep}`),
+        ),
+      ).toBe(false);
+    }
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it("does not scan token-history roots when the canonical current-token state is claimed", () => {

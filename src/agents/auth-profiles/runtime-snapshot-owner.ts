@@ -1,6 +1,7 @@
 /** Canonical owner identity and nonpublishing auth snapshot composition. */
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { isSecretRef } from "../../config/types.secrets.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
@@ -22,7 +23,10 @@ import {
   loadPersistedAuthProfileStoreAtDatabasePath,
   mergeAuthProfileStores,
 } from "./persisted.js";
-import { setRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
+import {
+  getRuntimeExternalCliProfileIds,
+  setRuntimeExternalCliProfileIds,
+} from "./runtime-external-profile-references.js";
 import { resolveAuthProfileDatabasePath, type AuthProfileStoreOwner } from "./sqlite.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
@@ -299,4 +303,88 @@ export function runtimeAuthOwnerState(
     runtimeLocalProfileIds: store.runtimeLocalProfileIds,
     runtimeInheritsMainState: store.runtimeInheritsMainState,
   };
+}
+
+export function pruneAuthProfileStoreReferences(
+  store: RuntimeAuthProfileStore,
+  keptProfileIds: Set<string>,
+  keptOrderProfileIds = keptProfileIds,
+): void {
+  store.order = store.order
+    ? Object.fromEntries(
+        Object.entries(store.order)
+          .map(([provider, profileIds]) => [
+            provider,
+            profileIds.filter((profileId) => keptOrderProfileIds.has(profileId)),
+          ])
+          .filter(([, profileIds]) => Array.isArray(profileIds) && profileIds.length > 0),
+      )
+    : undefined;
+  store.lastGood = store.lastGood
+    ? Object.fromEntries(
+        Object.entries(store.lastGood).filter(([, profileId]) => keptProfileIds.has(profileId)),
+      )
+    : undefined;
+  store.usageStats = store.usageStats
+    ? Object.fromEntries(
+        Object.entries(store.usageStats).filter(
+          ([profileId]) => keptProfileIds.has(profileId) || profileId.startsWith("inline-api-key:"),
+        ),
+      )
+    : undefined;
+  store.runtimePersistedProfileIds = store.runtimePersistedProfileIds
+    ?.filter((profileId) => keptProfileIds.has(profileId))
+    .toSorted();
+  if (store.runtimePersistedProfileIds?.length === 0) {
+    store.runtimePersistedProfileIds = undefined;
+  }
+  store.runtimeLocalProfileIds = store.runtimeLocalProfileIds
+    ?.filter((profileId) => keptProfileIds.has(profileId))
+    .toSorted();
+  store.runtimeExternalProfileIds = store.runtimeExternalProfileIds
+    ?.filter((profileId) => keptProfileIds.has(profileId))
+    .toSorted();
+  setRuntimeExternalCliProfileIds(
+    store,
+    getRuntimeExternalCliProfileIds(store).filter((profileId) => keptProfileIds.has(profileId)),
+  );
+  if (
+    store.runtimeExternalProfileIds?.length === 0 &&
+    store.runtimeExternalProfileIdsAuthoritative !== true
+  ) {
+    store.runtimeExternalProfileIds = undefined;
+  }
+  if (store.runtimeExternalProfileIdsAuthoritative === true) {
+    store.runtimeExternalProfileIds ??= [];
+  }
+}
+
+export function preserveResolvedSecretBackedCredentials(params: {
+  next: AuthProfileStore;
+  existing: AuthProfileStore;
+}): AuthProfileStore {
+  const next = cloneAuthProfileStore(params.next);
+  for (const [profileId, credential] of Object.entries(next.profiles)) {
+    const existing = params.existing.profiles[profileId];
+    if (
+      credential.type === "api_key" &&
+      existing?.type === "api_key" &&
+      credential.key === undefined &&
+      existing.key !== undefined &&
+      isSecretRef(credential.keyRef) &&
+      isDeepStrictEqual(credential.keyRef, existing.keyRef)
+    ) {
+      next.profiles[profileId] = { ...credential, key: existing.key };
+    } else if (
+      credential.type === "token" &&
+      existing?.type === "token" &&
+      credential.token === undefined &&
+      existing.token !== undefined &&
+      isSecretRef(credential.tokenRef) &&
+      isDeepStrictEqual(credential.tokenRef, existing.tokenRef)
+    ) {
+      next.profiles[profileId] = { ...credential, token: existing.token };
+    }
+  }
+  return next;
 }

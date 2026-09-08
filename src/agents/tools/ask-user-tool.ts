@@ -1,6 +1,5 @@
 /** Built-in blocking user-question tool and its active-session answer bridge. */
 import { createHash } from "node:crypto";
-import { Type } from "typebox";
 import type {
   QuestionAnswers,
   QuestionRequestQuestion,
@@ -20,6 +19,7 @@ import {
 } from "../harness/host-private-capabilities.js";
 import { ASK_USER_TOOL_DISPLAY_SUMMARY, describeAskUserTool } from "../tool-description-presets.js";
 import {
+  AskUserToolSchema,
   DEFAULT_ASK_USER_TIMEOUT_SECONDS,
   type NormalizedAskUserParams,
   normalizeAskUserParams,
@@ -27,6 +27,7 @@ import {
 import { type AnyAgentTool, ToolInputError, textResult } from "./common.js";
 import {
   createGatewayQuestionCanceller,
+  createQuestionPromptLifetime,
   readQuestionErrorReason,
   type GatewayQuestionCall,
 } from "./gateway-question-lifecycle.js";
@@ -34,59 +35,6 @@ import { type QuestionPromptDelivery, sendQuestionToolPrompt } from "./question-
 
 const ASK_USER_RPC_GRACE_MS = 10_000;
 const ASK_USER_PROMPT_RECHECK_MS = 50;
-
-const AskUserToolSchema = Type.Object(
-  {
-    questions: Type.Array(
-      Type.Object(
-        {
-          id: Type.String({
-            minLength: 1,
-            pattern: "^[a-z][a-z0-9_]*$",
-            description: "Unique snake_case answer key.",
-          }),
-          header: Type.String({
-            minLength: 1,
-            description: "Short chip label; longer input is truncated to 12 characters.",
-          }),
-          question: Type.String({
-            minLength: 1,
-            description: "Single-sentence question only. Put all selectable choices in options.",
-          }),
-          options: Type.Array(
-            Type.Object(
-              {
-                label: Type.String({ minLength: 1 }),
-                description: Type.Optional(Type.String()),
-              },
-              { additionalProperties: false },
-            ),
-            {
-              minItems: 2,
-              maxItems: 4,
-              description:
-                "Every selectable choice. Put the recommended choice first; do not repeat choices only in the question text.",
-            },
-          ),
-          multiSelect: Type.Optional(
-            Type.Boolean({
-              description: "True only when the user may choose several options at once.",
-            }),
-          ),
-        },
-        { additionalProperties: false },
-      ),
-      { minItems: 1, maxItems: 3 },
-    ),
-    timeoutSeconds: Type.Optional(
-      Type.Integer({
-        description:
-          "Maximum human wait in seconds; default 900, clamped 30-3600. Earlier run cancellation or overall run timeout still applies.",
-      }),
-    ),
-  },
-  { additionalProperties: false },
-);
 
 type AskUserQuestionPhase =
   | { kind: "reserved" }
@@ -575,6 +523,7 @@ export function createAskUserTool(params: {
       // prompt before this call. One that dispatches tools itself reserves nothing,
       // so the tool publishes its own prompt rather than blocking on a silent wait.
       const publishOwnPrompt = reserved ? undefined : params.questionPrompt?.send;
+      using prompt = createQuestionPromptLifetime(signal);
       const deliverPrompt = reserved?.phase.kind === "reserved" || publishOwnPrompt !== undefined;
       const state: AskUserQuestionState =
         reserved ??
@@ -591,8 +540,13 @@ export function createAskUserTool(params: {
       transitionAskUserQuestion(state, { kind: "registering" });
       askUserQuestions.set(questionId, state);
       let registered = false;
-      const cancelPendingQuestion = createGatewayQuestionCanceller({ gatewayCall, questionId });
+      const cancelPendingQuestion = createGatewayQuestionCanceller({
+        gatewayCall,
+        questionId,
+        beforeCancel: prompt.close,
+      });
       const cancelOnAbort = () => {
+        prompt.close();
         if (askUserQuestions.get(questionId) === state) {
           releaseAskUserQuestion(questionId);
         }
@@ -628,6 +582,7 @@ export function createAskUserTool(params: {
             })),
             gatewayCall: params.gatewayCall,
             onCancel: () => {
+              prompt.close();
               if (
                 askUserQuestions.get(questionId) === state &&
                 state.phase.kind !== "reserved" &&
@@ -677,7 +632,7 @@ export function createAskUserTool(params: {
           { timeoutMs: timeoutMs + ASK_USER_RPC_GRACE_MS },
           { id: questionId, timeoutMs, includeResolutionId: true },
           signal ? { signal } : undefined,
-        ) as Promise<QuestionWaitAnswerResult>;
+        ).finally(prompt.close) as Promise<QuestionWaitAnswerResult>;
         state.answer = answerPromise;
         state.claim.setAnswer(answerPromise);
         // A refused registration-time claim releases prompt delivery, not the question.
@@ -701,6 +656,7 @@ export function createAskUserTool(params: {
                 questionId,
                 questions: normalized.questions,
                 send: publishOwnPrompt,
+                signal: prompt.signal,
               }),
             );
           }

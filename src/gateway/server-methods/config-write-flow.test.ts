@@ -30,7 +30,35 @@ vi.mock("../../secrets/runtime-state.js", async (importOriginal) => {
   };
 });
 
-import { commitGatewayConfigWrite, didActiveSharedGatewayAuthChange } from "./config-write-flow.js";
+import {
+  commitGatewayConfigWrite,
+  didActiveSharedGatewayAuthChange,
+  shouldAwaitGatewayConfigApplication,
+} from "./config-write-flow.js";
+
+it("awaits title application only with authoritative identity and an enabled reload owner", () => {
+  const previousConfig: OpenClawConfig = {
+    transcripts: { autoStart: [{ providerId: "fixture", sessionId: "daily", title: "Before" }] },
+  };
+  const nextConfig: OpenClawConfig = {
+    transcripts: { autoStart: [{ providerId: "fixture", sessionId: "daily", title: "After" }] },
+  };
+  const params = { previousConfig, nextConfig, changedPaths: ["transcripts.autoStart"] };
+  expect(shouldAwaitGatewayConfigApplication(params)).toBe(true);
+  expect(shouldAwaitGatewayConfigApplication({ ...params, previousConfig: {} })).toBe(false);
+  expect(
+    shouldAwaitGatewayConfigApplication({
+      ...params,
+      changedPaths: [...params.changedPaths, "gateway.port"],
+    }),
+  ).toBe(false);
+  expect(
+    shouldAwaitGatewayConfigApplication({
+      ...params,
+      nextConfig: { ...nextConfig, gateway: { reload: { mode: "off" } } },
+    }),
+  ).toBe(false);
+});
 
 describe("commitGatewayConfigWrite", () => {
   beforeEach(() => {

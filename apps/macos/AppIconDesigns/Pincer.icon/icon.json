@@ -1,0 +1,37 @@
+{
+  "fill": {
+    "solid": "srgb:0.97255,0.96078,0.92549,1.00000"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "molty.svg",
+          "name": "Pincer",
+          "position": {
+            "scale": 0.94,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          },
+          "glass": false
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.5
+      },
+      "specular": false
+    }
+  ],
+  "supported-platforms": {
+    "squares": [
+      "macOS"
+    ]
+  }
+}

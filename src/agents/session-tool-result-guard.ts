@@ -30,6 +30,7 @@ import {
 } from "../sessions/transcript-events.js";
 import { withRuntimeUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript-runtime-context.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
+import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
 import { formatContextLimitTruncationNotice } from "./embedded-agent-runner/context-truncation-notice.js";
 import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
@@ -652,7 +653,7 @@ export function installSessionToolResultGuard(
     maxToolResultChars?: number;
     suppressNextUserMessagePersistence?: boolean;
     suppressTranscriptOnlyAssistantPersistence?: boolean;
-    suppressAssistantErrorPersistence?: boolean;
+    assistantErrorTranscript?: AssistantErrorTranscript;
     onUserMessagePersisted?: UserMessagePersistedCallback;
     onUserMessagePersistenceSuppressed?: AsyncMessageCallback<UserAgentMessage>;
     onUserMessageBlocked?: (message: UserAgentMessage) => void;
@@ -661,14 +662,13 @@ export function installSessionToolResultGuard(
       append: () => string,
       validateAppend: CompactionAppendValidator,
     ) => string;
-    onAssistantErrorMessagePersisted?: AsyncMessageCallback<AssistantAgentMessage>;
   },
 ): {
   flushPendingToolResults: () => void;
   clearPendingToolResults: () => void;
   clearNextUserMessagePersistenceSuppression: () => void;
   getPendingIds: () => string[];
-  setTranscriptRunId: (runId: string | undefined) => void;
+  setTranscriptRunId: (runId: string | undefined, errors?: AssistantErrorTranscript) => void;
 } {
   const originalAppend = getRawSessionAppendMessage(sessionManager);
   const originalAppendWithTranscriptAnchor =
@@ -698,6 +698,7 @@ export function installSessionToolResultGuard(
   const maxToolResultChars = resolveMaxToolResultChars(opts);
   const transcriptSeqByEntryId: TranscriptSeqByEntryId = new Map();
   let transcriptRunId = opts?.runId;
+  let assistantErrorTranscript = opts?.assistantErrorTranscript;
   let suppressNextUserMessagePersistence = opts?.suppressNextUserMessagePersistence === true;
 
   const appendMessageAndCacheTranscriptSeq = (
@@ -767,9 +768,15 @@ export function installSessionToolResultGuard(
     // Replayed boundaries supply their recorded identity; new ones inherit the owning run.
     args[5] = { runId: transcriptRunId, ...args[5] };
     const append = () => originalAppendCompaction(...args);
-    return opts?.withCompactionPersistence
-      ? opts.withCompactionPersistence(append, isExpectedCompactionAppend)
-      : append();
+    if (!opts?.withCompactionPersistence) {
+      return append();
+    }
+    try {
+      return opts.withCompactionPersistence(append, isExpectedCompactionAppend);
+    } catch (error) {
+      sessionManager.reloadPersistedTranscript();
+      throw error;
+    }
   }) as SessionManager["appendCompaction"];
 
   /**
@@ -951,7 +958,7 @@ export function installSessionToolResultGuard(
       }
       return undefined;
     }
-    const finalMessage = finalWrite.message;
+    let finalMessage = finalWrite.message;
     const finalRole = (finalMessage as { role?: unknown }).role;
     if (
       finalRole === "assistant" &&
@@ -962,10 +969,21 @@ export function installSessionToolResultGuard(
     }
     if (
       finalRole === "assistant" &&
-      opts?.suppressAssistantErrorPersistence === true &&
+      assistantErrorTranscript &&
       (finalMessage as { stopReason?: string }).stopReason === "error"
     ) {
-      return undefined;
+      const target = sessionManager.getSessionTarget();
+      if (target) {
+        const replayMessage = assistantErrorTranscript.record(
+          finalMessage as AssistantAgentMessage,
+          target,
+        );
+        if (!replayMessage) {
+          return undefined;
+        }
+        copyCodeModeSourceAppend(finalMessage, replayMessage, sourceAppend);
+        finalMessage = replayMessage;
+      }
     }
     if (isUserAgentMessage(finalMessage) && suppressNextUserMessagePersistence) {
       suppressNextUserMessagePersistence = false;
@@ -983,7 +1001,10 @@ export function installSessionToolResultGuard(
       finalMessage,
       {
         invalidateSerializedPrefixCache:
-          callerInvalidatesCache || transformedMessage !== nextMessage || finalWrite.changed,
+          callerInvalidatesCache ||
+          transformedMessage !== nextMessage ||
+          finalWrite.changed ||
+          finalMessage !== finalWrite.message,
       },
       sourceAppend,
       message,
@@ -1007,14 +1028,6 @@ export function installSessionToolResultGuard(
         ...(sessionTarget ? { sessionTarget } : {}),
       });
     }
-    if (
-      finalRole === "assistant" &&
-      (finalMessage as { stopReason?: string }).stopReason === "error"
-    ) {
-      void opts?.onAssistantErrorMessagePersisted?.(
-        finalMessage as Extract<AgentMessage, { role: "assistant" }>,
-      );
-    }
 
     return result;
   };
@@ -1033,8 +1046,9 @@ export function installSessionToolResultGuard(
       suppressNextUserMessagePersistence = false;
     },
     getPendingIds: pendingState.getPendingIds,
-    setTranscriptRunId: (runId) => {
+    setTranscriptRunId: (runId, errors) => {
       transcriptRunId = runId;
+      assistantErrorTranscript = errors;
     },
   };
 }

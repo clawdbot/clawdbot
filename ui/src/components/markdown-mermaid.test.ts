@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { renderMermaidSvg } from "@openclaw/mermaid-renderer";
+import { MermaidTransientError, renderMermaidSvg } from "@openclaw/mermaid-renderer";
 import { html, nothing, render } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +9,10 @@ import { copyToClipboard } from "../lib/clipboard.ts";
 import { mountMermaidBlocks } from "./markdown-mermaid.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
-vi.mock("@openclaw/mermaid-renderer", () => ({ renderMermaidSvg: vi.fn() }));
+vi.mock("@openclaw/mermaid-renderer", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/mermaid-renderer")>()),
+  renderMermaidSvg: vi.fn(),
+}));
 vi.mock("../lib/clipboard.ts", () => ({ copyToClipboard: vi.fn() }));
 
 type MermaidElement = HTMLElementTagNameMap["openclaw-mermaid"];
@@ -131,39 +134,40 @@ describe("Mermaid Markdown presentation", () => {
     expect(renderSvg).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["layout", "image"])(
-    "keeps %s failures readable and copyable outside an image",
-    async (failure) => {
-      if (failure === "layout") {
-        renderSvg.mockRejectedValueOnce(new Error("<script>internal parser detail</script>"));
-      }
-      const original = source("Invalid diagram");
-      const {
-        elements: [element],
-      } = await mount(original);
-      if (failure === "image") {
-        await waitForImage(element!);
-        element!.shadowRoot?.querySelector("img")?.dispatchEvent(new Event("error"));
-      }
+  it.each([
+    { failure: "layout", message: "Check the source or simplify the diagram" },
+    { failure: "renderer", message: "check proxy or authentication rules" },
+    { failure: "image", message: "The diagram image could not be displayed" },
+  ])("keeps $failure failures actionable, readable and copyable", async ({ failure, message }) => {
+    if (failure === "layout") {
+      renderSvg.mockRejectedValueOnce(new Error("<script>internal parser detail</script>"));
+    } else if (failure === "renderer") {
+      renderSvg.mockRejectedValueOnce(new MermaidTransientError("Renderer could not load"));
+    }
+    const original = source("Invalid diagram");
+    const {
+      elements: [element],
+    } = await mount(original);
+    if (failure === "image") {
+      await waitForImage(element!);
+      element!.shadowRoot?.querySelector("img")?.dispatchEvent(new Event("error"));
+    }
 
-      await vi.waitFor(() =>
-        expect(element!.shadowRoot?.querySelector('[role="status"]')?.textContent).toContain(
-          "Check the source or simplify the diagram",
-        ),
-      );
-      expect(element!.shadowRoot?.querySelector("code")?.textContent).toBe(original);
-      expect(element!.shadowRoot?.querySelector("img, script")).toBeNull();
-      expect(element!.shadowRoot?.textContent).not.toContain("internal parser detail");
-      expect(action(element!, "Expand diagram").disabled).toBe(true);
-      action(element!, "Copy source").click();
-      await vi.waitFor(() => expect(copySource).toHaveBeenCalledExactlyOnceWith(original));
-      if (failure === "image") {
-        expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:mermaid-1");
-      } else {
-        expect(createObjectURL).not.toHaveBeenCalled();
-      }
-    },
-  );
+    await vi.waitFor(() =>
+      expect(element!.shadowRoot?.querySelector('[role="status"]')?.textContent).toContain(message),
+    );
+    expect(element!.shadowRoot?.querySelector("code")?.textContent).toBe(original);
+    expect(element!.shadowRoot?.querySelector("img, script")).toBeNull();
+    expect(element!.shadowRoot?.textContent).not.toContain("internal parser detail");
+    expect(action(element!, "Expand diagram").disabled).toBe(true);
+    action(element!, "Copy source").click();
+    await vi.waitFor(() => expect(copySource).toHaveBeenCalledExactlyOnceWith(original));
+    if (failure === "image") {
+      expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:mermaid-1");
+    } else {
+      expect(createObjectURL).not.toHaveBeenCalled();
+    }
+  });
 
   it.each([
     { change: "source", oldOutcome: "success" },

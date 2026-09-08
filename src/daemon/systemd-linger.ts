@@ -4,8 +4,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { formatErrorMessage } from "../infra/errors.js";
-import { runCommandWithTimeout, runExec } from "../process/exec.js";
+import { execFileUtf8 } from "./exec-file.js";
 
 function resolveLoginctlUser(env: Record<string, string | undefined>): string | null {
   const fromEnv = normalizeOptionalString(env.USER) || normalizeOptionalString(env.LOGNAME);
@@ -33,22 +32,12 @@ export async function readSystemdUserLingerStatus(params: {
   if (!user) {
     return null;
   }
-  try {
-    const { stdout } = await runExec("loginctl", ["show-user", user, "-p", "Linger"], {
-      timeoutMs: 5_000,
-    });
-    const line = stdout
-      .split("\n")
-      .map((entry) => entry.trim())
-      .find((entry) => entry.startsWith("Linger="));
-    const value = normalizeOptionalLowercaseString(line?.split("=")[1]);
-    if (value === "yes" || value === "no") {
-      return { user, linger: value };
-    }
-  } catch {
-    // ignore; loginctl may be unavailable
-  }
-  return null;
+  const { stdout, code } = await execFileUtf8("loginctl", ["show-user", user, "-p", "Linger"], {
+    timeout: 5_000,
+  });
+  const line = stdout.split("\n").find((entry) => entry.trim().startsWith("Linger="));
+  const value = normalizeOptionalLowercaseString(line?.split("=")[1]);
+  return code === 0 && (value === "yes" || value === "no") ? { user, linger: value } : null;
 }
 
 /** Enables systemd user linger through loginctl, with optional sudo mode. */
@@ -68,17 +57,7 @@ export async function enableSystemdUserLinger(params: {
     needsSudo && params.sudoMode !== undefined
       ? ["sudo", ...(params.sudoMode === "non-interactive" ? ["-n"] : [])]
       : [];
-  const argv = [...sudoArgs, "loginctl", "enable-linger", user];
-  try {
-    const result = await runCommandWithTimeout(argv, { timeoutMs: 30_000 });
-    return {
-      ok: result.code === 0,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      code: result.code ?? 1,
-    };
-  } catch (error) {
-    const message = formatErrorMessage(error);
-    return { ok: false, stdout: "", stderr: message, code: 1 };
-  }
+  const [command, ...args] = [...sudoArgs, "loginctl", "enable-linger", user];
+  const { stdout, stderr, code } = await execFileUtf8(command, args, { timeout: 30_000 });
+  return { ok: code === 0, stdout, stderr, code };
 }

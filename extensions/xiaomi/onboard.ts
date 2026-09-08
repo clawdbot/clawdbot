@@ -35,13 +35,13 @@ export const { applyConfig: applyXiaomiConfig, applyProviderConfig: applyXiaomiP
 
 const xiaomiTokenPlanPresetAppliers = createDefaultModelsPresetAppliers<[]>({
   primaryModelRef: XIAOMI_TOKEN_PLAN_DEFAULT_MODEL_REF,
-  resolveParams: () => {
+  resolveParams: (cfg) => {
     const defaultProvider = buildXiaomiTokenPlanProvider();
     return {
       providerId: XIAOMI_TOKEN_PLAN_PROVIDER_ID,
       api: defaultProvider.api ?? "openai-completions",
       baseUrl: defaultProvider.baseUrl,
-      defaultModels: defaultProvider.models ?? [],
+      defaultModels: cfg.models?.mode === "replace" ? (defaultProvider.models ?? []) : [],
       defaultModelId: XIAOMI_TOKEN_PLAN_DEFAULT_MODEL_ID,
       aliases: (() => {
         const defaultModel = defaultProvider.models?.find(

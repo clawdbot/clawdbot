@@ -372,12 +372,16 @@ export type OpenClawPluginServiceContext = {
   stateDir: string;
   logger: PluginLogger;
   serviceHealth?: OpenClawPluginServiceHealth;
+  /** Gateway-owned scheduler access, revoked when this service stops. */
+  getCron?: () => import("./hook-types.js").PluginHookGatewayCronService | undefined;
   gatewayEvents?: import("./gateway-events.js").OpenClawPluginGatewayEvents;
   startupTrace?: {
     detail?: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
     measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
   };
   internalDiagnostics?: {
+    /** Identity of the hosting process, available only while this service is active. */
+    getRuntimeIdentity?: () => { processInstanceId: string; buildId?: string };
     emit: (event: DiagnosticEventInput, privateData?: DiagnosticEventPrivateData) => void;
     onEvent: (
       listener: (
@@ -394,6 +398,8 @@ export type OpenClawPluginServiceContext = {
 /** Background service registered by a plugin during `register(api)`. */
 export type OpenClawPluginService = {
   id: string;
+  /** Restart this service with committed config when one of these paths changes. */
+  reload?: { configPrefixes: readonly string[] };
   start: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
   stop?: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
 };

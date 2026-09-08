@@ -9,7 +9,7 @@ import {
 } from "../infra/tailscale.js";
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
-import { prepareMcpAppChannelOrigin } from "./mcp-app-channel-origin.js";
+import { prepareTailscalePublishedOrigin } from "./tailscale-published-origin.js";
 
 export async function startGatewayTailscaleExposure(params: {
   tailscaleMode: "off" | "serve" | "funnel";
@@ -70,9 +70,9 @@ export async function startGatewayTailscaleExposure(params: {
         tailnetHost: host,
       });
       if (publicHost) {
-        clearPublishedOrigin = prepareMcpAppChannelOrigin({
+        clearPublishedOrigin = prepareTailscalePublishedOrigin({
           origin: `https://${publicHost}`,
-          reachability: effectiveMode === "funnel" ? "internet" : "tailnet",
+          mode: effectiveMode,
         });
         params.logTailscale.info(
           `${params.tailscaleMode} enabled: https://${publicHost}${uiPath} (WS via wss://${publicHost})`,

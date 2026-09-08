@@ -30,7 +30,7 @@ interface FilterableSelectListTheme extends SelectListTheme {
 export class FilterableSelectList implements Component, Focusable {
   private input: Input;
   private selectList: SelectList;
-  private allItems: FilterableSelectItem[];
+  private allItems: Array<{ item: FilterableSelectItem; searchText: string }>;
   private maxVisible: number;
   private theme: FilterableSelectListTheme;
 
@@ -38,7 +38,18 @@ export class FilterableSelectList implements Component, Focusable {
   onCancel?: () => void;
 
   constructor(items: FilterableSelectItem[], maxVisible: number, theme: FilterableSelectListTheme) {
-    this.allItems = items;
+    // Each overlay owns fixed rows; search keeps raw fields while display copies stay sanitized.
+    this.allItems = items.map((item) => ({
+      searchText: [item.label, item.description, item.searchText].filter(Boolean).join(" "),
+      item: {
+        ...item,
+        label:
+          sanitizeRenderableLine(item.label || item.value) ||
+          sanitizeRenderableLine(item.value) ||
+          "(unnamed)",
+        description: sanitizeRenderableLine(item.description ?? ""),
+      },
+    }));
     this.maxVisible = maxVisible;
     this.theme = theme;
     this.input = new Input();
@@ -62,27 +73,13 @@ export class FilterableSelectList implements Component, Focusable {
   }
 
   private applyFilter(): void {
-    const filterText = this.input.getValue();
-    if (!filterText.trim()) {
-      this.selectList = this.createSelectList(this.allItems);
-      return;
-    }
-    const filtered = fuzzyFilter(this.allItems, filterText, (item) =>
-      [item.label, item.description, item.searchText].filter(Boolean).join(" "),
-    );
+    const filtered = fuzzyFilter(this.allItems, this.input.getValue(), (entry) => entry.searchText);
     this.selectList = this.createSelectList(filtered);
   }
 
-  private createSelectList(items: FilterableSelectItem[]): SelectList {
+  private createSelectList(items: typeof this.allItems): SelectList {
     return new SelectList(
-      items.map((item) => ({
-        ...item,
-        label:
-          sanitizeRenderableLine(item.label || item.value) ||
-          sanitizeRenderableLine(item.value) ||
-          "(unnamed)",
-        description: sanitizeRenderableLine(item.description ?? ""),
-      })),
+      items.map((entry) => entry.item),
       this.maxVisible,
       this.theme,
     );

@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   rawDataToString,
   readRequestBodyWithLimit,
@@ -10,7 +11,6 @@ import {
   WEBHOOK_BODY_READ_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer, type WebSocket } from "ws";
-import { isLoopbackHost } from "../../gateway/net.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { randomRelayId } from "./auth-v2-crypto.js";
 import { authenticateExtensionWebSocket } from "./auth-v2-websocket.js";

@@ -8,6 +8,7 @@ import type { PlacementStoreRuntime } from "./placement-runtime.js";
 
 const SCOPE = "session-workspace-action";
 const PERSONAL_SCOPE = "session-workspace-personal-publication";
+export class SessionWorkspaceReservationBusyError extends Error {}
 const query = (db: DatabaseSync) =>
   getNodeSqliteKysely<
     Pick<
@@ -29,23 +30,38 @@ export function assertSessionWorkspaceUnreserved(db: DatabaseSync, sessionId: st
         .where("expires_at", ">", Date.now()),
     )
   ) {
-    throw new Error(
+    throw new SessionWorkspaceReservationBusyError(
       "The session workspace is being published; wait for publication to finish and retry.",
     );
   }
 }
 
-function assertReconciled(db: DatabaseSync, identity: WorkerSessionPlacementIdentity): void {
+function assertReconciled(
+  db: DatabaseSync,
+  identity: WorkerSessionPlacementIdentity,
+  workspace: "local" | "repository",
+): void {
   const placement = find(db, identity.sessionId);
   if (
     placement &&
-    (placement.agentId !== identity.agentId ||
-      placement.sessionKey !== identity.sessionKey ||
-      (placement.state !== "local" && placement.state !== "reclaimed") ||
+    (placement.agentId !== identity.agentId || placement.sessionKey !== identity.sessionKey)
+  ) {
+    throw new Error("The session workspace placement identity changed.");
+  }
+  if (
+    placement &&
+    ((placement.state !== "local" &&
+      placement.state !== "reclaimed" &&
+      !(
+        workspace === "repository" &&
+        (placement.state === "active" || placement.state === "failed")
+      )) ||
       placement.turnClaim)
   ) {
-    throw new Error(
-      "My GitHub publication requires an idle local workspace; finish the turn and reclaim remote work first.",
+    throw new SessionWorkspaceReservationBusyError(
+      workspace === "repository"
+        ? "The repository checkpoint is busy; finish the current turn or worker operation before publishing."
+        : "My GitHub publication requires an idle local workspace; finish the turn and reclaim remote work first.",
     );
   }
   const pending = executeSqliteQueryTakeFirstSync(
@@ -63,7 +79,7 @@ function assertReconciled(db: DatabaseSync, identity: WorkerSessionPlacementIden
       .where("session_id", "=", identity.sessionId),
   );
   if (pending || reconciliation) {
-    throw new Error(
+    throw new SessionWorkspaceReservationBusyError(
       "The session workspace is still reconciling; wait for reclaim to finish before publishing with My GitHub.",
     );
   }
@@ -90,34 +106,45 @@ export function createPlacementWorkspaceReservationOps(runtime: PlacementStoreRu
     sessionId: string,
     run: (assertOwned: () => void) => Promise<T>,
   ) => withReservation(SCOPE, sessionId, run);
+  const withWorkspaceReservation = async <T>(
+    identity: WorkerSessionPlacementIdentity,
+    workspace: "local" | "repository",
+    run: (assertCurrent: () => void) => Promise<T>,
+  ): Promise<T> => {
+    return await withWorkspaceExclusion(
+      identity.sessionId,
+      async (assertPublisherExclusion) =>
+        await withReservation(PERSONAL_SCOPE, identity.sessionId, async (assertOwned) => {
+          assertReconciled(runtime.read(), identity, workspace);
+          const initial = find(runtime.read(), identity.sessionId);
+          const assertCurrent = () => {
+            assertPublisherExclusion();
+            assertOwned();
+            assertReconciled(runtime.read(), identity, workspace);
+            const current = find(runtime.read(), identity.sessionId);
+            if (
+              current?.generation !== initial?.generation ||
+              current?.state !== initial?.state ||
+              current?.environmentId !== initial?.environmentId ||
+              current?.activeOwnerEpoch !== initial?.activeOwnerEpoch
+            ) {
+              throw new Error("The session workspace placement changed during publication.");
+            }
+          };
+          // This lease is exclusion only: it never creates a model run, turn claim, or identity.
+          return await run(assertCurrent);
+        }),
+    );
+  };
   return {
     withWorkspaceExclusion,
-    async withLocalWorkspaceReservation<T>(
+    withLocalWorkspaceReservation: <T>(
       identity: WorkerSessionPlacementIdentity,
       run: (assertCurrent: () => void) => Promise<T>,
-    ): Promise<T> {
-      return await withWorkspaceExclusion(
-        identity.sessionId,
-        async (assertPublisherExclusion) =>
-          await withReservation(PERSONAL_SCOPE, identity.sessionId, async (assertOwned) => {
-            assertReconciled(runtime.read(), identity);
-            const initial = find(runtime.read(), identity.sessionId);
-            const assertCurrent = () => {
-              assertPublisherExclusion();
-              assertOwned();
-              assertReconciled(runtime.read(), identity);
-              const current = find(runtime.read(), identity.sessionId);
-              if (
-                current?.generation !== initial?.generation ||
-                current?.state !== initial?.state
-              ) {
-                throw new Error("The session workspace placement changed during publication.");
-              }
-            };
-            // This lease is exclusion only: it never creates a model run, turn claim, or identity.
-            return await run(assertCurrent);
-          }),
-      );
-    },
+    ) => withWorkspaceReservation(identity, "local", run),
+    withRepositoryWorkspaceReservation: <T>(
+      identity: WorkerSessionPlacementIdentity,
+      run: (assertCurrent: () => void) => Promise<T>,
+    ) => withWorkspaceReservation(identity, "repository", run),
   };
 }

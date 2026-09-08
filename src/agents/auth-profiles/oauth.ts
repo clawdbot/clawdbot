@@ -46,9 +46,9 @@ import {
   hasRuntimeAuthProfileStoreSnapshot,
   updateRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
+import { loadAuthProfileStoreForSecretsRuntime } from "./store-runtime.js";
 import {
   findPersistedAuthProfileCredential,
-  loadAuthProfileStoreForSecretsRuntime,
   resolvePersistedAuthProfileOwnerAgentDir,
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";

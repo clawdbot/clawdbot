@@ -4,6 +4,8 @@
  * Tool and backend code use this interface to access files through the sandbox
  * boundary instead of reaching directly into host paths.
  */
+import type { DirectoryEntry } from "../../infra/directory-entries.js";
+
 /** Resolved sandbox path with host, relative, and container views. */
 export type SandboxResolvedPath = {
   hostPath?: string;
@@ -21,6 +23,12 @@ export type SandboxFsStat = {
 /** Filesystem operations exposed across the sandbox boundary. */
 export type SandboxFsBridge = {
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath;
+  /** Directory metadata only; callers paginate it without activating file contents. */
+  readDirectory?(params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+  }): Promise<DirectoryEntry[]>;
   /** Reads a safely opened regular file, rejecting growth beyond an optional byte limit. */
   readFile(params: {
     filePath: string;

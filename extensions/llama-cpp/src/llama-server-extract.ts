@@ -7,7 +7,7 @@ import {
   extractArchive,
   type ArchiveExtractLimits,
 } from "openclaw/plugin-sdk/archive";
-import type { LlamaServerAsset } from "./llama-server-assets.js";
+import type { LlamaServerArchive, LlamaServerAsset } from "./llama-server-assets.js";
 
 const MEBIBYTE = 1024 * 1024;
 const LLAMA_ARCHIVE_LIMITS = {
@@ -56,13 +56,13 @@ async function assertRegularFile(filePath: string, label: string): Promise<Stats
 
 async function materializeAssetAliases(params: {
   rootDir: string;
-  asset: LlamaServerAsset;
+  asset: LlamaServerArchive;
+  requiredFiles: readonly string[];
 }): Promise<void> {
-  const claimedNames = new Set([assertManifestBasename(params.asset.executable)]);
-  await assertRegularFile(
-    path.join(params.rootDir, params.asset.executable),
-    `executable ${params.asset.executable}`,
-  );
+  const claimedNames = new Set(params.requiredFiles.map(assertManifestBasename));
+  for (const file of claimedNames) {
+    await assertRegularFile(path.join(params.rootDir, file), `file ${file}`);
+  }
   let copiedBytes = 0;
   for (const [rawSource, rawAliases] of params.asset.regularFileAliases) {
     const source = assertManifestBasename(rawSource);
@@ -93,18 +93,19 @@ async function materializeAssetAliases(params: {
   }
 }
 
-/** Extracts one verified asset and returns its unpublished executable path. */
-export async function extractLlamaServerArchive(params: {
+async function extractVerifiedArchive(params: {
   archivePath: string;
   destDir: string;
-  asset: LlamaServerAsset;
+  asset: LlamaServerArchive;
+  requiredFiles: readonly string[];
 }): Promise<string> {
   const isTar = params.asset.archive === "tar.gz";
+  const limits = { ...LLAMA_ARCHIVE_LIMITS, ...params.asset.limits };
   const aliasCount = params.asset.regularFileAliases.reduce(
     (count, [, aliases]) => count + aliases.length,
     0,
   );
-  if (aliasCount > LLAMA_ARCHIVE_LIMITS.maxEntries) {
+  if (aliasCount > limits.maxEntries) {
     throw new ArchiveLimitError(ARCHIVE_LIMIT_ERROR_CODE.ENTRY_COUNT_EXCEEDS_LIMIT);
   }
   await extractArchive({
@@ -115,14 +116,39 @@ export async function extractLlamaServerArchive(params: {
     // fs-safe's internal transaction against a caller-side timeout.
     timeoutMs: 0,
     limits: {
-      ...LLAMA_ARCHIVE_LIMITS,
-      maxEntries: LLAMA_ARCHIVE_LIMITS.maxEntries - aliasCount,
+      ...limits,
+      maxEntries: limits.maxEntries - aliasCount,
     },
     tarGzip: isTar,
     entryFilter: (entry) => (entry.kind === "symlink" ? "skip" : "extract"),
     onFiltered: "skip-entry",
   });
   const rootDir = resolveArchiveRoot(params.destDir, params.asset.archiveRoot);
-  await materializeAssetAliases({ rootDir, asset: params.asset });
+  await materializeAssetAliases({
+    rootDir,
+    asset: params.asset,
+    requiredFiles: params.requiredFiles,
+  });
+  return rootDir;
+}
+
+/** Extracts one verified asset and returns its unpublished executable path. */
+export async function extractLlamaServerArchive(params: {
+  archivePath: string;
+  destDir: string;
+  asset: LlamaServerAsset;
+}): Promise<string> {
+  const rootDir = await extractVerifiedArchive({
+    ...params,
+    requiredFiles: [params.asset.executable],
+  });
   return path.join(rootDir, params.asset.executable);
+}
+
+export async function extractLlamaServerDependencyArchive(params: {
+  archivePath: string;
+  destDir: string;
+  asset: LlamaServerArchive & { files: readonly string[] };
+}): Promise<string> {
+  return await extractVerifiedArchive({ ...params, requiredFiles: params.asset.files });
 }

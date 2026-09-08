@@ -22,7 +22,7 @@ import {
   readSessionMessagesWithSourceAsync,
 } from "./session-transcript-readers.js";
 
-// Session history state owns the SSE-friendly projection of transcript JSONL:
+// Session history state owns the SSE-friendly transcript projection:
 // raw messages are projected for display, paginated by transcript seq, then
 // incrementally updated until cursor/window semantics require a full refresh.
 type SessionHistoryTranscriptMeta = {
@@ -46,7 +46,7 @@ type SessionHistorySnapshot = {
   history: PaginatedSessionHistory;
   rawTranscriptSeq: number;
   turnBoundaryPending: boolean;
-  streamErrorFallbackPending: boolean;
+  assistantErrorPending: boolean;
 };
 
 type InlineSessionHistoryAppend = {
@@ -192,22 +192,22 @@ function paginateSessionMessages(
   let start = typeof limit === "number" && limit > 0 ? Math.max(0, endExclusive - limit) : 0;
   // Projection can interleave several rows from the same transcript records.
   // Close the page over their seq groups because the public cursor cannot split one.
-  const pageSeqs = new Set(
-    messages.slice(start, endExclusive).map(resolveMessageSeq).filter(Boolean),
-  );
-  const gapSeqs = new Set<number>();
-  for (let index = start - 1; index >= 0; index--) {
-    const seq = resolveMessageSeq(messages[index]);
-    if (seq === undefined) {
-      continue;
+  if (start > 0) {
+    const pageSeqs = new Set<number>();
+    let indexedStart = endExclusive;
+    for (let index = start - 1; index >= 0; index--) {
+      // Index only admitted intervals; unrelated older gaps need no retained sequence set.
+      while (indexedStart > start) {
+        const pageSeq = resolveMessageSeq(messages[--indexedStart]);
+        if (pageSeq !== undefined) {
+          pageSeqs.add(pageSeq);
+        }
+      }
+      const seq = resolveMessageSeq(messages[index]);
+      if (seq !== undefined && pageSeqs.has(seq)) {
+        start = index;
+      }
     }
-    gapSeqs.add(seq);
-    if (!pageSeqs.has(seq)) {
-      continue;
-    }
-    start = index;
-    gapSeqs.forEach((gapSeq) => pageSeqs.add(gapSeq));
-    gapSeqs.clear();
   }
   const paginatedMessages = messages.slice(start, endExclusive);
   const firstSeq = resolveMessageSeq(paginatedMessages[0]);
@@ -256,7 +256,7 @@ export function buildSessionHistorySnapshot(params: {
       resolveMessageSeq(rawHistoryMessages.at(-1)) ??
       rawHistoryMessages.length,
     turnBoundaryPending: projected.turnBoundaryPending,
-    streamErrorFallbackPending: projected.streamErrorFallbackPending,
+    assistantErrorPending: projected.assistantErrorPending,
   };
 }
 
@@ -269,7 +269,7 @@ export class SessionHistorySseState {
   private sentHistory: PaginatedSessionHistory;
   private rawTranscriptSeq: number;
   private turnBoundaryPending: boolean;
-  private streamErrorFallbackPending: boolean;
+  private assistantErrorPending: boolean;
   private transcriptPath: string | undefined;
 
   static fromRawSnapshot(params: SessionHistoryStateSnapshot): SessionHistorySseState {
@@ -285,7 +285,7 @@ export class SessionHistorySseState {
     this.sentHistory = snapshot.history;
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
     this.turnBoundaryPending = snapshot.turnBoundaryPending;
-    this.streamErrorFallbackPending = snapshot.streamErrorFallbackPending;
+    this.assistantErrorPending = snapshot.assistantErrorPending;
     this.transcriptPath = normalizeTranscriptPathForComparison(params.transcriptPath);
   }
 
@@ -336,11 +336,11 @@ export class SessionHistorySseState {
       includeCommentaryFallbacks: true,
       maxChars: this.maxChars,
       turnBoundaryPending: hadPendingTurnBoundary,
-      streamErrorFallbackPending: this.streamErrorFallbackPending,
+      assistantErrorPending: this.assistantErrorPending,
     });
     this.turnBoundaryPending = nextProjection.turnBoundaryPending;
-    this.streamErrorFallbackPending = nextProjection.streamErrorFallbackPending;
-    if (nextProjection.streamErrorFallbackRepaired) {
+    this.assistantErrorPending = nextProjection.assistantErrorPending;
+    if (nextProjection.assistantErrorRecoveryObserved) {
       // Keep only the pending bit here: retaining raw transcript context would
       // undo the bounded SSE memory contract. The caller rereads canonical
       // history so full projection can remove the already-emitted placeholder.
@@ -429,7 +429,7 @@ export class SessionHistorySseState {
     const snapshot = this.buildSnapshot(rawSnapshot);
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
     this.turnBoundaryPending = snapshot.turnBoundaryPending;
-    this.streamErrorFallbackPending = snapshot.streamErrorFallbackPending;
+    this.assistantErrorPending = snapshot.assistantErrorPending;
     this.transcriptPath = normalizeTranscriptPathForComparison(rawSnapshot.transcriptPath);
     this.sentHistory = snapshot.history;
     return snapshot.history;

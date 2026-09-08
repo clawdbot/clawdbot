@@ -55,9 +55,11 @@ export class ManagerRuntimeHandleCache {
   }
 
   /** Closes and removes one cached runtime handle when present. */
-  async close(params: AcpSessionTarget & { reason: string }): Promise<void> {
+  async close(
+    params: AcpSessionTarget & { reason: string; expectedHandle?: AcpRuntimeHandle },
+  ): Promise<void> {
     const cached = this.get(params);
-    if (!cached) {
+    if (!cached || (params.expectedHandle && cached.handle !== params.expectedHandle)) {
       return;
     }
     try {
@@ -66,6 +68,9 @@ export class ManagerRuntimeHandleCache {
         reason: params.reason,
       });
     } catch (error) {
+      if (params.expectedHandle && isAcpOwnerRepairRequired(error)) {
+        throw error;
+      }
       logVerbose(
         `acp-manager: cached runtime close failed for ${params.sessionKey}: ${String(error)}`,
       );

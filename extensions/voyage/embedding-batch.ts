@@ -10,16 +10,14 @@ import {
   postJsonWithRetry,
   readEmbeddingBatchJsonl,
   resolveEmbeddingEndpointUrl,
-  resolveBatchCompletionFromStatus,
   resolveCompletedBatchResult,
   runEmbeddingBatchGroups,
   throwIfBatchCompletionError,
-  throwIfBatchTerminalFailure,
   type EmbeddingBatchExecutionParams,
   type EmbeddingBatchStatus,
-  type BatchCompletionResult,
   type ProviderBatchOutputLine,
   uploadBatchJsonlFile,
+  waitForEmbeddingBatch,
   withRemoteHttpResponse,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
@@ -155,89 +153,6 @@ async function readVoyageBatchError(params: {
   }
 }
 
-async function waitForVoyageBatch(params: {
-  client: VoyageEmbeddingClient;
-  batchId: string;
-  wait: boolean;
-  pollIntervalMs: number;
-  timeoutMs: number;
-  debug?: (message: string, data?: Record<string, unknown>) => void;
-  initial?: VoyageBatchStatus;
-}): Promise<BatchCompletionResult> {
-  const deadline = createProviderOperationDeadline({
-    label: `voyage batch ${params.batchId}`,
-    timeoutMs: params.timeoutMs,
-  });
-  let current: VoyageBatchStatus | undefined = params.initial;
-  while (true) {
-    let status: VoyageBatchStatus;
-    if (current) {
-      status = current;
-    } else {
-      const signal = AbortSignal.timeout(
-        resolveProviderOperationTimeoutMs({
-          deadline,
-          defaultTimeoutMs: params.timeoutMs,
-        }),
-      );
-      try {
-        status = await fetchVoyageBatchStatus({
-          client: params.client,
-          batchId: params.batchId,
-          signal,
-        });
-      } catch (error) {
-        if (signal.aborted) {
-          throw new Error(`voyage batch ${params.batchId} timed out after ${params.timeoutMs}ms`, {
-            cause: error,
-          });
-        }
-        throw error;
-      }
-    }
-    const state = status.status ?? "unknown";
-    await throwIfBatchCompletionError({
-      provider: "voyage",
-      status: { ...status, id: params.batchId },
-      readError: async (errorFileId) =>
-        await readVoyageBatchError({
-          client: params.client,
-          errorFileId,
-        }),
-    });
-    if (state === "completed") {
-      return resolveBatchCompletionFromStatus({
-        provider: "voyage",
-        batchId: params.batchId,
-        status,
-      });
-    }
-    await throwIfBatchTerminalFailure({
-      provider: "voyage",
-      status: { ...status, id: params.batchId },
-      readError: async (errorFileId) =>
-        await readVoyageBatchError({
-          client: params.client,
-          errorFileId,
-        }),
-    });
-    if (!params.wait) {
-      throw new Error(`voyage batch ${params.batchId} still ${state}; wait disabled`);
-    }
-    const waitMs = Math.min(
-      params.pollIntervalMs,
-      resolveProviderOperationTimeoutMs({
-        deadline,
-        defaultTimeoutMs: params.timeoutMs,
-      }),
-    );
-    params.debug?.(`voyage batch ${params.batchId} ${state}; waiting ${waitMs}ms`);
-    await waitProviderOperationPollInterval({ deadline, pollIntervalMs: waitMs });
-    resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: params.timeoutMs });
-    current = undefined;
-  }
-}
-
 export async function runVoyageEmbeddingBatches(
   params: {
     client: VoyageEmbeddingClient;
@@ -280,16 +195,30 @@ export async function runVoyageEmbeddingBatches(
         provider: "voyage",
         status: batchInfo,
         wait: params.wait,
-        waitForBatch: async () =>
-          await waitForVoyageBatch({
-            client: params.client,
+        waitForBatch: async () => {
+          const client = params.client;
+          const wait = params.wait;
+          const debug = params.debug;
+          const deadline = createProviderOperationDeadline({
+            label: `voyage batch ${batchId}`,
+            timeoutMs,
+          });
+          return await waitForEmbeddingBatch({
+            provider: "voyage",
             batchId,
-            wait: params.wait,
+            wait,
             pollIntervalMs,
             timeoutMs,
-            debug: params.debug,
+            debug,
             initial: batchInfo,
-          }),
+            fetchStatus: (signal) => fetchVoyageBatchStatus({ client, batchId, signal }),
+            resolveTimeoutMs: () =>
+              resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: timeoutMs }),
+            waitForPoll: (delayMs) =>
+              waitProviderOperationPollInterval({ deadline, pollIntervalMs: delayMs }),
+            readError: async (errorFileId) => await readVoyageBatchError({ client, errorFileId }),
+          });
+        },
       });
 
       const errors: string[] = [];

@@ -5,7 +5,7 @@ read_when:
   - You're doing first-run setup with the onboarding wizard
   - You want to set the default workspace path
   - You need the baseline-only setup flag for scripts
-title: "Setup"
+title: "Setup CLI"
 ---
 
 # `openclaw setup`
@@ -37,10 +37,17 @@ Guided inference detection runs on the Gateway host on macOS or Linux. The CLI
 and macOS app call the same Gateway-owned detector, which checks configured
 models, supported CLI logins, API-key environment variables, and already
 installed Ollama or LM Studio models. Local models are never downloaded by this
-automatic pass. Detected local runtimes are auto-tested after CLI and API-key
-candidates; when several local models are available, OpenClaw prefers the
-strongest tool-calling instruct family. The selected candidate must answer a
-real completion before its provider and model configuration is saved.
+discovery pass. Both CLI onboarding and the macOS app wait for you to choose a
+connection before testing it. A failed or cancelled attempt never selects another
+provider automatically. A selected candidate must answer a real completion before
+its provider and model configuration is saved.
+
+Initial Claude Code and Codex detection checks executable versions without
+running auth-status commands or starting an app server. Readable Codex
+credentials are reported as stored evidence; the active login remains
+unverified during detection. Stored credentials do not
+receive verified-subscription priority over environment API keys.
+
 Pi and OpenCode CLIs may also be reported for context when they cannot serve as
 the reusable inference route for guided setup. Gemini CLI and Antigravity are
 not offered as detected setup routes.

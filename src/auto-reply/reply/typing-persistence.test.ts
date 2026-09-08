@@ -83,6 +83,31 @@ describe("typing persistence bug fix", () => {
     expect(onReplyStartSpy).toHaveBeenCalledTimes(1); // Still only the initial call
   });
 
+  it.each(["cleanup", "run-first", "idle-first"] as const)(
+    "disposes typing when %s closes the controller before start settles",
+    async (completion) => {
+      const starting = controller.startTypingLoop();
+      if (completion === "cleanup") {
+        controller.cleanup();
+      } else if (completion === "run-first") {
+        controller.markRunComplete();
+        controller.markDispatchIdle();
+      } else {
+        controller.markDispatchIdle();
+        controller.markRunComplete();
+      }
+      await starting;
+      await controller.startTypingOnText("late text");
+      controller.cleanup();
+
+      expect(controller.isActive()).toBe(false);
+      expect(onCleanupSpy).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("should prevent typing restart even if cleanup is delayed", async () => {
     // Start typing
     await controller.startTypingLoop();

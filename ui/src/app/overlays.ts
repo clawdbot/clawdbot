@@ -1,5 +1,6 @@
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
+  GATEWAY_EVENT_UPDATE_RUN_CHANGED,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
@@ -258,6 +259,10 @@ export function createApplicationOverlays(
       );
       return;
     }
+    if (event.event === GATEWAY_EVENT_UPDATE_RUN_CHANGED) {
+      updates.handleUpdateRunChanged(event.payload);
+      return;
+    }
     if (
       !operatorAccess.canReviewApprovals ||
       !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals
@@ -287,8 +292,10 @@ export function createApplicationOverlays(
       return () => listeners.delete(listener);
     },
     refreshUpdateStatus: updates.refreshUpdateStatus,
+    acknowledgeUpdateRun: updates.acknowledgeUpdateRun,
     runUpdate: updates.runUpdate,
     holdUpdate: updates.holdUpdate,
+    reportUpdateFailure: updates.reportUpdateFailure,
     async decideApproval(decision, approvalId, projectedApproval) {
       const active = approvalId
         ? (promptState.execApprovalQueue.find((entry) => entry.id === approvalId) ??

@@ -142,14 +142,24 @@ describe("automatic candidates during provenance repair", () => {
     };
     const runSync = owner.runSync.bind(upgraded);
     let pendingRetry: Promise<void> | undefined;
-    const retryGate = vi.spyOn(owner, "runSync").mockImplementation((params) => {
-      retryStarted.resolve();
-      pendingRetry = retry.promise.then(() => runSync(params));
-      return pendingRetry;
-    });
+    const retryGate = vi
+      .spyOn(owner, "runSync")
+      .mockImplementation((params) => {
+        retryStarted.resolve();
+        pendingRetry = retry.promise.then(() => runSync(params));
+        return pendingRetry;
+      })
+      .mockImplementationOnce(runSync);
     // This is the same public sync admission used by detached startup catch-up.
-    // Attach rejection handling immediately; its failed initialization is expected.
-    const startup = upgraded.sync({ reason: "session-startup-catchup" });
+    // Optional initialization now falls back successfully. Fail its first real
+    // keyword generation so candidate repair must still admit a separate retry.
+    const startupFailure = new Error("startup progress callback failed");
+    const startup = upgraded.sync({
+      reason: "session-startup-catchup",
+      progress: () => {
+        throw startupFailure;
+      },
+    });
     const startupOutcome = startup.then(
       () => undefined,
       (error: unknown) => error,
@@ -169,6 +179,8 @@ describe("automatic candidates during provenance repair", () => {
       await Promise.resolve();
       initialization.resolve();
       await retryStarted.promise;
+      expect(await startupOutcome).toBe(startupFailure);
+      expect(retryGate).toHaveBeenCalledTimes(2);
       // Give teardown a turn to finish while the admitted retry remains gated.
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
@@ -176,7 +188,6 @@ describe("automatic candidates during provenance repair", () => {
       expect(closeSettled).toBe(false);
       retry.resolve();
       await closing;
-      expect(await startupOutcome).toBeInstanceOf(Error);
 
       // Observable persistence proof: close did not merely cancel or abandon
       // the retry; its classified candidates survive a fresh manager open.

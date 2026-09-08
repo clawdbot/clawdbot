@@ -1,12 +1,26 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import {
   createGatewayStoreTestStore as createStore,
   GATEWAY_STORE_TEST_HELLO as HELLO,
   stubGatewayStoreTestGlobals,
 } from "./gateway-store.test-support.ts";
+import { loadSettings } from "./settings.ts";
+import { resolveApplicationStartupSettings } from "./startup-settings.ts";
+
+function stubBuildReloadDocument(href = "http://127.0.0.1:18789/chat/main") {
+  const replace = vi.fn<(url: string) => void>();
+  const location = Object.assign(new URL(href), { replace });
+  vi.stubGlobal("location", location);
+  vi.stubGlobal("window", { location });
+  const probe = createDeferred<Response>();
+  const fetchMock = vi.fn<typeof fetch>(() => probe.promise);
+  vi.stubGlobal("fetch", fetchMock);
+  return { replace, probe, fetchMock };
+}
 
 describe("createApplicationGateway authentication diagnostics", () => {
   let store: ReturnType<typeof createStore>;
@@ -21,7 +35,190 @@ describe("createApplicationGateway authentication diagnostics", () => {
     setAvatarGatewayOrigin(null);
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
+
+  function rejectStaleBuild() {
+    store.current().opts.onClose?.({
+      code: 1008,
+      reason: "protocol mismatch: Control UI updated; reload this page to continue",
+      error: {
+        code: "UNAVAILABLE",
+        message: "protocol mismatch: Control UI updated; reload this page to continue",
+        details: {
+          code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+          gatewayBuildId: "replacement-build",
+          reloadRequired: true,
+        },
+      },
+      willRetry: false,
+    });
+  }
+
+  it("automatically recovers a rejected old bundle after the document probe briefly fails", async () => {
+    vi.useFakeTimers();
+    const { replace, fetchMock } = stubBuildReloadDocument();
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValue(new Response(null, { status: 200 }));
+    store.gateway.start();
+    rejectStaleBuild();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.gateway.snapshot.phase).toBe("reload-required");
+    expect(replace).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(replace).toHaveBeenCalledOnce();
+    expect(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")).toBe(
+      "replacement-build",
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(replace).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets the current connection resume build recovery during the probe retry delay", async () => {
+    vi.useFakeTimers();
+    const { replace, fetchMock } = stubBuildReloadDocument();
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValue(new Response(null, { status: 200 }));
+    store.gateway.start();
+    rejectStaleBuild();
+    await vi.advanceTimersByTimeAsync(0);
+    store.gateway.connect();
+    rejectStaleBuild();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(replace).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")).toBe(
+      "replacement-build",
+    );
+  });
+
+  it("retires automatic build recovery when the connection stops between probes", async () => {
+    vi.useFakeTimers();
+    const { replace, fetchMock } = stubBuildReloadDocument();
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValue(new Response(null, { status: 200 }));
+    store.gateway.start();
+    rejectStaleBuild();
+    await vi.advanceTimersByTimeAsync(0);
+    store.gateway.stop();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(replace).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")).toBeNull();
+  });
+
+  it("preserves an unfinished browser handoff across a build recovery reload", async () => {
+    const bootstrapToken = "synthetic-owner-bootstrap";
+    const initialUrl = new URL(
+      `http://127.0.0.1:18789/settings/appearance?keep=yes#tab=keep&bootstrapToken=${bootstrapToken}&bootstrapProfile=owner`,
+    );
+    const startup = resolveApplicationStartupSettings(loadSettings(), initialUrl);
+    expect(startup.location.hash).toBe("#tab=keep");
+    const { pathname, search, hash } = startup.location;
+    const { replace, probe, fetchMock } = stubBuildReloadDocument(
+      new URL(`${pathname}${search}${hash}`, initialUrl).href,
+    );
+    store.gateway.connect({
+      bootstrapToken: startup.pendingBootstrapToken ?? "",
+      bootstrapProfile: startup.pendingBootstrapProfile ?? undefined,
+    });
+    rejectStaleBuild();
+    expect(store.gateway.snapshot.phase).toBe("reload-required");
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("HEAD");
+    probe.resolve(new Response(null, { status: 200 }));
+    await vi.waitFor(() => expect(replace).toHaveBeenCalledOnce());
+    const destination = new URL(replace.mock.calls[0]![0]);
+    const resumed = resolveApplicationStartupSettings(loadSettings(), destination);
+    expect(resumed.pendingBootstrapToken).toBe(bootstrapToken);
+    expect(resumed.pendingBootstrapProfile).toBe("owner");
+    expect(resumed.location.pathname).toBe("/settings/appearance");
+    expect(new URLSearchParams(resumed.location.search).get("keep")).toBe("yes");
+    expect(resumed.location.hash).toBe("#tab=keep");
+    expect(resumed.settings.token).toBe("");
+    for (const storage of [localStorage, sessionStorage]) {
+      for (let index = 0; index < storage.length; index++) {
+        expect(storage.getItem(storage.key(index)!)).not.toContain(bootstrapToken);
+      }
+    }
+  });
+
+  it("lets the replacement handoff join the pending document probe for the same build", async () => {
+    const { replace, probe, fetchMock } = stubBuildReloadDocument();
+    const { gateway } = store;
+    gateway.connect({ bootstrapToken: "retired-bootstrap" });
+    rejectStaleBuild();
+    gateway.connect({ bootstrapToken: "replacement-bootstrap", bootstrapProfile: "owner" });
+    rejectStaleBuild();
+    expect(fetchMock).toHaveBeenCalledOnce();
+
+    probe.resolve(new Response(null, { status: 200 }));
+    await vi.waitFor(() => expect(replace).toHaveBeenCalledOnce());
+    const resumed = resolveApplicationStartupSettings(
+      loadSettings(),
+      new URL(replace.mock.calls[0]![0]),
+    );
+    expect(resumed.pendingBootstrapToken).toBe("replacement-bootstrap");
+    expect(resumed.pendingBootstrapProfile).toBe("owner");
+  });
+
+  it.each(["stop", "reconnect", "credential", "retarget"] as const)(
+    "does not finish retired handoff recovery after %s during the document probe",
+    async (action) => {
+      const { replace, probe, fetchMock } = stubBuildReloadDocument();
+      const { gateway } = store;
+      gateway.connect({ bootstrapToken: "synthetic-owner-bootstrap", bootstrapProfile: "owner" });
+      rejectStaleBuild();
+      expect(fetchMock).toHaveBeenCalledOnce();
+
+      if (action === "stop") {
+        gateway.stop();
+      } else if (action === "reconnect") {
+        gateway.connect();
+      } else if (action === "credential") {
+        gateway.connect({ bootstrapToken: "replacement-bootstrap" });
+      } else {
+        gateway.connect({ gatewayUrl: "wss://other-gateway.example" });
+      }
+      probe.resolve(new Response(null, { status: 200 }));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(replace).not.toHaveBeenCalled();
+      expect(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")).toBeNull();
+    },
+  );
+
+  it.each(["", "synthetic-remote-bootstrap"])(
+    "does not automatically reload for a remote Gateway (bootstrap: %s)",
+    async (bootstrapToken) => {
+      const { replace, probe, fetchMock } = stubBuildReloadDocument();
+      store.gateway.connect({
+        gatewayUrl: "wss://other-gateway.example",
+        bootstrapToken,
+        bootstrapProfile: "owner",
+      });
+      rejectStaleBuild();
+      probe.resolve(new Response(null, { status: 200 }));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(replace).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(store.gateway.snapshot.phase).toBe("reload-required");
+    },
+  );
 
   it.each([
     {

@@ -6,6 +6,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import * as activeTranscriptEvents from "../config/sessions/session-accessor.sqlite-active-events.js";
+import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../config/sessions/session-transcript-reconcile.js";
 import * as redact from "../logging/redact.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -18,7 +19,11 @@ import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => {
+afterEach(async () => {
+  // Deferred reconciliation must settle before its databases and fixture directories close.
+  for (const stateDir of tempDirs.dirs) {
+    await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
+  }
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();

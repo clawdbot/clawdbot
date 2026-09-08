@@ -77,6 +77,9 @@ openclaw pairing approve feishu <CODE>
 - Set `true` or `false` explicitly to override; per-group override: `channels.feishu.groups.<chat_id>.requireMention`.
 - Broadcast-only `@all` and `@_all` are not treated as bot mentions. A message that mentions both `@all` and the bot directly still counts as a bot mention.
 
+Mentions of other people stay readable in the text sent to the agent,
+including when consecutive messages are combined.
+
 ## Group configuration examples
 
 ### Allow all groups, no @mention required

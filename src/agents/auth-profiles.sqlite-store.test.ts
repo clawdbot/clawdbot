@@ -16,7 +16,7 @@ import {
   detectSharedAuthStoreMigration,
   migrateSharedAuthStore,
 } from "../infra/state-migrations.shared-auth-store.js";
-import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -44,9 +44,9 @@ import {
 import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
-  getRuntimeAuthProfileStoreSnapshotRevision,
   saveAuthProfileStore,
-} from "./auth-profiles/store.js";
+} from "./auth-profiles/store-runtime.js";
+import { getRuntimeAuthProfileStoreSnapshotRevision } from "./auth-profiles/store.js";
 import type { ApiKeyCredential, AuthProfileStore, OAuthCredential } from "./auth-profiles/types.js";
 import {
   persistAuthProfileBatch,
@@ -70,8 +70,10 @@ vi.mock("./auth-profiles/external-cli-sync.js", () => ({
   resolveExternalCliAuthProfiles: mocks.resolveExternalCliAuthProfiles,
 }));
 
-vi.mock("../plugins/provider-external-auth.js", () => ({
-  resolveExternalAuthProfilesWithPlugins: () => [],
+vi.mock("../plugins/provider-external-auth-core.js", () => ({
+  createProviderExternalAuthResolver: () => ({
+    resolveExternalAuthProfilesWithPlugins: () => [],
+  }),
 }));
 
 function apiKeyCredential(key: string): ApiKeyCredential {

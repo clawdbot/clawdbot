@@ -1,6 +1,7 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionPath, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -162,7 +163,7 @@ suite.define(() => {
       });
 
       const staleRequest = await gateway.waitForRequest("chat.history", { after: historyCount });
-      expect(staleRequest.params).toMatchObject({ sessionKey, limit: 800 });
+      expect(staleRequest.params).toMatchObject({ sessionKey, limit: 80 });
       // The first authoritative snapshot can promote the same interim text to
       // a durable row before the distinct terminal reply is committed. That
       // identity change is not a recovered final; retry until new content lands.
@@ -180,13 +181,13 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("chat.history")).length)
         .toBe(historyCount + 2);
       if (recordProof) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(
+        await writeFile(
+          path.join(
             path.join(suite.artifactDir, "dashboard-final-reply-recovery"),
             "dashboard-final-reply-recovered.png",
           ),
-        });
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [visibleFinal]),
+        );
       }
     } finally {
       const video = page.video();

@@ -142,6 +142,7 @@ export async function resolvePairingApprovalPlan(
     isControlUi,
     isBrowserOperatorUi,
     isWebchat,
+    isNativeAppUi,
     authMethod,
     authResult,
     bootstrapTokenCandidate,
@@ -151,7 +152,7 @@ export async function resolvePairingApprovalPlan(
     configSnapshot.gateway?.auth?.trustedProxy?.deviceAutoApprove;
   const trustedProxyUser = authResult.user?.trim();
   // A scope upgrade from a device whose paired public key matches the one
-  // this connect just proved by signature is the same physical browser
+  // this connect just proved by signature is the same physical device
   // behind the SSO proxy — auto-approvable like a first pairing. A key
   // mismatch stays a manual owner decision (possible deviceId squat).
   const isTrustedProxySameKeyUpgrade =
@@ -159,7 +160,7 @@ export async function resolvePairingApprovalPlan(
   const trustedProxyAutoApproveScopes =
     ((reason === "not-paired" && !existingPairedDevice) || isTrustedProxySameKeyUpgrade) &&
     role === "operator" &&
-    (isBrowserOperatorUi || isWebchat) &&
+    (isBrowserOperatorUi || isWebchat || isNativeAppUi) &&
     authMethod === "trusted-proxy" &&
     Boolean(trustedProxyUser) &&
     trustedProxyAutoApproveConfig?.enabled === true

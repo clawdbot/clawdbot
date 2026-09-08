@@ -1,8 +1,8 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-// Control UI view renders agents panels tools skills screen content.
 import { html, nothing } from "lit";
 import {
+  normalizeToolList,
   normalizeToolPolicyName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
@@ -324,35 +324,10 @@ export function renderAgentTools(params: {
       return left.label.localeCompare(right.label);
     });
 
-  const updateTool = (toolId: string, nextEnabled: boolean) => {
-    const nextAllow = new Set(
-      alsoAllow.map((entry) => normalizeToolPolicyName(entry)).filter((entry) => entry.length > 0),
-    );
-    const nextDeny = new Set(
-      deny.map((entry) => normalizeToolPolicyName(entry)).filter((entry) => entry.length > 0),
-    );
-    const baseAllowed = resolveAllowed(toolId).baseAllowed;
-    const normalized = normalizeToolPolicyName(toolId);
-    if (nextEnabled) {
-      nextDeny.delete(normalized);
-      if (!baseAllowed) {
-        nextAllow.add(normalized);
-      }
-    } else {
-      nextAllow.delete(normalized);
-      nextDeny.add(normalized);
-    }
-    params.onOverridesChange(params.agentId, [...nextAllow], [...nextDeny]);
-  };
-
-  const updateAll = (nextEnabled: boolean) => {
-    const nextAllow = new Set(
-      alsoAllow.map((entry) => normalizeToolPolicyName(entry)).filter((entry) => entry.length > 0),
-    );
-    const nextDeny = new Set(
-      deny.map((entry) => normalizeToolPolicyName(entry)).filter((entry) => entry.length > 0),
-    );
-    for (const toolId of toolIds) {
+  const updateTools = (targetIds: string[], nextEnabled: boolean) => {
+    const nextAllow = new Set(normalizeToolList(alsoAllow));
+    const nextDeny = new Set(normalizeToolList(deny));
+    for (const toolId of targetIds) {
       const baseAllowed = resolveAllowed(toolId).baseAllowed;
       const normalized = normalizeToolPolicyName(toolId);
       if (nextEnabled) {
@@ -446,10 +421,18 @@ export function renderAgentTools(params: {
             })}</span
           >`,
         actions: html`
-          <button class="btn btn--sm" ?disabled=${!editable} @click=${() => updateAll(true)}>
+          <button
+            class="btn btn--sm"
+            ?disabled=${!editable}
+            @click=${() => updateTools(toolIds, true)}
+          >
             ${t("agentTools.enableAll")}
           </button>
-          <button class="btn btn--sm" ?disabled=${!editable} @click=${() => updateAll(false)}>
+          <button
+            class="btn btn--sm"
+            ?disabled=${!editable}
+            @click=${() => updateTools(toolIds, false)}
+          >
             ${t("agentTools.disableAll")}
           </button>
           <button
@@ -670,7 +653,7 @@ export function renderAgentTools(params: {
                                   : "agentTools.enableNamed",
                                 { name: tool.label },
                               ),
-                              onChange: (checked) => updateTool(tool.id, checked),
+                              onChange: (checked) => updateTools([tool.id], checked),
                             })}
                           </span>
                         </summary>

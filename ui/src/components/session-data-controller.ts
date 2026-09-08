@@ -243,17 +243,16 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     globalThis.removeEventListener("focus", this.handleSessionCatalogPageActivation);
   }
 
-  retireSessionCatalogData(resetConnection = false): void {
+  retireSessionCatalogData(): void {
     this.sessionScopeGeneration += 1;
     this.sessionsLoading = false;
     this.loadingMoreSessionCatalogIds = new Set();
-    this.sessionCatalogLive.retireConnection(resetConnection);
+    this.sessionCatalogLive.clear();
   }
 
   resetSessionCatalogConnection(): void {
     this.retireSessionCatalogData();
     this.sessionCatalogRevision += 1;
-    this.sessionCatalogLive.resetConnection();
     this.sessionCatalogs = [];
     this.sessionCatalogRefreshStatus = createPanelRefreshStatus();
     this.sessionCatalogPageDepths.clear();
@@ -495,7 +494,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     }
     this.notify();
     if (!sourceOrClientChanged) {
-      this.retireSessionCatalogData(!connected);
+      this.retireSessionCatalogData();
       if (connected && this.sessionsSource && hasSidebarListFilter(this.host)) {
         void this.refreshSidebarSessions();
       }

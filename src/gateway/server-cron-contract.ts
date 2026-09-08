@@ -4,12 +4,16 @@ import type { CronJobScratchState, CronJobScratchWriteResult } from "../cron/scr
 import type { CronServiceContract } from "../cron/service-contract.js";
 
 export type GatewayCronServiceContract = CronServiceContract & {
+  /** Cancel exact current definitions under the serving scheduler's operation lock. */
+  quiesceJobs(
+    jobs: readonly { id: string; revision: string }[],
+    commitGuard: () => void,
+  ): Promise<void>;
   /** Remove an owned declarative job family from obsolete SQLite store partitions. */
-  removeStaleJobFamily(family: {
-    declarationKey: string;
-    name: string;
-    ownerPluginTag: string;
-  }): Promise<number>;
+  removeStaleJobFamily(
+    family: { declarationKey: string; name: string; ownerPluginTag: string },
+    opts?: { commitGuard?: () => void },
+  ): Promise<number>;
   readScratch(id: string): Promise<CronJobScratchState>;
   writeScratch(
     id: string,

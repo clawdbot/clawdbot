@@ -180,12 +180,12 @@ describe("config plugin validation", () => {
 
   const validateInSuite = (raw: unknown) => validateConfigObjectWithPlugins(raw);
 
-  const validateRemovedPluginConfig = (removedId: string) =>
+  const validateRemovedPluginConfig = (removedId: string, enabled = true) =>
     validateInSuite({
       agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: false,
-        entries: { [removedId]: { enabled: true } },
+        entries: { [removedId]: { enabled } },
         allow: [removedId],
         deny: [removedId],
         slots: { memory: removedId },
@@ -353,8 +353,11 @@ describe("config plugin validation", () => {
       plugins: {
         enabled: true,
         load: { paths: [missingPath] },
-        entries: { "missing-plugin": { enabled: true } },
-        allow: ["missing-allow"],
+        entries: {
+          "missing-plugin": { enabled: true },
+          "missing-slot": { enabled: false },
+        },
+        allow: ["missing-allow", "missing-slot"],
         deny: ["missing-deny"],
         slots: { memory: "missing-slot" },
       },
@@ -404,31 +407,61 @@ describe("config plugin validation", () => {
   it.each([
     {
       name: "an exact explicit disable marker",
+      pluginId: "missing-plugin",
       entry: { enabled: false },
-      warns: false,
+      warningPaths: [],
+    },
+    {
+      name: "an exact explicit disable marker",
+      pluginId: "duckduckgo",
+      entry: { enabled: false },
+      warningPaths: [],
     },
     {
       name: "a disabled entry that retains settings",
+      pluginId: "missing-plugin",
       entry: { enabled: false, config: { stale: true } },
-      warns: true,
+      warningPaths: ["plugins.entries.missing-plugin", "plugins.allow"],
     },
-  ])("handles $name for a missing plugin", ({ entry, warns }) => {
-    const res = validateInSuite({
-      agents: { list: [{ id: "openclaw" }] },
-      plugins: { entries: { "missing-plugin": entry } },
-    });
+    {
+      name: "a disabled entry that retains settings",
+      pluginId: "duckduckgo",
+      entry: { enabled: false, config: { stale: true } },
+      warningPaths: ["plugins.entries.duckduckgo"],
+    },
+  ])(
+    "handles $name for missing $pluginId in the allowlist",
+    ({ pluginId, entry, warningPaths }) => {
+      const plugins = { entries: { [pluginId]: entry }, allow: [pluginId] };
+      const res = validateConfigObjectWithPlugins(
+        {
+          agents: { list: [{ id: "openclaw" }] },
+          plugins,
+        },
+        {
+          pluginMetadataSnapshot: {
+            manifestRegistry: { plugins: [], diagnostics: [] },
+          },
+        },
+      );
 
-    expect(res.ok).toBe(true);
-    const hasWarning = (res.warnings ?? []).some(
-      (warning) => warning.path === "plugins.entries.missing-plugin",
-    );
-    expect(hasWarning).toBe(warns);
-  });
+      expect(res.ok).toBe(true);
+      expect(
+        (res.warnings ?? [])
+          .filter((warning) => warning.path.startsWith("plugins."))
+          .map((warning) => warning.path),
+      ).toEqual(warningPaths);
+      if (res.ok) {
+        expect(res.config.plugins).toMatchObject(plugins);
+      }
+    },
+  );
 
   it("warns instead of failing for stale plugins.deny entries", () => {
     const res = validateInSuite({
       agents: { list: [{ id: "openclaw" }] },
       plugins: {
+        entries: { "missing-deny": { enabled: false } },
         deny: ["missing-deny"],
       },
     });
@@ -1880,6 +1913,7 @@ describe("config plugin validation", () => {
       plugins: {
         allow: ["dreaming"],
         entries: {
+          dreaming: { enabled: false },
           "memory-core": {
             config: { dreaming: { enabled: true } },
           },
@@ -1921,9 +1955,9 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("warns for removed legacy plugin ids instead of failing validation", () => {
+  it.each([true, false])("warns for removed legacy plugin ids with enabled=%s", (enabled) => {
     const removedId = "google-antigravity-auth";
-    const res = validateRemovedPluginConfig(removedId);
+    const res = validateRemovedPluginConfig(removedId, enabled);
     expectRemovedPluginWarnings(res, removedId, removedId);
   });
 

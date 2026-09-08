@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../types.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import {
   isConfiguredContextSizeOverflowError,
   isContextOverflow,
@@ -13,14 +14,7 @@ function errorMessage(message: string): AssistantMessage {
     api: "test-api",
     provider: "test-provider",
     model: "test-model",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsage(),
     stopReason: "error",
     errorMessage: message,
     timestamp: 1,

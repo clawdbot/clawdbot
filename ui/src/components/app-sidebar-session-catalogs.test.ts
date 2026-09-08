@@ -86,28 +86,32 @@ describe("findCatalogSessionHovercardRow", () => {
     };
 
     const colorInput = { catalogs: [catalog], sessionKey: "catalog:codex:gateway%3Acodex:colored" };
-    expect(findCatalogSessionHovercardRow(colorInput)?.color).toBe("cyan");
+    expect(findCatalogSessionHovercardRow(colorInput)).toMatchObject({
+      color: "cyan",
+      hasActiveRun: false,
+    });
     // An adopted session's cleared color must not fall back to stale CLI metadata.
     expect(
       findCatalogSessionHovercardRow({
         ...colorInput,
-        liveRow: { label: "Project", hasAutomation: false },
+        liveRow: { label: "Project", hasAutomation: false, hasActiveRun: false },
       })?.color,
     ).toBeUndefined();
     expect(
       findCatalogSessionHovercardRow({
         ...colorInput,
-        liveRow: { label: "Project", color: "red", hasAutomation: false },
+        liveRow: { label: "Project", color: "red", hasAutomation: false, hasActiveRun: false },
       })?.color,
     ).toBe("red");
     expect(
       findCatalogSessionHovercardRow({
         catalogs: [catalog],
         sessionKey: "agent:main:adopted-project",
-        liveRow: { label: "Operator chosen label", hasAutomation: false },
+        liveRow: { label: "Operator chosen label", hasAutomation: false, hasActiveRun: true },
       }),
     ).toMatchObject({
       label: "Operator chosen label",
+      hasActiveRun: true,
       workContext: {
         kind: "project",
         name: "openclaw",

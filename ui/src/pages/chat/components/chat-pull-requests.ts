@@ -7,9 +7,9 @@ import type {
 } from "../../../../../src/gateway/control-ui-contract.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
-import { getSafeLocalStorage } from "../../../local-storage.ts";
+import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-controller.ts";
 import "../../../components/tooltip.ts";
-import type { GitHubPublicationView } from "../chat-github-publication.ts";
+import { getSafeLocalStorage } from "../../../local-storage.ts";
 import {
   renderGitHubPublicationAction,
   renderGitHubPublicationDetails,

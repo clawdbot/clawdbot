@@ -1093,11 +1093,16 @@ describe("browser tool snapshot maxChars", () => {
     );
   });
 
-  it("uses config snapshot defaults when mode is not provided", async () => {
+  it("updates snapshot defaults for retained tools when mode is not provided", async () => {
+    const tool = createBrowserTool();
+    configMocks.loadConfig.mockReturnValue({ browser: {} });
+    await tool.execute?.("call-before-reload", { action: "snapshot", target: "host" });
+    expect(
+      lastMockCallArg<{ mode?: string }>(browserClientMocks.browserSnapshot, 1).mode,
+    ).toBeUndefined();
     configMocks.loadConfig.mockReturnValue({
       browser: { snapshotDefaults: { mode: "efficient" } },
     });
-    const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "snapshot", target: "host" });
 
     const opts = lastMockCallArg<{ mode?: string }>(browserClientMocks.browserSnapshot, 1);

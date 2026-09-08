@@ -429,6 +429,39 @@ export async function removeStaleInventoryEntries(
   );
 }
 
+/**
+ * Renames one paired device through the shared operator-alias RPC. Returns
+ * `null` when the alias landed (the caller's dialog closes) and a displayable
+ * message when it did not, so a rejected attempt stays visible and retryable.
+ * Successful renames refresh the captured request scope; rejected attempts
+ * remain visible in the dialog and in `devicesError`.
+ */
+export async function renameDevice(
+  state: DevicesState,
+  params: { deviceId: string; label: string },
+): Promise<string | null> {
+  const client = state.client;
+  if (!client || !state.connected) {
+    const message = formatUiError(new Error("The Gateway connection is not available."));
+    state.devicesError = message;
+    return message;
+  }
+  const generation = state.requestGeneration;
+  try {
+    await client.request("device.pair.rename", params);
+    if (isCurrentNodesRequest(state, client, generation)) {
+      await loadDevices(state);
+    }
+    return null;
+  } catch (err) {
+    const message = formatUiError(err);
+    if (isCurrentNodesRequest(state, client, generation)) {
+      state.devicesError = message;
+    }
+    return message;
+  }
+}
+
 export async function approveNodePairingRequest(state: InventoryState, requestId: string) {
   if (!state.client || !state.connected) {
     return;

@@ -62,6 +62,8 @@ function copyGeneratedPublisherFixture(root: string, workspaceName: string) {
 }
 
 export type GeneratedPublisherOptions = {
+  disarmRace?: boolean;
+  updateSourceBeforeAutoMerge?: boolean;
   race?: "delete" | "advance" | "recreate";
   reconciliation?: "missing" | "merged";
   autoMerge?: boolean;
@@ -118,7 +120,7 @@ export function prepareGeneratedPublisherFixture(
     writeFileSync(prState, "", "utf8");
     runGit(worktree, ["switch", "main"]);
   }
-  if (baseChangePath !== null || options.updateSource) {
+  if (baseChangePath !== null || options.updateSource || options.updateSourceBeforeAutoMerge) {
     runGit(root, ["clone", "--branch", "main", origin, updater]);
     runGit(updater, ["config", "user.name", "Base Updater"]);
     runGit(updater, ["config", "user.email", "updater@example.com"]);
@@ -132,9 +134,11 @@ export function prepareGeneratedPublisherFixture(
     if (options.updateSource) {
       writeFileSync(path.join(updater, "source", "input.txt"), "newer-input\n", "utf8");
     }
-    runGit(updater, ["add", "generated", "source"]);
-    runGit(updater, ["commit", "-m", "update base"]);
-    runGit(updater, ["push", "origin", "main"]);
+    if (!options.updateSourceBeforeAutoMerge) {
+      runGit(updater, ["add", "generated", "source"]);
+      runGit(updater, ["commit", "-m", "update base"]);
+      runGit(updater, ["push", "origin", "main"]);
+    }
   }
   if (!options.noGeneratedChange) {
     writeFileSync(path.join(generatedDir, "a.txt"), "desired-a\n", "utf8");
@@ -162,6 +166,12 @@ export function prepareGeneratedPublisherFixture(
   writeExecutable(path.join(fakeBin, "gh"), [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
+    'if [[ "$FAKE_UPDATE_BEFORE_AUTO_MERGE" == "true" && ( "${1-}:${2-}" == "pr:create" || "${1-}:${2-}" == "pr:edit" ) ]]; then',
+    '  printf "newer-input\\n" > "$FAKE_UPDATER/source/input.txt"',
+    '  git -C "$FAKE_UPDATER" add source/input.txt',
+    '  git -C "$FAKE_UPDATER" -c commit.gpgsign=false commit -m "advance generator inputs" >&2',
+    '  git -C "$FAKE_UPDATER" push origin main >&2',
+    "fi",
     'case "${1-}:${2-}" in',
     "  auth:setup-git) exit 0 ;;",
     "  api:*)",
@@ -182,6 +192,7 @@ export function prepareGeneratedPublisherFixture(
     "    ;;",
     "  pr:edit) exit 0 ;;",
     "  pr:view)",
+    '    if [[ -f "$FAKE_MERGE_CALLS.disabled" ]]; then FAKE_AUTO_MERGE_METHOD=""; fi',
     '    [[ -n "${GH_TOKEN:-}" ]]',
     '    [[ -f "$FAKE_PR_STATE" ]]',
     '    if [[ -f "$FAKE_STALE_PR_VIEW_HEAD_ONCE" ]]; then',
@@ -203,6 +214,10 @@ export function prepareGeneratedPublisherFixture(
     "  pr:merge)",
     '    [[ "$GH_TOKEN" == "test-token" ]]',
     '    printf "%s\\n" "$*" >> "$FAKE_MERGE_CALLS"',
+    '    if [[ " $* " == *" --disable-auto "* ]]; then',
+    '      : > "$FAKE_MERGE_CALLS.disabled"',
+    '      if [[ "$FAKE_DISARM_RACE" == "true" ]]; then "${FAKE_REAL_GIT:-git}" --git-dir="$FAKE_ORIGIN" update-ref refs/heads/automation/locale "$FAKE_INITIAL_MAIN"; fi',
+    "    fi",
     "    ;;",
     '  *) printf "unexpected gh call: %s\\n" "$*" >&2; exit 2 ;;',
     "esac",
@@ -213,6 +228,9 @@ export function prepareGeneratedPublisherFixture(
     fakeBin,
     initialBranch,
     env: {
+      FAKE_UPDATE_BEFORE_AUTO_MERGE: String(options.updateSourceBeforeAutoMerge ?? false),
+      FAKE_UPDATER: updater,
+      FAKE_DISARM_RACE: String(options.disarmRace ?? false),
       FAKE_RACE: options.race ?? "",
       FAKE_INITIAL_MAIN: initialMain,
       FAKE_RECONCILIATION: options.reconciliation ?? "",
@@ -259,6 +277,7 @@ export function prepareGeneratedPublisherFixture(
       return {
         branchExists,
         branchHead,
+        initialBranch,
         generatedA: branchExists
           ? runGit(root, ["--git-dir", origin, "show", `${branchRef}:generated/a.txt`])
           : "",

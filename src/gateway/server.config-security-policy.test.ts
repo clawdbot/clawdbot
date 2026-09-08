@@ -111,7 +111,7 @@ describe("config security policy before persistence", () => {
       if (disableUi) {
         expect(outcome).toMatchObject({
           ok: true,
-          value: { sentinel: { payload: { stats: { requiresRestart: true } } } },
+          value: { sentinel: { payload: { stats: { requiresRestart: false } } } },
         });
         expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toMatchObject({
           gateway: { controlUi: { enabled: false, allowedOrigins: [] } },

@@ -799,6 +799,42 @@ describe("config mutate helpers", () => {
     });
   });
 
+  it("refuses guarded include publication before changing config or backups", async () => {
+    const home = await suiteRootTracker.make("guarded-include");
+    const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
+    const plugins = { entries: { demo: { enabled: false } } };
+    const includedRaw = `${JSON.stringify(plugins)}\n`;
+    await fs.writeFile(pluginsPath, includedRaw, "utf-8");
+    const rootRaw = await fs.readFile(configPath, "utf-8");
+    const snapshot = createSnapshot({
+      hash: "guarded-include",
+      path: configPath,
+      parsed: { plugins: { $include: "./config/plugins.json5" } },
+      sourceConfig: { plugins },
+    });
+    const beforeCommit = vi.fn();
+
+    await expect(
+      replaceConfigFile({
+        baseHash: snapshot.hash,
+        snapshot,
+        writeOptions: {
+          expectedConfigPath: configPath,
+          assertConfigPathForWrite: allowConfigPathWrite,
+          includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
+          beforeCommit,
+        },
+        nextConfig: { plugins: { entries: { demo: { enabled: true } } } },
+      }),
+    ).rejects.toThrow("cannot update include-owned configuration. Use a trusted shell");
+
+    expect(beforeCommit).not.toHaveBeenCalled();
+    expect(backupMocks.maintainConfigBackups).not.toHaveBeenCalled();
+    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(await fs.readFile(configPath, "utf-8")).toBe(rootRaw);
+    expect(await fs.readFile(pluginsPath, "utf-8")).toBe(includedRaw);
+  });
+
   it("repairs invalid config through a single-file top-level plugins include", async () => {
     const home = await suiteRootTracker.make("include");
     const { configPath, pluginsPath } = await createPluginIncludeFixture(home);

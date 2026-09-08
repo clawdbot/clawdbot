@@ -61,7 +61,7 @@ describe("Kilo Gateway provider config", () => {
     });
 
     it("includes the default model in the provider model list", () => {
-      const result = applyKilocodeConfig(emptyCfg);
+      const result = applyKilocodeConfig({ models: { mode: "replace" } });
       const provider = result.models?.providers?.kilocode;
       const models = provider?.models;
       expect(Array.isArray(models)).toBe(true);
@@ -70,7 +70,7 @@ describe("Kilo Gateway provider config", () => {
     });
 
     it("surfaces the full Kilo model catalog", () => {
-      const result = applyKilocodeConfig(emptyCfg);
+      const result = applyKilocodeConfig({ models: { mode: "replace" } });
       const provider = result.models?.providers?.kilocode;
       const modelIds = provider?.models?.map((m) => m.id) ?? [];
       for (const modelId of KILOCODE_MODEL_IDS) {
@@ -101,6 +101,27 @@ describe("Kilo Gateway provider config", () => {
       const agentModel = result.agents?.defaults?.models?.[KILOCODE_DEFAULT_MODEL_REF];
       expect(agentModel).toEqual({ alias: "Kilo Gateway" });
     });
+
+    it.each([undefined, "merge"] as const)(
+      "preserves authored rows without seeding %s config",
+      (mode) => {
+        expect(
+          applyKilocodeConfig({ models: { mode } }).models?.providers?.kilocode?.models,
+        ).toEqual([]);
+        const authored = {
+          ...buildKilocodeModelDefinition(),
+          id: "operator-model",
+          name: "My model",
+        };
+        const result = applyKilocodeConfig({
+          models: {
+            mode,
+            providers: { kilocode: { baseUrl: KILOCODE_BASE_URL, models: [authored] } },
+          },
+        });
+        expect(result.models?.providers?.kilocode?.models).toEqual([authored]);
+      },
+    );
 
     it("preserves existing alias if already set", () => {
       const cfg: OpenClawConfig = {

@@ -12,6 +12,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { UsageSummary } from "../../infra/provider-usage.types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 
 const mocks = vi.hoisted(() => ({
@@ -176,33 +178,53 @@ describe("usage.status provider usage cache", () => {
     });
   });
 
-  it("returns a cold marker only to clients that can converge it", async () => {
-    let finish: ((value: { updatedAt: number; providers: never[] }) => void) | undefined;
-    mocks.loadProviderUsageSummary.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          finish = resolve;
-        }),
-    );
+  it("returns a cold marker only to capable clients and retains invalidated refresh work", async () => {
+    const scope = new AsyncWorkScope();
+    const heldRefresh = createDeferredCore<UsageSummary>();
+    const original: UsageSummary = { updatedAt: now, providers: [] };
+    let legacy: Promise<unknown> | undefined;
+    let draining: Promise<void> | undefined;
+    mocks.loadProviderUsageSummary.mockImplementationOnce(() => heldRefresh.promise);
+    try {
+      await expect(scope.track(() => runCapableUsageStatus())).resolves.toEqual({
+        updatedAt: now,
+        providers: [],
+        refreshing: true,
+      });
 
-    await expect(runCapableUsageStatus()).resolves.toEqual({
-      updatedAt: now,
-      providers: [],
-      refreshing: true,
-    });
+      // Keep the blocking reader outside this scope: only the cold marker's
+      // detached refresh may keep its owner alive after that request returned.
+      legacy = runUsageStatus();
+      const pending = Symbol("pending");
+      await expect(
+        Promise.race([
+          legacy,
+          new Promise((resolve) => {
+            setTimeout(() => resolve(pending), 25);
+          }),
+        ]),
+      ).resolves.toBe(pending);
+      clearModelAuthStatusUsageCache();
+      const current = (await runUsageStatus()) as UsageSummary;
+      expect(current.providers[0]?.windows[0]?.usedPercent).toBe(20);
 
-    const legacy = runUsageStatus();
-    const pending = Symbol("pending");
-    await expect(
-      Promise.race([
-        legacy,
-        new Promise((resolve) => {
-          setTimeout(() => resolve(pending), 25);
-        }),
-      ]),
-    ).resolves.toBe(pending);
-    finish?.({ updatedAt: now, providers: [] });
-    await expect(legacy).resolves.toEqual({ updatedAt: now, providers: [] });
+      let drained = false;
+      draining = scope.drain().then(() => {
+        drained = true;
+      });
+      await Promise.resolve();
+      expect(drained).toBe(false);
+      heldRefresh.resolve(original);
+      await expect(legacy).resolves.toEqual(original);
+      await draining;
+      expect(drained).toBe(true);
+      await expect(runUsageStatus()).resolves.toEqual(current);
+      expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+    } finally {
+      heldRefresh.resolve(original);
+      await Promise.allSettled([legacy, mocks.loadProviderUsageSummary.mock.results[0]?.value]);
+      await (draining ?? scope.drain());
+    }
   });
 
   it("keeps serving usage while run bookkeeping refreshes the runtime snapshot", async () => {

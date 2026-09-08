@@ -31,6 +31,7 @@ describe("session lifecycle events", () => {
 
     try {
       emitSessionIdentityMutation({
+        agentId: "main",
         kind: "create",
         previous: { sessionKeys: [] },
         current: { sessionId: "session-1", sessionKeys: ["agent:main:external"] },

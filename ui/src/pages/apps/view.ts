@@ -12,6 +12,7 @@ import { appsBrandIcons } from "./brand-icons.ts";
 
 type AppsProps = {
   onNavigate: (routeId: RouteId) => void;
+  macGatewayLaunchUrl?: string | null;
   /** Opens the device-pairing dialog; absent when the operator cannot pair. */
   onPairDevice?: () => void;
 };
@@ -230,6 +231,7 @@ function renderCta(cta: AppCardCta, index: number, props: AppsProps) {
 
 function renderAppCard(card: AppCard, props: AppsProps) {
   const [from, to] = card.gradient;
+  const macGatewayLaunchUrl = card.id === "macos" ? props.macGatewayLaunchUrl : null;
   return html`
     <article class="apps-card">
       <div class="apps-card__art" style=${`--apps-art-a:${from};--apps-art-b:${to}`}>
@@ -256,7 +258,12 @@ function renderAppCard(card: AppCard, props: AppsProps) {
         </div>
         <p class="apps-card__desc">${card.desc()}</p>
         <div class="apps-card__ctas">
-          ${card.ctas.map((cta, index) => renderCta(cta, index, props))}
+          ${macGatewayLaunchUrl
+            ? html`<a class="apps-card__cta apps-card__cta--primary" href=${macGatewayLaunchUrl}>
+                ${t("appsPage.ctaOpenMac")}
+              </a>`
+            : nothing}
+          ${card.ctas.map((cta, index) => renderCta(cta, index + (macGatewayLaunchUrl ? 1 : 0), props))}
         </div>
       </div>
     </article>

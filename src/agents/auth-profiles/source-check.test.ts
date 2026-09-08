@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearAuthProfileMigrationDiagnostics } from "./legacy-source-diagnostic.js";
 import { hasAuthProfileStoreSourceForProvider } from "./source-check.js";
 import { readPersistedAuthProfileStoreRaw, writePersistedAuthProfileStoreRaw } from "./sqlite.js";
-import { loadAuthProfileStoreForRuntime, updateAuthProfileStoreWithLock } from "./store.js";
+import { loadAuthProfileStoreForRuntime, updateAuthProfileStoreWithLock } from "./store-runtime.js";
 
 describe("hasAuthProfileStoreSourceForProvider", () => {
   afterEach(() => {

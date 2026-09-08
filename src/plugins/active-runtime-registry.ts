@@ -134,20 +134,10 @@ export function getLoadedRuntimePluginRegistry(
   const requiredPluginIds = normalizeRequiredPluginIds(
     params.requiredPluginIds ?? params.loadOptions?.onlyPluginIds,
   );
-  if (params.loadOptions && requiredPluginIds?.length !== 0) {
-    const compatible = resolveCompatibleRuntimePluginRegistry(params.loadOptions);
-    if (compatible && registryContainsRuntimePluginIds(compatible, requiredPluginIds)) {
-      return compatible;
-    }
-    // Exact cache-key reuse fails for every caller whose options differ from the
-    // composition root's load (scoped ids, derived config, no gateway bindings),
-    // which used to force a cold scoped load even when the active registry already
-    // holds the requested runtime plugins. An explicit id list proves what the
-    // caller needs, so fall through to the containment check below; unscoped
-    // requests keep exact-key semantics because no id list bounds their intent.
-    if (requiredPluginIds === undefined) {
-      return undefined;
-    }
+  if (params.loadOptions && requiredPluginIds === undefined) {
+    // Explicit scopes below are bounded by workspace and loaded owners. Only
+    // unscoped requests need the full load identity to prove compatible reuse.
+    return resolveCompatibleRuntimePluginRegistry(params.loadOptions);
   }
 
   const activeWorkspaceDir = getActivePluginRegistryWorkspaceDir();

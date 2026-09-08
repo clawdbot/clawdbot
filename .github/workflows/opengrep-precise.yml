@@ -23,7 +23,12 @@ on:
       - "src/**"
 
 concurrency:
-  group: opengrep-pr-diff-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  # Admission precedes job skips: isolate passive drafts before they can cancel useful work.
+  # Keep conversion events in the PR group where subscribed, as an intentional cancellation signal.
+  group: >-
+    ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.action != 'converted_to_draft'
+      && format('{0}-passive-draft-{1}', github.workflow, github.run_id)
+      || format('opengrep-pr-diff-{0}-{1}', github.workflow, github.event.pull_request.number || github.sha) }}
   cancel-in-progress: true
 
 env:

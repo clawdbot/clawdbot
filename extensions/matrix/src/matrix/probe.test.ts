@@ -2,14 +2,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const createMatrixClientMock = vi.fn();
-const isBunRuntimeMock = vi.fn(() => false);
 
 vi.mock("./probe.runtime.js", () => ({
   createMatrixClient: (...args: unknown[]) => createMatrixClientMock(...args),
-}));
-
-vi.mock("./client/runtime.js", () => ({
-  isBunRuntime: () => isBunRuntimeMock(),
 }));
 
 import { probeMatrix } from "./probe.js";
@@ -17,7 +12,6 @@ import { probeMatrix } from "./probe.js";
 describe("probeMatrix", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    isBunRuntimeMock.mockReturnValue(false);
     createMatrixClientMock.mockResolvedValue({
       getUserId: vi.fn(async () => "@bot:example.org"),
     });

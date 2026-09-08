@@ -43,7 +43,10 @@ export function listSessionCatalogProvider(
   provider: SessionCatalogProvider,
   params: SessionCatalogListProviderParams,
 ) {
-  return sessionCatalogListAdmission.run(() => provider.list(params));
+  return sessionCatalogListAdmission.run(() => {
+    params.signal?.throwIfAborted();
+    return provider.list(params);
+  });
 }
 
 function resolveSessionCatalogRegistry(): PluginRegistry | null {

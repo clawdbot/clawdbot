@@ -21,10 +21,11 @@ vi.mock("./cli-output.js", () => ({
 // real gateway surfaces as an uncaughtException and crashes the process (#75438
 // covered stdin only). The mock child mirrors that stdio shape so we can assert
 // each stream's `error` is caught and routed to failAll.
+type MockStream = EventEmitter & { errored: Error | null };
 type MockChild = EventEmitter & {
-  stdout: EventEmitter;
-  stderr: EventEmitter;
-  stdin: EventEmitter & {
+  stdout: MockStream;
+  stderr: MockStream;
+  stdin: MockStream & {
     write: (line: string, cb?: (err?: Error | null) => void) => boolean;
     end: () => void;
   };
@@ -34,9 +35,9 @@ type MockChild = EventEmitter & {
 
 function createMockChild(): MockChild {
   const child = new EventEmitter() as MockChild;
-  child.stdout = new EventEmitter();
-  child.stderr = new EventEmitter();
-  const stdin = new EventEmitter() as MockChild["stdin"];
+  child.stdout = Object.assign(new EventEmitter(), { errored: null });
+  child.stderr = Object.assign(new EventEmitter(), { errored: null });
+  const stdin = Object.assign(new EventEmitter(), { errored: null }) as MockChild["stdin"];
   // Resolve every write cleanly so the pending request only settles via the
   // stream error path under test.
   stdin.write = (_line, cb) => {
@@ -94,9 +95,16 @@ describe("IMessageRpcClient child stream error handling", () => {
     );
   });
 
-  it.each(["stdout", "stderr", "stdin"] as const)(
-    "catches a %s stream error and rejects in-flight requests instead of crashing",
-    async (streamName) => {
+  it.each(
+    (["stdout", "stderr", "stdin"] as const).flatMap((streamName) =>
+      (["error event then close", "errored close only"] as const).map((notification) => ({
+        streamName,
+        notification,
+      })),
+    ),
+  )(
+    "catches a $streamName stream error via $notification and rejects in-flight requests instead of crashing",
+    async ({ streamName, notification }) => {
       const client = new IMessageRpcClient({ cliPath: "imsg" });
       await client.start();
 
@@ -106,15 +114,22 @@ describe("IMessageRpcClient child stream error handling", () => {
       pending.catch(() => {});
 
       const streamError = new Error(`${streamName} broke`);
-      expect(() => child[streamName].emit("error", streamError)).not.toThrow();
-
-      await expect(pending).rejects.toThrow(`${streamName} broke`);
-      await expect(client.waitForClose()).rejects.toThrow(`${streamName} broke`);
-      expect(child.kill).toHaveBeenCalledOnce();
-      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-
-      child.emit("close", null, "SIGTERM");
-      await client.stop();
+      child[streamName].errored = streamError;
+      try {
+        expect(() => {
+          if (notification === "error event then close") {
+            child[streamName].emit("error", streamError);
+          }
+          child[streamName].emit("close");
+        }).not.toThrow();
+        expect(child.kill).toHaveBeenCalledOnce();
+        expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+        await expect(pending).rejects.toThrow(`${streamName} broke`);
+        await expect(client.waitForClose()).rejects.toThrow(`${streamName} broke`);
+      } finally {
+        child.emit("close", null, "SIGTERM");
+        await client.stop();
+      }
     },
   );
 
@@ -316,6 +331,7 @@ describe("IMessageRpcClient child stream error handling", () => {
     const pending = client.request("ping", {}, { timeoutMs: 0 });
     pending.catch(() => {});
     child.stderr.emit("data", Buffer.from("unrelated warning"));
+    child.stderr.emit("close");
     child.emit("close", 1, null);
 
     await expect(pending).rejects.toThrow("imsg rpc exited (code 1)");

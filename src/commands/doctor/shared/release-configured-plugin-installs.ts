@@ -12,6 +12,7 @@ import {
   type UpdatePostInstallDoctorResult,
 } from "../../../infra/update-doctor-result.js";
 import { collectConfiguredSpeechProviderIds } from "../../../plugins/gateway-startup-speech-providers.js";
+import { isNativeSessionCatalogOptOutOnly } from "../../../plugins/native-session-catalog-config.js";
 import {
   getOfficialExternalPluginCatalogEntry,
   resolveOfficialExternalProviderContractPluginIds,
@@ -107,7 +108,10 @@ function collectMaterialPluginEntryIds(cfg: OpenClawConfig): string[] {
     return [];
   }
   return Object.entries(entries)
-    .filter(([, entry]) => hasMaterialPluginEntry(entry))
+    .filter(
+      ([pluginId, entry]) =>
+        !isNativeSessionCatalogOptOutOnly(pluginId, entry) && hasMaterialPluginEntry(entry),
+    )
     .map(([pluginId]) => pluginId.trim())
     .filter((pluginId) => pluginId);
 }

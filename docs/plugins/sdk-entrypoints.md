@@ -12,6 +12,10 @@ Every plugin exports a default entry object. The SDK provides a helper for
 each entry shape: `defineToolPlugin`, `definePluginEntry`,
 `defineChannelPluginEntry`, `defineSetupPluginEntry`.
 
+All plugin APIs are [experimental](/plugins/sdk-overview#api-stability),
+including these entry helpers. Pin and test the OpenClaw host versions your
+plugin supports.
+
 <Tip>
   **Looking for a walkthrough?** See [Tool Plugins](/plugins/tool-plugins),
   [Channel Plugins](/plugins/sdk-channel-plugins), or
@@ -170,6 +174,27 @@ export default definePluginEntry({
   `onHost(host)` callback as each host settles; the returned host array remains
   required as the final compatibility snapshot.
 
+  If a host can finish after `list` returns a fail-soft snapshot, register its
+  bounded completion with the optional `waitUntil(completion: Promise<void>)`
+  hook before `list` settles. Include host mapping and the `onHost` call in that
+  promise. Use `publishSessionCatalogHost({ onHost, waitUntil }, pendingHost)`
+  from the same SDK entry point to publish the host and register the complete
+  callback chain. Registration after `list` settles is rejected. Providers that
+  do not register completion work finish publishing when their `list` settles.
+
+  The optional `signal: AbortSignal` belongs to the catalog operation or provider
+  lifetime. Pass it to cancellable work, including the top-level `signal` field
+  of `api.runtime.nodes.invoke(...)`. A requesting client disconnect only removes
+  that client's subscription; it does not cancel shared discovery. Retaining
+  completion does not extend native invocation or fail-soft response deadlines,
+  grant new authority, or permit starting work after the owner retires. Providers
+  remain responsible for bounded work that settles after cancellation.
+
+  Keep `onHost`, `waitUntil`, and `signal` separate from validated catalog query
+  objects and node command payloads. The request-owned `sessionEntries` snapshot
+  and `listNodes` hook still must not be retained past `list`; prepare any facts
+  needed by late host mapping before returning.
+
   Transcript items may include a `sender` with a qualified `SessionParticipant`
   identity and optional display label or avatar. Supply only source-known
   attribution; the viewer and the session adopter are not transcript authors.
@@ -304,6 +329,35 @@ export default definePluginEntry({
   node's Gateway declaration. OpenClaw evaluates it against the node-local
   startup config; command handlers should still validate availability when
   invoked.
+
+### Native provider factories
+
+`registerSpeechProvider`, `registerRealtimeTranscriptionProvider`, and
+`registerRealtimeVoiceProvider` accept either a complete provider descriptor or
+a synchronous factory receiving `PluginCapabilityCatalogContext`:
+
+```typescript
+register(api) {
+  api.registerRealtimeTranscriptionProvider((context) =>
+    buildRealtimeTranscriptionProvider(context),
+  );
+}
+```
+
+Use the same plugin-owned factory for full registration and an optional
+capability catalog. The host supplies native auth, request, and transport
+operations; constructing a descriptor should not load execution SDK barrels,
+read credentials, or start sessions. Keep that work in the descriptor's methods.
+Factories must return synchronously; a thrown error or promise fails registration.
+
+Full registration can bind its own broker or logger in the factory closure.
+Do not substitute a catalog-only descriptor for one that requires those bindings.
+Full plugin registration still owns harnesses, hooks, services, and lifecycle
+callbacks; catalog entries alone do not establish runtime readiness.
+
+Object registrations remain supported. Before publishing a plugin that uses
+factory arguments, set its `compat.pluginApi` floor to a host release that
+supports them; a lower `minHostVersion` does not override that API requirement.
 
 ### Computer Use providers
 

@@ -1,4 +1,4 @@
-import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { sessionCatalogAdoptedSourceKey } from "openclaw/plugin-sdk/session-catalog";

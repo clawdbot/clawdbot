@@ -23,8 +23,8 @@ vi.mock("../../commands/auth-choice-options.js", () => ({
   formatAuthChoiceChoicesForCli: () => "token|oauth|openai-api-key",
 }));
 
-vi.mock("../../commands/onboard-core-auth-flags.js", () => ({
-  CORE_ONBOARD_AUTH_FLAGS: [
+vi.mock("../../plugins/provider-auth-choices.js", () => ({
+  resolveProviderOnboardAuthFlags: () => [
     {
       cliOption: "--mistral-api-key <key>",
       description: "Mistral API key",
@@ -32,18 +32,13 @@ vi.mock("../../commands/onboard-core-auth-flags.js", () => ({
     },
     {
       cliOption: "--openai-api-key <key>",
-      description: "OpenAI API key (core fallback)",
-      optionKey: "openaiApiKey",
-    },
-  ] as Array<{ cliOption: string; description: string; optionKey: string }>,
-}));
-
-vi.mock("../../plugins/provider-auth-choices.js", () => ({
-  resolveProviderOnboardAuthFlags: () => [
-    {
-      cliOption: "--openai-api-key <key>",
       description: "OpenAI API key",
       optionKey: "openaiApiKey",
+    },
+    {
+      cliOption: "--openai-api-key <key>",
+      description: "Another provider's conflicting API key flag",
+      optionKey: "anotherProviderApiKey",
     },
   ],
 }));
@@ -210,7 +205,7 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions().gatewayPort).toBe(18789);
   });
 
-  it.each(["not-a-port", "70000"])(
+  it.each(["", " \t ", "not-a-port", "70000"])(
     "rejects invalid --gateway-port %s before onboarding dispatch",
     async (gatewayPort) => {
       await runCli(["onboard", "--gateway-port", gatewayPort]);

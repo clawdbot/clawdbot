@@ -1,11 +1,17 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
   requireRecord,
+  requireString,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -50,17 +56,15 @@ function canvasBlock(viewId: string) {
 }
 
 suite.define(() => {
+  const canvasView = useCanvasSandboxFixture();
   it("renders each persisted Canvas view once after reload", async () => {
     const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactRoot
       ? createControlUiE2eArtifactDir("chat-canvas-history-stability", artifactRoot)
       : undefined;
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
+    const documentIds = ["cv_first", "cv_second"];
     const finalText = "Both previews are ready.";
     const messages = [
       {
@@ -85,7 +89,19 @@ suite.define(() => {
     ];
 
     try {
-      const gateway = await installMockGateway(page, { historyMessages: messages });
+      const gateway = await installMockGateway(page, {
+        historyMessages: messages,
+        methodResponses: {
+          "canvas.document.view": {
+            cases: documentIds.map((docId) => ({
+              match: { docId },
+              response: canvasView(
+                buildWidgetDocument(`Preview ${docId}`, `<p>Rendered ${docId}</p>`),
+              ),
+            })),
+          },
+        },
+      });
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
 
@@ -94,8 +110,26 @@ suite.define(() => {
           .locator(".chat-tool-card__widget-host iframe")
           .evaluateAll((frames) => frames.map((frame) => frame.getAttribute("title")));
       const expectedPreviews = ["Preview cv_first", "Preview cv_second"];
+      const expectRenderedPreviews = async () => {
+        await expect.poll(readPreviews).toEqual(expectedPreviews);
+        for (const docId of documentIds) {
+          await page
+            .locator(`.chat-tool-card__widget-host iframe[title="Preview ${docId}"]`)
+            .contentFrame()
+            .frameLocator("iframe")
+            .getByText(`Rendered ${docId}`, { exact: true })
+            .waitFor();
+        }
+        expect(
+          (await gateway.getRequests("canvas.document.view"))
+            .map((request) =>
+              requireString(requireRecord(request.params).docId, "Canvas document ID"),
+            )
+            .toSorted((left, right) => left.localeCompare(right)),
+        ).toEqual(documentIds);
+      };
 
-      await expect.poll(readPreviews).toEqual(expectedPreviews);
+      await expectRenderedPreviews();
       await expect.poll(() => page.getByText(finalText, { exact: true }).isVisible()).toBe(true);
       if (artifactDir) {
         await page.screenshot({
@@ -109,7 +143,7 @@ suite.define(() => {
       // Reload reinstalls the in-page mock Gateway and its request ring, so the
       // first startup request in the new document is the synchronization point.
       await gateway.waitForRequest("chat.startup");
-      await expect.poll(readPreviews).toEqual(expectedPreviews);
+      await expectRenderedPreviews();
       await expect.poll(() => page.getByText(finalText, { exact: true }).isVisible()).toBe(true);
       if (artifactDir) {
         await page.screenshot({
@@ -138,7 +172,10 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const runId = "multi-reply-run";
-    const replies = ["First part of the current answer.", "Second part of the current answer."];
+    const replies = [
+      "First part of the current answer.",
+      "Second part of the current answer.",
+    ] as const;
     const previous = "Previous durable conversation.";
     const prompt = "Please give me both parts.";
     try {
@@ -198,10 +235,12 @@ suite.define(() => {
         await page.locator(".chat-thread-inner").getByText(text, { exact: true }).waitFor();
       }
       if (artifactDir) {
-        await page.screenshot({
-          path: path.join(artifactDir, "multi-reply-order.png"),
-          fullPage: true,
-        });
+        await writeFile(
+          path.join(artifactDir, "multi-reply-order.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator(".chat-thread-inner").getByText(replies[1], { exact: true }),
+          ]),
+        );
       }
       await expect
         .poll(() =>
@@ -220,11 +259,7 @@ suite.define(() => {
   });
 
   it("keeps durable turns ordered when a live final arrives before transcript events", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const currentRunId = "current-run";
     const previousPrompt = "What happened before this run?";

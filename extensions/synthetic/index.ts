@@ -19,6 +19,7 @@ export default defineSingleProviderPluginEntry({
       applyConfig: applySyntheticConfig,
     },
     catalog: {
+      discoveryMode: "strict",
       buildProvider: buildSyntheticProvider,
       buildStaticProvider: buildSyntheticProvider,
       allowExplicitBaseUrl: true,

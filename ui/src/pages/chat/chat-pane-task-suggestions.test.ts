@@ -9,6 +9,10 @@ import type {
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 
 const suggestion: TaskSuggestion = {
@@ -69,24 +73,31 @@ describe("chat pane task suggestion lifecycle", () => {
 
   it("keeps accept ownership when the resolved event arrives before the response", async () => {
     const accepted = createDeferred<TaskSuggestionsAcceptResult>();
-    const client = {
-      request: vi.fn((method: string) =>
-        method === "taskSuggestions.accept"
-          ? accepted.promise
-          : Promise.resolve({ suggestions: [] } satisfies TaskSuggestionsListResult),
-      ),
-    } as unknown as GatewayBrowserClient;
+    const request = createGatewayRequestMock((method) =>
+      method === "taskSuggestions.accept"
+        ? accepted.promise
+        : Promise.resolve({ suggestions: [] } satisfies TaskSuggestionsListResult),
+    );
+    const client = createTestGatewayClient(request);
     const sessions = {} as SessionCapability;
     const { pane } = createTestChatPane({ client, sessions });
     const navigate = vi.fn();
     pane.onPaneSessionChange = navigate;
 
-    const pending = pane.acceptTaskSuggestion(suggestion, "worktree");
+    const pending = pane.acceptTaskSuggestion(suggestion);
     pane.handleTaskSuggestionEvent({
       action: "resolved",
       taskId: suggestion.id,
       resolution: "accepted",
     });
+    await pane.acceptTaskSuggestion(suggestion);
+    expect(request).toHaveBeenCalledWith("taskSuggestions.accept", {
+      taskId: suggestion.id,
+      mode: "local",
+    });
+    expect(
+      request.mock.calls.filter(([method]) => method === "taskSuggestions.accept"),
+    ).toHaveLength(1);
     accepted.resolve({ taskId: suggestion.id, key: "agent:main:task" });
 
     await pending;
@@ -103,27 +114,11 @@ describe("chat pane task suggestion lifecycle", () => {
     const navigate = vi.fn();
     pane.onPaneSessionChange = navigate;
 
-    const pending = pane.acceptTaskSuggestion(suggestion, "worktree");
+    const pending = pane.acceptTaskSuggestion(suggestion);
     pane.connectionGeneration += 1;
     accepted.resolve({ taskId: suggestion.id, key: "agent:main:stale" });
 
     await pending;
-    expect(navigate).not.toHaveBeenCalled();
-  });
-
-  it("keeps session-mode acceptance in the source pane", async () => {
-    const request = vi.fn().mockResolvedValue({ taskId: suggestion.id, key: "agent:main:task" });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const navigate = vi.fn();
-    pane.onPaneSessionChange = navigate;
-
-    await pane.acceptTaskSuggestion(suggestion, "session");
-
-    expect(request).toHaveBeenCalledWith("taskSuggestions.accept", {
-      taskId: suggestion.id,
-      mode: "session",
-    });
     expect(navigate).not.toHaveBeenCalled();
   });
 

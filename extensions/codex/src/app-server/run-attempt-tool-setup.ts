@@ -97,6 +97,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   }
   const toolState: {
     yieldDetected: boolean;
+    yieldMessage?: string;
     yieldAcknowledgment?: string;
     persistentWebSearchAllowed?: boolean;
     webSearchAllowed: boolean;
@@ -233,8 +234,9 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           cronCreatorAuthorityUnavailableReason: "queued-local-operator-configured-mcp" as const,
         }
       : {}),
-    onYieldDetected: (acknowledgment: string | undefined) => {
+    onYieldDetected: (message: string, acknowledgment: string | undefined) => {
       toolState.yieldDetected = true;
+      toolState.yieldMessage = message;
       toolState.yieldAcknowledgment = acknowledgment;
     },
     claimYieldCompletion: () => runtimeYieldCompletionClaim.current?.() ?? false,
@@ -272,8 +274,9 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   let nativeSpecs: CodexDynamicToolSpec[] | undefined;
   if (hasCodexNativeToolCatalog(mutable.startupBinding)) {
     runAbortController.signal.throwIfAborted();
-    params.hostCapabilities.assertActive();
+    connection.assertCurrent();
     const client = await connection.attemptClientFactory({
+      assertCurrent: connection.assertCurrent,
       startOptions: connection.appServer.start,
       authProfileId: connection.startupClientAuthProfileId,
       agentDir,
@@ -288,16 +291,20 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         agentDir,
         assertCurrent: () => {
           runAbortController.signal.throwIfAborted();
-          params.hostCapabilities.assertActive();
+          connection.assertCurrent();
         },
       });
     } finally {
       releaseLeasedSharedCodexAppServerClient(client);
     }
   }
+  let requireExplicitMessageTarget: boolean | undefined;
   const tools = await buildDynamicTools({
     ...commonToolParams,
     registerRunCleanup: (cleanup) => runCleanups.push(cleanup),
+    onMessageToolTargetResolved: (required) => {
+      requireExplicitMessageTarget = required;
+    },
     cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
     cronCreatorToolAllowlistCaptureRef,
     onPersistentWebSearchPolicyResolved: (allowed) => {
@@ -514,6 +521,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       }),
       directToolNames: resolveCodexDynamicToolDirectNames(
         params,
+        registeredWithScopedMcp,
         isHostScopedAgentToolActive("openclaw"),
       ),
       hookContext,
@@ -631,6 +639,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     return {
       tools: toolsWithScopedMcp,
       registeredTools: registeredWithScopedMcp,
+      requireExplicitMessageTarget,
       scopedMcpTools,
       configuredMcp,
       disposeMcpTools,

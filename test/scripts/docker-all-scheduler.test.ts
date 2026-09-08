@@ -41,6 +41,7 @@ import {
   validateDockerCandidateEnvironment,
   writeRunSummary,
 } from "../../scripts/test-docker-all.mts";
+import { waitForChildClose } from "../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { copyDockerSchedulerHarness } from "./docker-all-harness.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -335,20 +336,6 @@ async function runReadyTimedCommand<T>(
     fireDeadline();
     await command;
   }
-}
-
-async function waitForChildClose(child: ReturnType<typeof spawn>, timeoutMs = 5_000) {
-  return await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error("child did not close before timeout"));
-      }, timeoutMs);
-      child.once("close", (code, signal) => {
-        clearTimeout(timeout);
-        resolve({ code, signal });
-      });
-    },
-  );
 }
 
 describe("scripts/test-docker-all scheduler", () => {

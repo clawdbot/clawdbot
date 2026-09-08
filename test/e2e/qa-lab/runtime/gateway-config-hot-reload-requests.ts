@@ -307,31 +307,4 @@ export async function proveHotReloadRequests({
       "The same preview used each updated generated credential at the simulated GitHub upstream",
     );
   });
-
-  await proveGroup("gateway.controlUi.toolTitles", async () => {
-    const titleRequest = {
-      sessionKey: SESSION_KEY,
-      agentId: "qa",
-      items: [{ id: "proof", name: "read", input: "HOT_RELOAD_TOOL_TITLE README.md" }],
-    };
-    for (const enabled of [false, true, false]) {
-      await patch({ gateway: { controlUi: { toolTitles: enabled } } });
-      const before = fixture.toolTitleRequests;
-      const titles = await rpc<{ disabled?: boolean; titles: Record<string, string> }>(
-        "chat.toolTitles",
-        titleRequest,
-      );
-      if (enabled) {
-        assert(fixture.toolTitleRequests > before, "Enabled titles must reach the mock provider");
-        assert.equal(titles.titles.proof, "Reviewed project notes");
-      } else {
-        assert.equal(titles.disabled, true);
-        assert.equal(fixture.toolTitleRequests, before);
-      }
-    }
-    await verifyContinuity(
-      "gateway.controlUi.toolTitles",
-      "RPC generated a title only when enabled, including disabling after a cached result",
-    );
-  });
 }

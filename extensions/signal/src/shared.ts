@@ -1,4 +1,3 @@
-// Signal plugin module implements shared behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   adaptScopedAccountAccessor,
@@ -112,7 +111,10 @@ export function createSignalPluginBase(params: {
     streaming: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
-    reload: { configPrefixes: ["channels.signal"] },
+    reload: {
+      configPrefixes: ["channels.signal"],
+      noopPrefixes: ["messages.inbound", "messages.ackReactionScope"],
+    },
     configSchema: SignalChannelConfigSchema,
     doctor: signalDoctor,
     config: {

@@ -277,6 +277,9 @@ final class StatusMenuRenderer: NSObject {
         case .settings:
             title = String(localized: "Settings…")
             symbol = "gearshape"
+        case .connection:
+            title = String(localized: "Connection…")
+            symbol = "point.3.connected.trianglepath.dotted"
         case .debug:
             title = String(localized: "Debug")
             symbol = "ladybug"
@@ -337,8 +340,10 @@ final class StatusMenuRenderer: NSObject {
             Task { await DashboardManager.shared.show(atPath: DashboardRouteMap.sessionsPagePath) }
         case .settings:
             AppNavigationActions.openSettings()
+        case .connection:
+            AppNavigationActions.openConnection()
         case .about:
-            AppNavigationActions.openSettings(tab: .about)
+            AppNavigationActions.openAbout()
         case .quit:
             AppDelegate.requestTermination()
         case .debug:

@@ -8,13 +8,16 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
-import { executeSystemAgentOperation, type SystemAgentCommandDeps } from "./operations.js";
+import {
+  executeSystemAgentOperation as executeSystemAgentOperationImpl,
+  type SystemAgentCommandDeps,
+} from "./operations.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 import {
   expectSystemAgentAuditRecord as expectAuditRecord,
   expectTestRecordFields as expectRecordFields,
   installSystemAgentClaudeCliBackendTestFixture,
-  installSystemAgentPluginMetadataTestSnapshot,
+  createSystemAgentPluginMetadataTestSnapshot,
   readLastSystemAgentAuditEntry as readLastAuditEntry,
   requireTestRecord as requireRecord,
   type SystemAgentPluginMetadataTestSnapshot,
@@ -162,9 +165,12 @@ const opTempDirs = useAutoCleanupTempDirTracker(afterEach);
 let restoreCliBackendFixture: (() => void) | undefined;
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
+const executeSystemAgentOperation: typeof executeSystemAgentOperationImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => executeSystemAgentOperationImpl(...args));
+
 beforeAll(() => {
   restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
-  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot();
+  pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot();
   mockConfig.setPluginMetadataBinder((config) => {
     pluginMetadataSnapshot?.bindForConfig(config as OpenClawConfig);
   });
@@ -173,7 +179,7 @@ beforeAll(() => {
 
 afterAll(() => {
   mockConfig.setPluginMetadataBinder(() => {});
-  pluginMetadataSnapshot?.restore();
+
   restoreCliBackendFixture?.();
 });
 

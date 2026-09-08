@@ -41,11 +41,11 @@ export const MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY = "com.openclaw.finalized_pre
 
 export type MatrixDirectAccountData = Record<string, string[]>;
 
-export type MatrixReplyRelation = {
+type MatrixReplyRelation = {
   "m.in_reply_to": { event_id: string };
 };
 
-export type MatrixThreadRelation = {
+type MatrixThreadRelation = {
   rel_type: typeof RelationType.Thread;
   event_id: string;
   is_falling_back?: boolean;
@@ -96,6 +96,8 @@ export type MatrixSendOpts = {
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   accountId?: string;
   replyToId?: string;
+  /** Compatibility reply for unthreaded clients, distinct from a selected native reply. */
+  fallbackReplyToId?: string;
   threadId?: string | number | null;
   timeoutMs?: number;
   /** Opaque durable queue id used to derive Matrix transaction ids. */

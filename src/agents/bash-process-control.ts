@@ -12,8 +12,7 @@ export function cancelBackgroundExecSession(sessionId: string): boolean {
     return false;
   }
   const supervisor = getProcessSupervisor();
-  const record = supervisor.getRecord(sessionId);
-  if (!record || record.state === "exited") {
+  if (!session.processActivity || session.processActivity.resultSettled) {
     return false;
   }
   supervisor.cancel(sessionId, "manual-cancel");

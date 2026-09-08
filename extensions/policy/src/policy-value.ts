@@ -8,8 +8,7 @@ export function scopedPolicyValue(
   if (!root) {
     return undefined;
   }
-  const scopedRoot = root === "agents" ? overlay.agents : overlay[root];
-  return getPolicyPath(scopedRoot, remainingPath);
+  return getPolicyPath(overlay[root], remainingPath);
 }
 
 export function getPolicyPath(value: unknown, path: readonly string[]): unknown {

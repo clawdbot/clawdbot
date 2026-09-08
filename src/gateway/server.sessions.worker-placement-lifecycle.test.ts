@@ -298,18 +298,26 @@ test.each(["generation", "environment", "session key"] as const)(
   },
 );
 
-test("sessions.delete drains an active local claim before placement retirement", async () => {
+test.each([
+  ["discord:group:active-local-delete", "discord:group:active-local-delete"],
+  ["agent:main:cron:placed-job", "agent:main:cron:placed-job:run:sess-active-local-delete"],
+  ["agent:main:cron:adopted-job", "agent:main:cron:adopted-job:run:original-session-id"],
+])("sessions.delete drains %s before placement retirement", async (sessionKey, placementKey) => {
   const { storePath } = await createSessionStoreDir();
-  const sessionKey = "discord:group:active-local-delete";
   const sessionId = "sess-active-local-delete";
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+  await writeSessionStore({
+    entries: {
+      [sessionKey]: sessionStoreEntry(sessionId),
+      [placementKey]: sessionStoreEntry(sessionId),
+    },
+  });
   const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
   const events: string[] = [];
   const cleanupAdmission = await beginClaimedTurn({
     events,
     placementStore,
     sessionId,
-    sessionKey,
+    sessionKey: placementKey,
     storePath,
   });
 
@@ -335,6 +343,9 @@ test("sessions.delete drains an active local claim before placement retirement",
     expect(events).toEqual(["admission:interrupt", "claim:released", "placement:retire"]);
     expect(placementStore.get(sessionId)).toBeUndefined();
     expect(loadSessionEntry(sessionKey).entry).toBeUndefined();
+    if (placementKey !== sessionKey) {
+      expect(loadSessionEntry(placementKey).entry?.sessionId).toBe(sessionId);
+    }
   } finally {
     cleanupAdmission();
   }

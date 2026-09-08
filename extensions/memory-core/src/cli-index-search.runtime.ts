@@ -209,6 +209,7 @@ export async function runMemorySearch(
     commandName: "memory search",
     agent: opts.agent,
     diagnosticsToStderr: Boolean(opts.json),
+    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
     purpose: "cli",
     inspectSources: true,
     ...hostOptions,
@@ -376,6 +377,7 @@ export async function runMemoryPromote(
     commandName: "memory promote",
     agent: opts.agent,
     diagnosticsToStderr: Boolean(opts.json),
+    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
@@ -554,6 +556,7 @@ export async function runMemoryPromoteExplain(
     commandName: "memory promote-explain",
     agent: opts.agent,
     diagnosticsToStderr: Boolean(opts.json),
+    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {

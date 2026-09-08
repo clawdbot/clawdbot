@@ -75,54 +75,18 @@ class ConnectionManager internal constructor(
       if (isManual) {
         // Manual remote hosts default to TLS; only local manual hosts may honor the cleartext toggle.
         if (!manualTlsEnabled && cleartextAllowedHost) return null
-        if (!stored.isNullOrBlank()) {
-          return GatewayTlsParams(
-            required = true,
-            expectedFingerprint = stored,
-            allowTOFU = false,
-            stableId = stableId,
-          )
-        }
-        return GatewayTlsParams(
-          required = true,
-          expectedFingerprint = null,
-          allowTOFU = false,
-          stableId = stableId,
-        )
+      } else {
+        val hinted = endpoint.tlsEnabled || !endpoint.tlsFingerprintSha256.isNullOrBlank()
+        if (stored == null && !hinted && cleartextAllowedHost) return null
       }
 
-      // Prefer stored pins. Never let discovery-provided TXT override a stored fingerprint.
-      if (!stored.isNullOrBlank()) {
-        return GatewayTlsParams(
-          required = true,
-          expectedFingerprint = stored,
-          allowTOFU = false,
-          stableId = stableId,
-        )
-      }
-
-      val hinted = endpoint.tlsEnabled || !endpoint.tlsFingerprintSha256.isNullOrBlank()
-      if (hinted) {
-        // TXT is unauthenticated. Do not treat the advertised fingerprint as authoritative.
-        return GatewayTlsParams(
-          required = true,
-          expectedFingerprint = null,
-          allowTOFU = false,
-          stableId = stableId,
-        )
-      }
-
-      if (!cleartextAllowedHost) {
-        // Non-loopback discovered hosts require TLS even without TXT hints.
-        return GatewayTlsParams(
-          required = true,
-          expectedFingerprint = null,
-          allowTOFU = false,
-          stableId = stableId,
-        )
-      }
-
-      return null
+      // TXT may require TLS, but only a stored pin is authoritative.
+      return GatewayTlsParams(
+        required = true,
+        expectedFingerprint = stored,
+        allowTOFU = false,
+        stableId = stableId,
+      )
     }
   }
 

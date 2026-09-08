@@ -1,5 +1,7 @@
+import type { AuthProfileFailureReason } from "./types.js";
+
 /** Hook invoked when auth profile failure state changes. */
-type AuthProfileFailureHook = () => void;
+type AuthProfileFailureHook = (reason: AuthProfileFailureReason) => void;
 
 let authProfileFailureHook: AuthProfileFailureHook | undefined;
 
@@ -9,6 +11,6 @@ export function setAuthProfileFailureHook(hook: AuthProfileFailureHook | undefin
 }
 
 /** Notifies the process-local auth profile failure hook. */
-export function notifyAuthProfileFailureHook(): void {
-  authProfileFailureHook?.();
+export function notifyAuthProfileFailureHook(reason: AuthProfileFailureReason): void {
+  authProfileFailureHook?.(reason);
 }

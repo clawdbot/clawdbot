@@ -16,6 +16,7 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import { buildGatewayConnectionDetails, formatGatewayTransportErrorJson } from "../gateway/call.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, type OperatorScope } from "../gateway/method-scopes.js";
 import { isLoopbackHost } from "../gateway/net.js";
+import { isOperatorScope } from "../gateway/operator-scopes.js";
 import {
   approveDevicePairing,
   formatDevicePairingForbiddenMessage,
@@ -116,13 +117,6 @@ const FALLBACK_STATE_MISMATCH_MESSAGE =
   "Gateway requires device pairing, but local fallback pairing state does not contain the gateway request.";
 const OPERATOR_ROLE = "operator";
 const OPERATOR_SCOPE_PREFIX = "operator.";
-const KNOWN_NON_ADMIN_OPERATOR_SCOPES = new Set<OperatorScope>([
-  "operator.approvals",
-  "operator.pairing",
-  "operator.read",
-  "operator.talk.secrets",
-  "operator.write",
-]);
 
 const callGatewayCli = async (
   method: string,
@@ -609,29 +603,41 @@ function resolvePendingOperatorApprovalScopes(
   return requestedScopes.length > 0 ? requestedScopes : resolvePairedOperatorScopes(paired);
 }
 
-function isKnownNonAdminOperatorScope(scope: string): scope is OperatorScope {
-  return KNOWN_NON_ADMIN_OPERATOR_SCOPES.has(scope as OperatorScope);
-}
-
-function resolveApprovePairingScopesForRequest(
-  request: PendingDevice,
-  paired: PairedDevice | undefined,
-): OperatorScope[] | undefined {
-  const operatorScopes = resolvePendingOperatorApprovalScopes(request, paired);
+function resolvePairingCallScopes(operatorScopes: string[]): OperatorScope[] | undefined {
   if (operatorScopes.length === 0) {
     return undefined;
   }
-  if (operatorScopes.includes(ADMIN_SCOPE)) {
-    return [ADMIN_SCOPE];
-  }
   const out = new Set<OperatorScope>([PAIRING_SCOPE]);
   for (const scope of operatorScopes) {
-    if (!isKnownNonAdminOperatorScope(scope)) {
+    if (scope === ADMIN_SCOPE || !isOperatorScope(scope)) {
       return [ADMIN_SCOPE];
     }
     out.add(scope);
   }
   return [...out];
+}
+
+async function resolveTokenManagementScopes(
+  opts: DevicesRpcOpts,
+  target: { deviceId: string; role: string },
+  requestedScopes?: string[],
+): Promise<OperatorScope[] | undefined> {
+  if (target.role !== OPERATOR_ROLE) {
+    return [ADMIN_SCOPE];
+  }
+  const list = parseDevicePairingList(await callGatewayCli("device.pair.list", opts, {}));
+  const paired = list.paired?.find((device) => device.deviceId === target.deviceId);
+  if (!paired) {
+    // Pairing-scoped device-token lists expose only self; a hidden target needs
+    // cross-device admin authority. The server still validates existence and access.
+    return [ADMIN_SCOPE];
+  }
+  // Revoked tokens retain their scopes too. The approved device baseline is
+  // only a ceiling, never a replacement for a narrowed token's scopes.
+  const token = paired.tokens?.find((entry) => entry.role === target.role);
+  return resolvePairingCallScopes(
+    normalizeOperatorScopes(requestedScopes ?? token?.scopes ?? paired.scopes),
+  );
 }
 
 async function resolveApprovePairingGatewayContext(
@@ -647,9 +653,11 @@ async function resolveApprovePairingGatewayContext(
     return {
       originalRequest: request,
       pairingList: list,
-      scopes: resolveApprovePairingScopesForRequest(
-        request,
-        lookupPairedDevice(indexPairedDevices(list.paired), request),
+      scopes: resolvePairingCallScopes(
+        resolvePendingOperatorApprovalScopes(
+          request,
+          lookupPairedDevice(indexPairedDevices(list.paired), request),
+        ),
       ),
     };
   } catch {
@@ -1140,10 +1148,8 @@ export async function runDevicesRotateCommand(opts: DevicesRpcOpts): Promise<voi
   if (!required) {
     return;
   }
-  // Non-operator token management requires admin even with shared Gateway auth.
-  const scopes: OperatorScope[] | undefined =
-    required.role === OPERATOR_ROLE ? undefined : [ADMIN_SCOPE];
   const params = { ...required, scopes: Array.isArray(opts.scope) ? opts.scope : undefined };
+  const scopes = await resolveTokenManagementScopes(opts, required, params.scopes);
   const result = await callGatewayCli("device.token.rotate", opts, params, { scopes });
   defaultRuntime.writeJson(result);
 }
@@ -1153,8 +1159,7 @@ export async function runDevicesRevokeCommand(opts: DevicesRpcOpts): Promise<voi
   if (!required) {
     return;
   }
-  const scopes: OperatorScope[] | undefined =
-    required.role === OPERATOR_ROLE ? undefined : [ADMIN_SCOPE];
+  const scopes = await resolveTokenManagementScopes(opts, required);
   const result = await callGatewayCli("device.token.revoke", opts, required, { scopes });
   defaultRuntime.writeJson(result);
 }

@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveConfiguredChannelPresencePolicy } from "../../../plugins/channel-plugin-ids.js";
 import { collectConfiguredMemoryEmbeddingProviderIds } from "../../../plugins/gateway-startup-plugin-ids.js";
 import { collectConfiguredSpeechProviderIds } from "../../../plugins/gateway-startup-speech-providers.js";
+import { isNativeSessionCatalogOptOutOnly } from "../../../plugins/native-session-catalog-config.js";
 import {
   resolveOfficialExternalProviderContractPluginIds,
   resolveOfficialExternalWebProviderContractPluginIdsForEnv,
@@ -103,7 +104,10 @@ export function collectConfiguredPluginIds(
   }
   const entries = asNullableRecord(plugins?.entries);
   for (const [pluginId, entry] of Object.entries(entries ?? {})) {
-    if (asNullableRecord(entry)?.enabled === false) {
+    if (
+      asNullableRecord(entry)?.enabled === false ||
+      isNativeSessionCatalogOptOutOnly(pluginId, entry)
+    ) {
       continue;
     }
     addConfiguredPluginId(ids, pluginId);

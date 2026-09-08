@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 
 const TRIGGER = "qa self yield follow-up";
+const RESTART_TRIGGER = "qa interrupted task restart";
+const RESTART_SESSION_PREFIX = "agent:qa:subagent:qa-restart-task-";
 const FOLLOW_UP_MESSAGE =
   "Subagent self yield qa remote job finished. Reply with only the exact marker.";
 const stateKey = Symbol.for("openclaw.qaSelfYieldFollowupState");
@@ -49,6 +51,30 @@ function writeJson(res, statusCode, body) {
 export default {
   id: "qa-self-yield-followup-subagent",
   register(api) {
+    api.registerHttpRoute({
+      path: "/qa/self-yield/restart",
+      auth: "gateway",
+      match: "exact",
+      gatewayRuntimeScopeSurface: "trusted-operator",
+      async handler(req, res) {
+        const sessionKey = new URL(req.url, "http://localhost").searchParams.get("sessionKey");
+        const task = sessionKey
+          ? api.runtime.tasks.runs
+              .bindSession({ sessionKey })
+              .list()
+              .find((candidate) => candidate.childSessionKey?.startsWith(RESTART_SESSION_PREFIX))
+          : undefined;
+        const flow = task?.flowId
+          ? api.runtime.tasks.flows.bindSession({ sessionKey }).get(task.flowId)
+          : undefined;
+        writeJson(res, 200, {
+          task,
+          flow,
+        });
+        return true;
+      },
+    });
+
     api.on("before_tool_call", async (event) => {
       if (event.toolName !== "sessions_yield") {
         return;
@@ -61,6 +87,15 @@ export default {
     });
 
     api.on("before_dispatch", async (event) => {
+      if (event.content.toLowerCase().includes(RESTART_TRIGGER)) {
+        const result = await api.runtime.subagent.run({
+          sessionKey: `${RESTART_SESSION_PREFIX}${randomUUID()}`,
+          message: "Code Mode restart wait QA check. Original prompt marker: KILL-RESTART-PROMPT.",
+          deliver: false,
+          completionDelivery: "current-requester",
+        });
+        return { handled: true, text: `QA-RESTART-TASK-SPAWNED ${result.runId}` };
+      }
       if (!event.content.toLowerCase().includes(TRIGGER)) {
         return undefined;
       }

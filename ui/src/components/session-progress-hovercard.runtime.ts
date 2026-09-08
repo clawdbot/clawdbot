@@ -1,4 +1,4 @@
-import type { ProgressCard } from "@openclaw/gateway-protocol";
+import type { ProgressCard, ProgressCardGetParams } from "@openclaw/gateway-protocol";
 import { nothing, ReactiveElement, render } from "lit";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -10,11 +10,10 @@ import {
   type SessionProgressCardStore,
 } from "../lib/session-progress-cards.ts";
 import {
-  scopedSessionPullRequestKey,
   sessionPullRequestsForGateway,
   type SessionPullRequestSnapshotStore,
 } from "../lib/session-pull-requests.ts";
-import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import { personActivityRouting, type PersonActivityRouting } from "./person-activity-link.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
@@ -54,13 +53,18 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   private applicationGateway: ApplicationGateway | null = null;
   private progressCards: SessionProgressCardStore | null = null;
   private stopProgressCardUpdates: (() => void) | null = null;
-  private stopSessionUpdates: (() => void) | null = null;
+  private stopContextUpdates: (() => void) | null = null;
   private pullRequests: SessionPullRequestSnapshotStore | null = null;
   private stopPullRequestUpdates: (() => void) | null = null;
   private activeTarget: HTMLElement | null = null;
   private activeTrigger: HTMLElement | null = null;
-  private activeSessionKey: string | null = null;
-  private activePullRequestKey: string | null = null;
+  private activeSession: ProgressCardGetParams | null = null;
+
+  private get activeArtifactKey(): string | null {
+    return this.activeSession
+      ? scopedSessionArtifactKey(this.activeSession.sessionKey, this.activeSession.agentId)
+      : null;
+  }
   private suppressFocusOpen = false;
   private open = false;
   private delayed = true;
@@ -100,8 +104,8 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   }
 
   set context(value: ApplicationContext | null) {
-    this.stopSessionUpdates?.();
-    this.stopSessionUpdates = null;
+    this.stopContextUpdates?.();
+    this.stopContextUpdates = null;
     this.applicationContext = value;
     this.sessionLinkTitler.context = value;
     if (this.isConnected) {
@@ -160,10 +164,14 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   }
 
   private connectStore(): void {
-    if (this.applicationContext && !this.stopSessionUpdates) {
-      this.stopSessionUpdates = this.applicationContext.sessions.subscribe(
-        this.handleSessionUpdate,
-      );
+    if (this.applicationContext && !this.stopContextUpdates) {
+      const stopSessions = this.applicationContext.sessions.subscribe(this.handleSessionUpdate);
+      // A retained global row can keep the same DOM/key while its selected owner changes.
+      const stopSelection = this.applicationContext.agentSelection.subscribe(() => this.close());
+      this.stopContextUpdates = () => {
+        stopSessions();
+        stopSelection();
+      };
     }
     if (!this.applicationGateway || this.progressCards) {
       return;
@@ -176,18 +184,18 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     this.progressCards?.unwatch(this);
     this.stopProgressCardUpdates?.();
     this.stopProgressCardUpdates = null;
-    this.stopSessionUpdates?.();
-    this.stopSessionUpdates = null;
+    this.stopContextUpdates?.();
+    this.stopContextUpdates = null;
     this.progressCards = null;
     this.releasePullRequestStore();
   }
 
   private readonly handleProgressCardUpdate = () => {
-    const sessionKey = this.activeSessionKey;
-    if (!sessionKey || !this.open || !this.hovercard.held) {
+    const session = this.activeSession;
+    if (!session || !this.open || !this.hovercard.held) {
       return;
     }
-    const card = this.progressCards?.get(sessionKey);
+    const card = this.progressCards?.get(session);
     if (card !== undefined) {
       this.lastProgressCard = card;
     }
@@ -195,6 +203,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   };
 
   private readonly handleSessionUpdate = () => {
+    this.sessionLinkTitler.refresh();
     if (this.open && this.hovercard.held) {
       this.showCurrent();
     }
@@ -292,7 +301,18 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     if (!sessionKey) {
       return;
     }
-    if (target === this.activeTarget && sessionKey === this.activeSessionKey) {
+    const agentId =
+      parseAgentSessionKey(sessionKey)?.agentId ??
+      target.closest<AppSidebarSessionNavigationElement>("openclaw-app-sidebar")?.expandedAgentId();
+    if (!agentId) {
+      return;
+    }
+    const artifactKey = scopedSessionArtifactKey(sessionKey, agentId);
+    if (
+      target === this.activeTarget &&
+      sessionKey === this.activeSession?.sessionKey &&
+      artifactKey === this.activeArtifactKey
+    ) {
       if (trigger !== this.activeTrigger) {
         this.hovercard.reset();
         this.activeTrigger = trigger;
@@ -310,11 +330,11 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     this.close(delay > 0);
     this.activeTarget = target;
     this.activeTrigger = trigger;
-    this.activeSessionKey = sessionKey;
+    this.activeSession = { sessionKey, agentId };
     this.open = false;
     this.animateNextOpen = animateEntry;
     this.lastProgressCard = null;
-    this.progressCards?.watch(this, [sessionKey]);
+    this.progressCards?.watch(this, [this.activeSession]);
     this.hovercard.markTrigger(trigger);
     this.activeTargetObserver.observe(this, {
       attributes: true,
@@ -328,12 +348,16 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
 
   private async loadAndShow(sessionKey: string, generation: number): Promise<void> {
     const target = this.activeTarget;
+    const artifactKey = this.activeArtifactKey;
+    const session = this.activeSession;
     if (target instanceof HTMLAnchorElement && target.dataset.sessionKey === sessionKey) {
       void this.sessionLinkTitler.decorate(target, true);
     }
     if (
       generation !== this.loadGeneration ||
-      this.activeSessionKey !== sessionKey ||
+      session?.sessionKey !== sessionKey ||
+      !artifactKey ||
+      !session ||
       !target ||
       sessionHovercardMenuOpen(this) ||
       !this.hovercard.held
@@ -343,16 +367,16 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     this.open = true;
     this.delayed = false;
     this.clearSkipDelayTimer();
-    this.watchPullRequests(sessionKey);
+    this.watchPullRequests(artifactKey);
     this.showCurrent();
     try {
-      await this.progressCards?.load(sessionKey);
+      await this.progressCards?.load(session);
     } catch {
       // Session facts and the last successful card remain useful when refresh fails.
     }
     if (
       generation === this.loadGeneration &&
-      this.activeSessionKey === sessionKey &&
+      this.activeSession?.sessionKey === sessionKey &&
       this.hovercard.held
     ) {
       this.showCurrent();
@@ -365,11 +389,9 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       return;
     }
     this.releasePullRequestStore();
-    const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? gateway.snapshot.assistantAgentId;
-    this.activePullRequestKey = scopedSessionPullRequestKey(sessionKey, agentId ?? undefined);
     this.pullRequests = sessionPullRequestsForGateway(gateway);
     this.stopPullRequestUpdates = this.pullRequests.subscribe(this.handlePullRequestUpdate);
-    this.pullRequests.watch(this, [this.activePullRequestKey], { foreground: true });
+    this.pullRequests.watch(this, [sessionKey], { foreground: true });
   }
 
   private releasePullRequestStore(): void {
@@ -377,23 +399,22 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     this.stopPullRequestUpdates?.();
     this.stopPullRequestUpdates = null;
     this.pullRequests = null;
-    this.activePullRequestKey = null;
   }
 
   private showCurrent(): void {
     const target = this.activeTarget;
-    const sessionKey = this.activeSessionKey;
-    if (!target || !sessionKey || !this.open) {
+    const session = this.activeSession;
+    const sessionKey = session?.sessionKey;
+    const artifactKey = this.activeArtifactKey;
+    if (!target || !session || !sessionKey || !artifactKey || !this.open) {
       return;
     }
     const sidebarRow =
       this.querySelector<AppSidebarSessionNavigationElement>(
         "openclaw-app-sidebar",
       )?.findSidebarHovercardRowByKey(sessionKey);
-    const pullRequests = this.activePullRequestKey
-      ? this.pullRequests?.get(this.activePullRequestKey)
-      : undefined;
-    const currentProgressCard = this.progressCards?.get(sessionKey);
+    const pullRequests = this.pullRequests?.get(artifactKey);
+    const currentProgressCard = this.progressCards?.get(session);
     if (currentProgressCard !== undefined) {
       this.lastProgressCard = currentProgressCard;
     }
@@ -423,6 +444,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
             label: sidebarRow.label,
             boardFace: sidebarRow.boardFace,
             hasAutomation: sidebarRow.hasAutomation,
+            hasActiveRun: sidebarRow.hasActiveRun,
             channelAvatarUrl: sidebarRow.channelAvatarUrl,
             lastMessagePreview: sidebarRow.lastMessagePreview,
             createdActor: sidebarRow.createdActor,
@@ -587,7 +609,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     this.releasePullRequestStore();
     this.activeTarget = null;
     this.activeTrigger = null;
-    this.activeSessionKey = null;
+    this.activeSession = null;
     if (wasOpen) {
       this.clearSkipDelayTimer();
       this.skipDelayTimer = window.setTimeout(() => {

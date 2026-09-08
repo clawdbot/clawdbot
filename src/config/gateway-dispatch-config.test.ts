@@ -78,6 +78,19 @@ describe("readGatewayDispatchConfig", () => {
     expect(shellEnvMocks.loadShellEnvFallback).not.toHaveBeenCalled();
   });
 
+  it("still reports broken includes in discarded config branches", () => {
+    const configPath = createTempConfig({
+      "openclaw.json5": `{
+        gateway: { port: 18888 },
+        models: { $include: "./missing-models.json5" },
+      }`,
+    });
+
+    expect(() => readGatewayDispatchConfig({ configPath, env: {} })).toThrow(
+      "Failed to read include file: ./missing-models.json5",
+    );
+  });
+
   it("loads only gateway credential shell env keys on explicit fallback", async () => {
     const configPath = createTempConfig({
       "openclaw.json5": `{

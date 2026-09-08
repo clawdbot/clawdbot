@@ -1,6 +1,7 @@
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errors.js";
+import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { expandOsHomePrefix } from "./sessions/tools/path-utils.js";
 
 function resolveHostPath(filePath: string): string {
@@ -46,13 +47,13 @@ async function overwriteHostFileInPlace(
   handle: FileHandle,
   payload: Buffer,
   currentSize: number,
-  abortSignal?: AbortSignal,
+  assertCurrent: () => void,
 ) {
   const prefixLength = Math.min(payload.length, currentSize);
   const originalPrefix = await readHostFilePrefix(handle, prefixLength);
   // Prefix preparation may outlive the tool generation. Once mutation starts,
   // preserve the existing whole-write rollback boundary.
-  abortSignal?.throwIfAborted();
+  assertCurrent();
   let prefixStarted = false;
   try {
     if (payload.length > currentSize) {
@@ -96,18 +97,19 @@ export async function writeHostFile(
   content: string,
   abortSignal?: AbortSignal,
 ) {
+  const assertCurrent = captureAgentToolSourceExecutionGuard(abortSignal);
   const resolved = resolveHostPath(absolutePath);
-  abortSignal?.throwIfAborted();
+  assertCurrent();
   await fs.mkdir(path.dirname(resolved), { recursive: true });
   const handle = await openHostFileForUpdate(resolved);
   if (!handle) {
-    abortSignal?.throwIfAborted();
+    assertCurrent();
     await fs.writeFile(resolved, content, "utf-8");
     return;
   }
   try {
     const stat = await handle.stat();
-    await overwriteHostFileInPlace(handle, Buffer.from(content, "utf-8"), stat.size, abortSignal);
+    await overwriteHostFileInPlace(handle, Buffer.from(content, "utf-8"), stat.size, assertCurrent);
   } finally {
     await handle.close().catch(() => undefined);
   }

@@ -1,24 +1,15 @@
-import {
-  GATEWAY_SERVER_CAPS,
-  type TaskSuggestion,
-  type TaskSuggestionEvent,
-  type TaskSuggestionsAcceptResult,
-  type TaskSuggestionsListResult,
+import type {
+  TaskSuggestion,
+  TaskSuggestionEvent,
+  TaskSuggestionsAcceptResult,
+  TaskSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import {
-  isGatewayCapabilityAdvertised,
-  isGatewayMethodAdvertised,
-} from "../../lib/gateway-methods.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import {
-  taskSuggestionAcceptParams,
-  type TaskSuggestionAcceptMode,
-} from "../../lib/task-suggestion-acceptance.ts";
-import { discoverPlaceCatalog } from "../new-session/cloud-profile-discovery.ts";
 import { ChatPaneSharing } from "./chat-pane-sharing.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 
@@ -28,8 +19,6 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
   protected readonly taskSuggestionCopiedIds = new Set<string>();
   protected readonly taskSuggestionOperations = new Map<string, symbol>();
   protected taskSuggestionsRequestVersion = 0;
-  protected taskSuggestionCloudProfiles: Array<{ id: string }> = [];
-  protected taskSuggestionCloudProfileGeneration = -1;
   protected activeTaskSuggestionId: string | undefined;
   protected taskSuggestionSwapDirection: "next" | "previous" | undefined;
   protected taskSuggestionSwapGeneration = 0;
@@ -72,40 +61,6 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
     });
   };
 
-  protected resetTaskSuggestionCloudProfiles(): void {
-    this.taskSuggestionCloudProfiles = [];
-    this.taskSuggestionCloudProfileGeneration = -1;
-  }
-
-  protected async ensureTaskSuggestionCloudProfiles(): Promise<void> {
-    const scope = this.captureConnectionScope();
-    if (
-      !scope ||
-      this.taskSuggestions.length === 0 ||
-      this.taskSuggestionCloudProfileGeneration === scope.generation ||
-      !hasOperatorAdminAccess(scope.context.gateway.snapshot.hello?.auth ?? null) ||
-      isGatewayMethodAdvertised(scope.context.gateway.snapshot, "taskSuggestions.accept") !== true
-    ) {
-      return;
-    }
-    // Profile metadata is connection-stable. Mark the generation before the
-    // request so repeated renders cannot turn this optional affordance into polling.
-    this.taskSuggestionCloudProfileGeneration = scope.generation;
-    if (isGatewayMethodAdvertised(scope.context.gateway.snapshot, "environments.list") !== true) {
-      return;
-    }
-    try {
-      const { profiles } = await discoverPlaceCatalog(scope.client, true, true);
-      if (!this.isConnectionScopeCurrent(scope)) {
-        return;
-      }
-      this.taskSuggestionCloudProfiles = profiles.map((profile) => ({ id: profile.id }));
-      this.requestUpdate();
-    } catch {
-      // Cloud is optional; a failed one-shot discovery leaves the disabled hint.
-    }
-  }
-
   protected async refreshTaskSuggestions(): Promise<void> {
     const requestVersion = ++this.taskSuggestionsRequestVersion;
     const scope = this.captureConnectionScope();
@@ -141,7 +96,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       this.requestUpdate();
     } catch {
       // Suggestions are an optional ephemeral affordance; chat remains usable
-      // when an older Gateway or a reconnect loses the process-local registry.
+      // when a reconnect loses the process-local registry.
       // Keep event-delivered cards when a background reconciliation fails.
     }
   }
@@ -165,11 +120,8 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
     void this.refreshTaskSuggestions();
   }
 
-  protected readonly acceptTaskSuggestion = (
-    suggestion: TaskSuggestion,
-    mode: TaskSuggestionAcceptMode,
-    cloudProfileId?: string,
-  ): Promise<void> => this.resolveTaskSuggestion(suggestion, "accept", mode, cloudProfileId);
+  protected readonly acceptTaskSuggestion = (suggestion: TaskSuggestion): Promise<void> =>
+    this.resolveTaskSuggestion(suggestion, "accept");
 
   protected readonly dismissTaskSuggestion = (suggestion: TaskSuggestion): Promise<void> =>
     this.resolveTaskSuggestion(suggestion, "dismiss");
@@ -224,14 +176,8 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       onResolveSessionSuggestion: this.resolveCurrentSessionSuggestion.bind(this),
       canAcceptTaskSuggestions:
         canAdmin && isGatewayMethodAdvertised(gatewaySnapshot, "taskSuggestions.accept") === true,
-      canAcceptTaskSuggestionModes:
-        isGatewayCapabilityAdvertised(
-          gatewaySnapshot,
-          GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,
-        ) === true,
       canDismissTaskSuggestions:
         canWrite && isGatewayMethodAdvertised(gatewaySnapshot, "taskSuggestions.dismiss") === true,
-      taskSuggestionCloudProfiles: this.taskSuggestionCloudProfiles,
       taskSuggestionCopiedIds: this.taskSuggestionCopiedIds,
       onCopyTaskSuggestionPrompt: this.copyTaskSuggestionPrompt,
       onAcceptTaskSuggestion: this.acceptTaskSuggestion,
@@ -242,8 +188,6 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
   protected async resolveTaskSuggestion(
     suggestion: TaskSuggestion,
     action: "accept" | "dismiss",
-    mode: TaskSuggestionAcceptMode = "worktree",
-    cloudProfileId?: string,
   ): Promise<void> {
     const scope = this.captureConnectionScope();
     if (
@@ -267,7 +211,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       if (action === "accept") {
         const result = await scope.client.request<TaskSuggestionsAcceptResult>(
           "taskSuggestions.accept",
-          taskSuggestionAcceptParams(suggestion.id, mode, cloudProfileId),
+          { taskId: suggestion.id, mode: "local" },
         );
         acceptedKey = result.key;
       } else {
@@ -277,7 +221,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
         return;
       }
       this.setTaskSuggestions(this.taskSuggestions.filter((item) => item.id !== suggestion.id));
-      if (acceptedKey && mode !== "session") {
+      if (acceptedKey) {
         this.onPaneSessionChange?.(this.paneId, acceptedKey);
       }
     } catch (error) {

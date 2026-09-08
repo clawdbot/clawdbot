@@ -105,6 +105,7 @@ export type OpenClawPackageManifest = {
   runtimeExtensions?: string[];
   setupEntry?: string;
   runtimeSetupEntry?: string;
+  controlUi?: string;
   setupFeatures?: OpenClawPackageSetupFeatures;
   plugin?: {
     id?: string;

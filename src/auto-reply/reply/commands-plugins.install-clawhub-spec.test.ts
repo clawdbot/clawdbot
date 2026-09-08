@@ -17,6 +17,7 @@ const {
   installPluginFromClawHubMock,
   installPluginFromGitSpecMock,
   persistPluginInstallMock,
+  resolveNpmSpecMetadataMock,
 } = vi.hoisted(() => ({
   installPluginFromNpmPackArchiveMock: vi.fn(),
   installPluginFromNpmSpecMock: vi.fn(),
@@ -24,6 +25,12 @@ const {
   installPluginFromClawHubMock: vi.fn(),
   installPluginFromGitSpecMock: vi.fn(),
   persistPluginInstallMock: vi.fn(),
+  resolveNpmSpecMetadataMock: vi.fn(),
+}));
+
+vi.mock("../../infra/install-source-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/install-source-utils.js")>()),
+  resolveNpmSpecMetadata: resolveNpmSpecMetadataMock,
 }));
 
 vi.mock("../../plugins/install.js", async (importOriginal) => ({
@@ -147,27 +154,49 @@ describe("chat plugin install release stream", () => {
   afterEach(async () => {
     installPluginFromNpmSpecMock.mockReset();
     persistPluginInstallMock.mockReset();
+    resolveNpmSpecMetadataMock.mockReset();
     await workspaceHarness.cleanupWorkspaces();
   });
 
-  it.each([false, true])(
-    "keeps beta artifact selection with capability acceptance %s",
-    async (acceptCapabilities) => {
+  it.each(
+    [
+      { beta: "2026.9.1-beta.1", selected: "2026.9.2" },
+      { beta: "2026.9.3-beta.1", selected: "2026.9.3-beta.1" },
+    ].flatMap((release) =>
+      [false, true].map((acceptCapabilities) => ({
+        beta: release.beta,
+        selected: release.selected,
+        acceptCapabilities,
+      })),
+    ),
+  )(
+    "selects $selected with capability acceptance $acceptCapabilities (beta=$beta)",
+    async ({ beta, selected, acceptCapabilities }) => {
       const cfg: OpenClawConfig = {
         commands: { text: true, plugins: true },
         plugins: { enabled: true },
         update: { channel: "beta" },
       };
+      for (const version of [beta, "2026.9.2"]) {
+        resolveNpmSpecMetadataMock.mockResolvedValueOnce({
+          ok: true,
+          metadata: {
+            name: "@openclaw/brave-plugin",
+            version,
+            resolvedSpec: `@openclaw/brave-plugin@${version}`,
+          },
+        });
+      }
       installPluginFromNpmSpecMock.mockResolvedValue({
         ok: true,
         pluginId: "brave",
         targetDir: "/tmp/brave",
-        version: "1.0.0",
+        version: selected,
         extensions: ["index.js"],
         npmResolution: {
           name: "@openclaw/brave-plugin",
-          version: "1.0.0",
-          resolvedSpec: "@openclaw/brave-plugin@1.0.0",
+          version: selected,
+          resolvedSpec: `@openclaw/brave-plugin@${selected}`,
         },
       });
       persistPluginInstallMock.mockResolvedValue({});
@@ -189,16 +218,22 @@ describe("chat plugin install release stream", () => {
         const result = await handlePluginsCommand(params, true);
 
         expect(mockFirstObjectArg(installPluginFromNpmSpecMock).spec).toBe(
-          "@openclaw/brave-plugin@beta",
+          `@openclaw/brave-plugin@${selected}`,
         );
+        expect(installPluginFromNpmSpecMock).toHaveBeenCalledOnce();
         if (acceptCapabilities) {
           expect(persistPluginInstallMock).toHaveBeenCalledWith(
             expect.objectContaining({
-              install: expect.objectContaining({ acceptedSurfaceHash: expect.any(String) }),
+              install: expect.objectContaining({
+                spec: "@openclaw/brave-plugin",
+                version: selected,
+                acceptedSurfaceHash: expect.any(String),
+              }),
             }),
           );
         } else {
           expect(result?.reply?.text).toContain("Plugin capabilities require approval");
+          expect(result?.reply?.text).toContain(`@openclaw/brave-plugin@${selected}`);
           expect(persistPluginInstallMock).not.toHaveBeenCalled();
         }
       });

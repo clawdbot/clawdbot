@@ -15,6 +15,10 @@ const meeting: TranscriptSessionSummary = {
   startedAt: "2026-08-12T17:00:00Z",
   stoppedAt: "2026-08-12T17:45:00Z",
   active: false,
+  activeSubscription: false,
+  agentId: "main",
+  updatedAt: "2026-08-12T17:45:00Z",
+  lastUtteranceAt: "2026-08-12T17:44:00Z",
   utteranceCount: 42,
   participants: ["Ada", "Sam", "Jo", "Alex"],
   hasSummary: true,
@@ -23,6 +27,7 @@ const meeting: TranscriptSessionSummary = {
 };
 const detail: TranscriptsGetResult = {
   session: meeting,
+  nextCursor: null,
   summary: {
     generatedAt: "2026-08-12T17:45:00Z",
     overview: meeting.overview!,
@@ -30,6 +35,7 @@ const detail: TranscriptsGetResult = {
     actionItems: [],
     risks: [],
     participants: meeting.participants,
+    utteranceCount: meeting.utteranceCount,
     source: "model",
     markdown:
       "# Design review\n\n## Overview\nAgreed on a simpler onboarding flow and a focused launch checklist.\n\n## Participants\n- Ada\n- Sam\n- Jo\n- Alex\n\n## Decisions\n- Keep the first-run setup to three steps.\n- Ship the accessible navigation before launch.\n\n## Action Items\n- Ada: prepare the revised prototype.\n- Sam: review keyboard navigation.\n\n## Risks\n- Leave time for mobile testing.\n\n## Transcript\n- Ada: Let's keep the setup simple.",
@@ -44,6 +50,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "transcripts.list": {
+              nextCursor: null,
               sessions: [
                 meeting,
                 {
@@ -76,34 +83,41 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}meetings`);
         const view = page.locator("openclaw-meetings-page");
-        await view.getByRole("button", { name: /Design review/ }).waitFor();
+        await view.getByRole("link", { name: /Design review/ }).waitFor();
         expect(await view.locator(".meetings-day h2").allTextContents()).toEqual([
           "August 12, 2026",
           "August 11, 2026",
         ]);
         expect(await gateway.getRequests("transcripts.list")).toMatchObject([
-          { params: { limit: 200 } },
+          { params: { limit: 50 } },
         ]);
         expect(await gateway.getRequests("transcripts.get")).toHaveLength(0);
-        const silentRow = view.getByRole("button", { name: /Quiet check-in/ });
+        const silentRow = view.getByRole("link", { name: /Quiet check-in/ });
         expect.soft(await silentRow.textContent()).toContain("No speech captured");
         expect.soft(await silentRow.textContent()).not.toContain("No transcript captured yet.");
-        await view.getByRole("button", { name: /Design review/ }).click();
+        await view.getByRole("link", { name: /Design review/ }).click();
         await view.getByRole("heading", { name: "Design review", exact: true }).waitFor();
         expect(new URL(page.url()).searchParams.get("selector")).toBe(meeting.selector);
         expect(
           await view.getByText("Ada: prepare the revised prototype.", { exact: true }).isVisible(),
         ).toBe(true);
-        expect.soft(await view.locator("details").count()).toBe(0);
+        expect(await view.getByRole("tab", { name: "Summary" }).getAttribute("aria-selected")).toBe(
+          "true",
+        );
         expect(await view.getByRole("heading", { name: "Transcript", exact: true }).count()).toBe(
           1,
         );
         expect(
           await view.getByText("Ada: Let's keep the setup simple.", { exact: true }).isVisible(),
         ).toBe(true);
-        for (const request of await gateway.getRequests("transcripts.get")) {
-          expect(request.params).not.toHaveProperty("includeUtterances");
-        }
+        expect(
+          (await gateway.getRequests("transcripts.get")).map((request) => request.params),
+        ).toEqual(
+          expect.arrayContaining([
+            { selector: meeting.selector },
+            { selector: meeting.selector, includeUtterances: true, limit: 50 },
+          ]),
+        );
         for (const theme of ["light", "dark"] as const) {
           await page.emulateMedia({ colorScheme: theme });
           await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(theme);
@@ -125,9 +139,14 @@ suite.define(() => {
         }
         await page.reload();
         await view.getByRole("heading", { name: "Design review", exact: true }).waitFor();
-        for (const request of await gateway.getRequests("transcripts.get")) {
-          expect(request.params).toEqual({ selector: meeting.selector });
-        }
+        expect(
+          (await gateway.getRequests("transcripts.get")).map((request) => request.params),
+        ).toEqual(
+          expect.arrayContaining([
+            { selector: meeting.selector },
+            { selector: meeting.selector, includeUtterances: true, limit: 50 },
+          ]),
+        );
       },
     );
   });
@@ -135,7 +154,7 @@ suite.define(() => {
   it("shows an actionable empty state and refreshes without hiding errors", async () => {
     await suite.withPage({ viewport: { width: 1200, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
-        methodResponses: { "transcripts.list": { sessions: [] } },
+        methodResponses: { "transcripts.list": { sessions: [], nextCursor: null } },
       });
       await page.goto(`${suite.server.baseUrl}meetings`);
       const view = page.locator("openclaw-meetings-page");

@@ -1,6 +1,6 @@
 // Schema-level tests for gateway.tls certPath and keyPath validation.
 import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./validation.js";
+import { validateConfigObject } from "./validation-core.js";
 
 describe("gateway.tls schema", () => {
   it("rejects empty certPath", () => {

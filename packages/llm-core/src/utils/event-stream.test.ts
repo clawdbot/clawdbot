@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { runNodeScript } from "../../../../test/helpers/run-node-script.js";
-import { EventStream } from "./event-stream.js";
+import { EventStream, getEventStreamCompletion } from "./event-stream.js";
 
 function createNumberStream(): EventStream<number, number> {
   return new EventStream(
@@ -90,11 +90,13 @@ describe("EventStream", () => {
     terminal.push(-1);
     terminal.end();
     await expect(terminal.result()).resolves.toBe(-1);
+    await expect(getEventStreamCompletion(terminal)).resolves.toBe(-1);
 
     const explicit = createNumberStream();
     explicit.push(7);
     explicit.end(42);
     await expect(explicit.result()).resolves.toBe(42);
+    await expect(getEventStreamCompletion(explicit)).resolves.toBe(42);
   });
 
   it("rejects result() when the stream ends without a terminal event or explicit result", async () => {
@@ -104,6 +106,9 @@ describe("EventStream", () => {
     // result() awaiters previously hung forever on this producer bug; the
     // contract now surfaces it loudly.
     await expect(stream.result()).rejects.toThrow(
+      "event stream ended without a terminal event or final result",
+    );
+    await expect(getEventStreamCompletion(stream)).rejects.toThrow(
       "event stream ended without a terminal event or final result",
     );
     // Iterate-only consumption of the same stream still completes normally.

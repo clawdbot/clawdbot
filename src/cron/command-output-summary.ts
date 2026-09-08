@@ -38,41 +38,36 @@ function normalizeLines(lines: string[] | undefined): string[] {
   return result;
 }
 
-function trimOutput(value: string): string | undefined {
-  return normalizeOptionalString(value);
-}
-
-function combineOutput(params: { stdout?: string; stderr?: string }): string | undefined {
-  const stdout = trimOutput(params.stdout ?? "");
-  const stderr = trimOutput(params.stderr ?? "");
-  if (stdout && stderr) {
-    return `stdout:\n${stdout}\n\nstderr:\n${stderr}`;
-  }
-  return stdout ?? stderr;
-}
-
-function containsLine(haystack: string | undefined, needle: string): boolean {
-  if (!haystack) {
-    return false;
-  }
-  return haystack.split(/\r?\n/).some((line) => line.trim() === needle.trim());
-}
-
 export function buildCronCommandSummary(params: {
   stdout: string;
   stderr: string;
   preservedStdoutLines?: string[];
   preservedStderrLines?: string[];
 }): string | undefined {
-  const tail = combineOutput({ stdout: params.stdout, stderr: params.stderr });
+  const stdout = normalizeOptionalString(params.stdout);
+  const stderr = normalizeOptionalString(params.stderr);
+  const tail = stdout && stderr ? `stdout:\n${stdout}\n\nstderr:\n${stderr}` : (stdout ?? stderr);
   const preserved = [
     ...normalizeLines(params.preservedStdoutLines),
     ...normalizeLines(params.preservedStderrLines),
-  ].filter((line) => !containsLine(tail, line));
+  ];
   if (preserved.length === 0) {
     return tail;
   }
-  const actionBlock = `action-required output preserved:\n${preserved.join("\n")}`;
+  const missing = new Set(preserved);
+  for (const line of tail?.split(/\r?\n/) ?? []) {
+    const normalized = line.trim();
+    // Check the short action list first so unrelated long lines never need hashing.
+    if (preserved.includes(normalized)) {
+      missing.delete(normalized);
+      if (missing.size === 0) {
+        return tail;
+      }
+    }
+  }
+  // Retain stream order and repeated actions from different output streams.
+  const actionLines = preserved.filter((line) => missing.has(line));
+  const actionBlock = `action-required output preserved:\n${actionLines.join("\n")}`;
   return tail ? `${actionBlock}\n\n${tail}` : actionBlock;
 }
 

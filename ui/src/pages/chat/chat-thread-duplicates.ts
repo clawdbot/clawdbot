@@ -140,7 +140,7 @@ export function prepareMessagesForGrouping(items: ChatItem[]): PreparedChatItem[
       previous?.kind === "message" &&
       !sourceIsUnprovenImport &&
       !previousSourceIsUnprovenImport &&
-      !(sourceKey && previousSourceKey && sourceKey !== previousSourceKey) &&
+      sourceKey === previousSourceKey &&
       parts?.role === previousParts?.role
     ) {
       const signature = collapseDuplicateDisplaySignature(parts);

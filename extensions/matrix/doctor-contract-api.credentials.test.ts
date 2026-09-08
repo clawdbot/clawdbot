@@ -34,7 +34,7 @@ function createContext(env?: NodeJS.ProcessEnv): PluginDoctorStateMigrationConte
       importPluginStateEntriesForDoctorForTests("matrix", options, entries);
     },
     openPluginStateKeyedStore: <T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> =>
-      createPluginStateKeyedStoreForTests<T>("matrix", options),
+      createPluginStateKeyedStoreForTests<T>("matrix", { ...options, env: options.env ?? env }),
   };
 }
 
@@ -69,44 +69,68 @@ describe("matrix doctor credential state migrations", () => {
     resetPluginStateStoreForTests();
   });
 
-  it("imports account credentials into SQLite before archiving the JSON", async () => {
-    const stateDir = tempDirs.make("openclaw-matrix-doctor-");
-    const credentialsDir = path.join(stateDir, "credentials", "matrix");
-    const filePath = path.join(credentialsDir, "credentials-ops.json");
-    const credentials = {
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      accessToken: "secret-token",
-      deviceId: "DEVICE123",
-      createdAt: "2026-07-01T12:00:00.000Z",
-      lastUsedAt: "2026-07-02T12:00:00.000Z",
-    };
-    fs.mkdirSync(credentialsDir, { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify(credentials));
-    const migration = migrationById("matrix-credentials-json-to-plugin-state");
-    const params = createMigrationParams(stateDir);
+  it.each([
+    ["credentials-ops.json", [], "ops"],
+    ["credentials.json", ["ops"], "ops"],
+    ["credentials.json", ["ops", "alerts"], null],
+  ] as const)(
+    "preserves credential migration for %s with accounts %j",
+    async (filename, accountIds, accountId) => {
+      const stateDir = tempDirs.make("openclaw-matrix-doctor-");
+      const credentialsDir = path.join(stateDir, "credentials", "matrix");
+      const filePath = path.join(credentialsDir, filename);
+      const credentials = {
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "secret-token",
+        deviceId: "DEVICE123",
+        createdAt: "2026-07-01T12:00:00.000Z",
+        lastUsedAt: "2026-07-02T12:00:00.000Z",
+      };
+      fs.mkdirSync(credentialsDir, { recursive: true });
+      fs.writeFileSync(filePath, JSON.stringify(credentials));
+      const migration = migrationById("matrix-credentials-json-to-plugin-state");
+      const params = createMigrationParams(stateDir);
+      if (accountIds.length > 0) {
+        params.config = {
+          channels: {
+            matrix: { accounts: Object.fromEntries(accountIds.map((id) => [id, {}])) },
+          },
+        };
+      }
 
-    await expect(migration.detectLegacyState(params)).resolves.toEqual({
-      preview: ["Matrix credential JSON can migrate to SQLite (1 file)"],
-    });
-    const result = await migration.migrateLegacyState(params);
+      await expect(migration.detectLegacyState(params)).resolves.toEqual({
+        preview: ["Matrix credential JSON can migrate to SQLite (1 file)"],
+      });
+      const result = await migration.migrateLegacyState(params);
 
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toEqual([
-      "Migrated Matrix credentials for account ops to SQLite",
-      expect.stringContaining("Archived Matrix credentials legacy source"),
-    ]);
-    const store = params.context.openPluginStateKeyedStore<MatrixStoredCredentialRecord>({
-      namespace: MATRIX_CREDENTIALS_NAMESPACE,
-      maxEntries: MATRIX_CREDENTIALS_MAX_ENTRIES,
-      overflowPolicy: "reject-new",
-    });
-    await expect(store.lookup(matrixCredentialsStoreKey("ops"))).resolves.toEqual({
-      accountId: "ops",
-      ...credentials,
-    });
-    expect(fs.existsSync(`${filePath}.migrated`)).toBe(true);
-  });
+      const store = params.context.openPluginStateKeyedStore<MatrixStoredCredentialRecord>({
+        namespace: MATRIX_CREDENTIALS_NAMESPACE,
+        maxEntries: MATRIX_CREDENTIALS_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+      });
+      if (accountId === null) {
+        expect(result.changes).toEqual([]);
+        expect(result.warnings).toEqual([
+          `Left ambiguous Matrix credential legacy source in place because no default account is selected: ${filePath}`,
+        ]);
+        await expect(store.entries()).resolves.toEqual([]);
+        expect(fs.existsSync(filePath)).toBe(true);
+        expect(fs.existsSync(`${filePath}.migrated`)).toBe(false);
+        return;
+      }
+      expect(result.warnings).toEqual([]);
+      expect(result.changes).toEqual([
+        `Migrated Matrix credentials for account ${accountId} to SQLite`,
+        expect.stringContaining("Archived Matrix credentials legacy source"),
+      ]);
+      await expect(store.lookup(matrixCredentialsStoreKey(accountId))).resolves.toEqual({
+        accountId,
+        ...credentials,
+      });
+      expect(fs.existsSync(`${filePath}.migrated`)).toBe(true);
+    },
+  );
 
   it("archives legacy credentials without restoring an explicitly cleared account", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");

@@ -6,13 +6,20 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import {
+  resolveSqliteScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
 import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import { executeFollowupTurn } from "./followup-turn-execution.js";
 import {
@@ -89,6 +96,57 @@ describe("followup queue durable input consumption", () => {
     }
     return await recorder.withPendingInput(() => recorder.persistApproved());
   };
+
+  it("preserves the committed prefix when a native batch falls back after a later source write fails", async () => {
+    const first = await createStagedRun("first");
+    const second = await createStagedRun("second");
+    await persistQueuedRun(first.run);
+    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope()))).db;
+    database.exec(
+      "CREATE TEMP TRIGGER fail_second_source BEFORE INSERT ON transcript_events WHEN instr(NEW.event_json, 'second:user') > 0 BEGIN SELECT RAISE(ABORT, 'injected second source failure'); END",
+    );
+    try {
+      await expect(persistQueuedRun(second.run)).rejects.toThrow("injected second source failure");
+    } finally {
+      database.exec("DROP TRIGGER fail_second_source");
+    }
+    expect(first.run.userTurnTranscriptRecorder?.hasPersisted()).toBe(true);
+    expect(second.run.userTurnTranscriptRecorder?.hasPersisted()).toBe(false);
+    const before = await loadTranscriptEvents(scope());
+    const settings = { mode: "collect" as const, debounceMs: 0 };
+    expect(enqueueFollowupRun(sessionKey, first.run, settings)).toBe(true);
+    expect(enqueueFollowupRun(sessionKey, second.run, settings)).toBe(true);
+    const prompts: string[] = [];
+    const consumers: UserTurnTranscriptRecorder[] = [];
+    const failures: unknown[] = [];
+    scheduleFollowupDrain(sessionKey, async (run) => {
+      try {
+        await admitFollowupRunLifecycle(run);
+        await persistQueuedRun(run);
+        prompts.push(run.prompt);
+        consumers.push(run.userTurnTranscriptRecorder!);
+      } catch (error) {
+        failures.push(error);
+      }
+    });
+    await vi.waitFor(() => expect(getExistingFollowupQueue(sessionKey)).toBeUndefined());
+    expect(failures).toEqual([]);
+    expect(prompts).toEqual(["first approved", "second approved"]);
+    expect(consumers).toEqual([
+      first.run.userTurnTranscriptRecorder,
+      second.run.userTurnTranscriptRecorder,
+    ]);
+    const after = await loadTranscriptEvents(scope());
+    expect(after.slice(0, before.length)).toEqual(before);
+    const messages = after.filter(isRecord).filter((event) => event.type === "message");
+    expect(messages.map((event) => event.message)).toEqual([
+      expect.objectContaining({ content: "first approved", idempotencyKey: "first:user" }),
+      expect.objectContaining({ content: "second approved", idempotencyKey: "second:user" }),
+    ]);
+    expect(listSessionPendingInputs(scope()).items).toEqual([]);
+    expect(first.beforeMessageWrite).toHaveBeenCalledOnce();
+    expect(second.beforeMessageWrite).toHaveBeenCalledOnce();
+  });
 
   it("keeps unstaged input out of an already-approved collect group", async () => {
     const staged = await createStagedRun("staged");

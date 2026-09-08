@@ -4,9 +4,6 @@ import type {
   MigrationProviderContext,
   MigrationProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { applyCodexMigrationPlan, prepareTargetCodexAppServer } from "./apply.js";
-import { buildCodexMigrationPlan } from "./plan.js";
-import { discoverCodexSource, hasCodexSource } from "./source.js";
 
 function isMemoryOnlyMigration(ctx: MigrationProviderContext): boolean {
   return Boolean(
@@ -26,6 +23,7 @@ export function buildCodexMigrationProvider(
       "Import Codex memory and skills while keeping Codex native plugins and hooks explicit.",
     supportedItemKinds: ["memory"],
     async detect(ctx) {
+      const { discoverCodexSource, hasCodexSource } = await import("./source.js");
       const source = await discoverCodexSource({
         input: ctx.source,
         memoryOnly: isMemoryOnlyMigration(ctx),
@@ -40,15 +38,21 @@ export function buildCodexMigrationProvider(
         message: found ? "Codex state found." : "Codex state not found.",
       };
     },
-    plan: buildCodexMigrationPlan,
+    async plan(ctx) {
+      const { buildCodexMigrationPlan } = await import("./plan.js");
+      return buildCodexMigrationPlan(ctx);
+    },
     deferredApply: { retrySafe: true },
     prepareApply(ctx) {
       if (isMemoryOnlyMigration(ctx)) {
         return undefined;
       }
-      return prepareTargetCodexAppServer(ctx);
+      return import("./apply.js").then(({ prepareTargetCodexAppServer }) =>
+        prepareTargetCodexAppServer(ctx),
+      );
     },
     async apply(ctx, plan?: MigrationPlan) {
+      const { applyCodexMigrationPlan } = await import("./apply.js");
       return await applyCodexMigrationPlan({ ctx, plan, runtime: params.runtime });
     },
   };

@@ -1,6 +1,15 @@
 // OpenClaw-owned tool runtime contract helpers mock agent tool runtimes in SDK tests.
 import { vi } from "vitest";
 import { resetAdjustedParamsByToolCallIdForTests } from "../../../agents/agent-tools.before-tool-call.state.js";
+import {
+  addSession,
+  appendOutput,
+  deleteSession,
+  markExited,
+  recordNotifyOnExitRemoval,
+} from "../../../agents/bash-process-registry.js";
+import { createProcessSessionFixture } from "../../../agents/bash-process-registry.test-helpers.js";
+import { createProcessTool } from "../../../agents/bash-tools.process.js";
 import { buildEmbeddedRunPayloads } from "../../../agents/embedded-agent-runner/run/payloads.js";
 import { mergeAttemptToolMediaPayloads } from "../../../agents/embedded-agent-runner/run/tool-media-payloads.js";
 import type {
@@ -15,6 +24,11 @@ import { setToolTerminalPresentation } from "../../../agents/tool-terminal-prese
 import type { AnyAgentTool } from "../../../agents/tools/common.js";
 import { getCoreTtsAttemptResultMediaUrls } from "../../../agents/tools/tts-tool-result-provenance.js";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
+import {
+  drainSystemEventEntries,
+  enqueueSystemEventWithReceipt,
+  peekSystemEventEntries,
+} from "../../../infra/system-events.js";
 import type { AgentToolResultMiddlewareEvent } from "../../../plugins/agent-tool-result-middleware-types.js";
 import {
   initializeGlobalHookRunner,
@@ -28,6 +42,31 @@ import {
 } from "../../../plugins/runtime.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import * as ttsRuntime from "../../../tts/tts.js";
+
+/** Real process poll producer and notification queue, with a synthetic completed process. */
+export function createProcessPollDeliveryContract(sessionId: string) {
+  const sessionKey = `agent:main:${sessionId}`;
+  const session = createProcessSessionFixture({ id: sessionId, backgrounded: true });
+  session.scopeKey = sessionKey;
+  session.sessionKey = sessionKey;
+  addSession(session);
+  appendOutput(session, "stdout", "completed output");
+  markExited(session, 0, null, "completed");
+  enqueueSystemEventWithReceipt("unrelated event", { sessionKey, contextKey: "other" });
+  recordNotifyOnExitRemoval(
+    session,
+    enqueueSystemEventWithReceipt("exec completed", { sessionKey, contextKey: sessionId })!,
+  );
+  return {
+    tool: createProcessTool({ scopeKey: sessionKey }),
+    pollArguments: { action: "poll", sessionId },
+    pendingNotifications: () => peekSystemEventEntries(sessionKey).map((event) => event.text),
+    close: () => {
+      deleteSession(sessionId);
+      drainSystemEventEntries(sessionKey);
+    },
+  };
+}
 
 export function textToolResult(
   text: string,

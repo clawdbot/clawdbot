@@ -5,12 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { acquireWorktreeRunLease } from "../agents/worktrees/run-lease.js";
 import {
   deleteSessionEntryLifecycle,
-  resetSessionEntryLifecycle,
-  upsertSessionEntryCore,
+  patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
 import { ensurePersonalGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
@@ -32,6 +31,7 @@ import {
   createForeignPublicationSession,
   createPersonalPublicationFixture,
   personalPublicationAccount as account,
+  expectPersonalPublicationReplay,
 } from "./github-personal-publication.test-support.js";
 import {
   BRANCH,
@@ -47,6 +47,8 @@ import {
   createRealPublicationWorkspace,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  persistPublicationTestSession,
+  root,
 } from "./github-publication.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { preparePersonalGitHubSessionAction } from "./server-methods/github-personal-authorization.js";
@@ -115,6 +117,71 @@ describe("personal publication authority and recovery", () => {
   });
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("rejects a pending personal confirmation after the real reset preserves its session ID", async () => {
+    const workspace = await createRealPublicationWorkspace("push");
+    const session = await persistPublicationTestSession();
+    const response = await rpc("sessions.github.publish", request());
+    expect(response[0], JSON.stringify(response[2])).toBe(true);
+    expect(response[1].status).toBe("needs_confirmation");
+    const receipt = readPersonalGitHubPublication(owner, { requestId: response[1].requestId })!;
+    await session.reset(placements);
+    coordinator = createTestGitHubPublicationCoordinator({ placements });
+    const discovered = await rpc("sessions.github.status", {
+      sessionKey: SESSION_KEY,
+      requestId: receipt.request_id,
+    });
+    expect(discovered[1]).toMatchObject({
+      result: { status: "failed", code: "session_changed" },
+      confirmation: null,
+    });
+    const confirmed = await rpc("sessions.github.confirm", {
+      sessionKey: SESSION_KEY,
+      requestId: receipt.request_id,
+      requestDigest: receipt.request_digest,
+      generation,
+      account,
+    });
+    expect(confirmed[0]).toBe(false);
+    expect(workspace.effects).toEqual(["push"]);
+  });
+
+  it("records an in-flight local push response after reset without creating a pull request", async () => {
+    const workspace = await createRealPublicationWorkspace("create");
+    const session = await persistPublicationTestSession();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const transport = mocks.runCommand.getMockImplementation()!;
+    mocks.runCommand.mockImplementation(async (args: string[], options) => {
+      const result = await transport(args, options);
+      if (args.includes("push")) {
+        entered.resolve();
+        await release.promise;
+      }
+      return result;
+    });
+    const pending = rpc("sessions.github.publish", request());
+    try {
+      await entered.promise;
+      await session.reset(placements);
+    } finally {
+      release.resolve();
+    }
+    const response = await pending;
+    expect(response[0]).toBe(false);
+    expect(
+      readPersonalGitHubPublication(owner, {
+        sessionId: SESSION_ID,
+        idempotencyKey: request().idempotencyKey,
+      }),
+    ).toMatchObject({
+      status: "failed",
+      error_code: "session_changed",
+      last_effect: "push",
+      effect_state: "observed",
+    });
+    expect(workspace.effects).toEqual(["push"]);
   });
 
   it.each(["writer", "reader", "synthetic", "admin-role-ceiling"] as const)(
@@ -297,7 +364,7 @@ describe("personal publication authority and recovery", () => {
       BEGIN SELECT stop_personal_admission(); END`);
     const stopped = preparePersonalGitHubSessionAction(
       { client, context, signal: controller.signal },
-      SESSION_KEY,
+      { sessionKey: SESSION_KEY },
     );
     await expect(coordinator.requestPersonalForSession(request(), stopped)).rejects.toThrow(
       "current",
@@ -385,6 +452,13 @@ describe("personal publication authority and recovery", () => {
     expect(openOpenClawStateDatabase().db.prepare("PRAGMA integrity_check").get()).toEqual({
       integrity_check: "ok",
     });
+  });
+
+  it("replays only the original personal selection and content without new publication work", async () => {
+    await expectPersonalPublicationReplay({ generation, coordinator, action }, (requestId) => ({
+      receipt: readPersonalGitHubPublication(owner, { requestId }),
+      commandCount: commands.length,
+    }));
   });
 
   it("keeps credential locations out of publication errors when refresh materialization fails", async () => {
@@ -506,16 +580,21 @@ describe("personal publication authority and recovery", () => {
             const original = mocks.loadSession.getMockImplementation()!;
             mocks.loadSession.mockImplementation((key: string) => ({
               ...original(key),
-              entry: { sessionId: "reset-session" },
+              entry: { sessionId: "replacement-session" },
             }));
           }
         }
         return await fallback(argv, options);
       });
-      await expect(coordinator.requestPersonalForSession(request(), action)).rejects.toThrow();
+      const pending = coordinator.requestPersonalForSession(request(), action);
+      if (race === "session") {
+        await expect(pending).resolves.toMatchObject({ status: "failed", code: "session_changed" });
+      } else {
+        await expect(pending).rejects.toThrow();
+      }
       expect(commands.some((argv) => argv.includes("push") || argv.includes("POST"))).toBe(false);
       expect(openOpenClawStateDatabase().db.prepare(`SELECT status FROM ${table}`).get()).toEqual({
-        status: "needs_confirmation",
+        status: race === "session" ? "failed" : "needs_confirmation",
       });
     },
   );
@@ -648,7 +727,7 @@ describe("personal publication authority and recovery", () => {
     ).toBe(false);
     expect((await rpc("sessions.github.publish", request()))[0]).toBe(false);
     client.authenticatedUserProfile = ownProfile;
-    action = preparePersonalGitHubSessionAction({ client, context }, SESSION_KEY);
+    action = preparePersonalGitHubSessionAction({ client, context }, { sessionKey: SESSION_KEY });
     const confirm = {
       sessionKey: SESSION_KEY,
       requestId: discovered[1].pendingPersonal.result.requestId,
@@ -664,7 +743,7 @@ describe("personal publication authority and recovery", () => {
     const originalSession = mocks.loadSession.getMockImplementation()!;
     mocks.loadSession.mockImplementation((key: string) => ({
       ...originalSession(key),
-      entry: { sessionId: "reset-incarnation" },
+      entry: { sessionId: "replacement-incarnation" },
     }));
     expect((await rpc("sessions.github.options"))[1].pendingPersonal).toMatchObject({
       result: { status: "failed", code: "session_changed", requestId: result.requestId },
@@ -906,27 +985,31 @@ describe("personal publication authority and recovery", () => {
   });
 
   it("retains logical-session receipts across archive and reset, then removes them through permanent deletion", async () => {
+    const session = await persistPublicationTestSession();
+    action = preparePersonalGitHubSessionAction({ client, context }, { sessionKey: SESSION_KEY });
     const result = await coordinator.requestPersonalForSession(request(), action);
-    const scope = { agentId: "main", sessionKey: SESSION_KEY };
-    await upsertSessionEntryCore(scope, {
-      sessionId: SESSION_ID,
-      updatedAt: Date.now(),
+    const receipt = readPersonalGitHubPublication(owner, { requestId: result.requestId });
+    expect(receipt?.status).toBe("published");
+    const binding = { publicationKind: "personal" as const, requestId: result.requestId };
+    const originalLifecycle = readGitHubPublicationSessionLifecycle(binding);
+    expect(originalLifecycle).toEqual({ lifecycle_revision: session.read().lifecycleRevision });
+    await session.reset(placements);
+    expect(readPersonalGitHubPublication(owner, { requestId: result.requestId })).toEqual(receipt);
+    expect(
+      (
+        await rpc("sessions.github.status", {
+          requestId: result.requestId,
+          sessionKey: SESSION_KEY,
+        })
+      )[1],
+    ).toMatchObject({ result: { status: "published" }, confirmation: null });
+    const storePath = path.join(root, "sessions.json");
+    await patchSessionEntryCore({ agentId: "main", sessionKey: SESSION_KEY, storePath }, () => ({
       archivedAt: Date.now(),
-    });
-    expect(readPersonalGitHubPublication(owner, { requestId: result.requestId })?.status).toBe(
-      "published",
-    );
-    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    }));
     const target = { canonicalKey: SESSION_KEY, storeKeys: [SESSION_KEY] };
-    await resetSessionEntryLifecycle({
-      agentId: "main",
-      storePath,
-      target,
-      buildNextEntry: () => ({ sessionId: "reset-generation", updatedAt: Date.now() }),
-    });
-    expect(readPersonalGitHubPublication(owner, { requestId: result.requestId })?.session_id).toBe(
-      SESSION_ID,
-    );
+    expect(readPersonalGitHubPublication(owner, { requestId: result.requestId })).toEqual(receipt);
+    expect(readGitHubPublicationSessionLifecycle(binding)).toEqual(originalLifecycle);
     await deleteSessionEntryLifecycle({
       agentId: "main",
       storePath,
@@ -934,6 +1017,7 @@ describe("personal publication authority and recovery", () => {
       archiveTranscript: false,
     });
     expect(readPersonalGitHubPublication(owner, { requestId: result.requestId })).toBeUndefined();
+    expect(readGitHubPublicationSessionLifecycle(binding)).toBeUndefined();
     expect(readUserGitHubConnection(owner)?.generation).toBe(generation);
   });
 });

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { normalizeScpRemoteHost } from "../../infra/scp-host.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import type { WorkerSshEndpoint, WorkerSshIdentity } from "../../plugins/types.js";
 import type { CommandOptions } from "../../process/exec.js";
@@ -151,7 +151,10 @@ export async function prepareWorkerSsh(params: {
     )
     .join("");
   const temporaryDir = await fs.mkdtemp(
-    path.resolve(os.tmpdir(), params.temporaryDirectoryPrefix ?? "openclaw-worker-ssh-"),
+    path.resolve(
+      resolvePreferredOpenClawTmpDir(),
+      params.temporaryDirectoryPrefix ?? "openclaw-worker-ssh-",
+    ),
   );
   try {
     const identity = await params.resolveIdentity(params.ssh.keyRef);

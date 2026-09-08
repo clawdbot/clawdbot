@@ -64,6 +64,14 @@ bun pm trust baileys protobufjs
 
 ## Caveats
 
+On macOS, Bun uses Apple's system SQLite, which omits native extension loading.
+OpenClaw can open ordinary agent databases without extension loading when that
+library meets the WAL safety floor. Operations that require extensions, including `sqlite-vec`, need an
+extension-capable SQLite library. Use Node, or preload a compatible SQLite
+library with Bun's [custom SQLite setup](https://bun.sh/docs/runtime/sqlite#loadextension)
+before opening any database. OpenClaw does not select a different SQLite library
+automatically.
+
 Some package scripts hardcode `pnpm` internally (for example `check:docs`, `ui:*`, `protocol:check`). Running them via `bun run` still shells out to `pnpm`, so just run those via `pnpm` directly.
 
 ## Related

@@ -54,6 +54,8 @@ export type MediaAttachmentDisposition =
   | { kind: "scope-denied" }
   | { kind: "failed"; reason?: string };
 
+export type MediaAttachmentProcessing = "completed" | "omitted";
+
 export type MediaUnderstandingDecision = {
   capability: MediaUnderstandingCapability;
   outcome: MediaUnderstandingDecisionOutcome;
@@ -63,6 +65,9 @@ export type MediaUnderstandingDecision = {
   // (runner, apply-capability, runtime) always populate it; absence renders no
   // markers rather than breaking plugin compilation.
   attachmentDispositions?: Record<number, MediaAttachmentDisposition>;
+  // CLI/provider completion is independent of usable output or a rendered marker.
+  // Optional for shipped SDK decision literals; absence means unknown processing.
+  attachmentProcessing?: Record<number, MediaAttachmentProcessing>;
   nativeVisionActive?: boolean;
 };
 

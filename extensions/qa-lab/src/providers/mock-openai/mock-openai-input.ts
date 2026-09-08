@@ -19,11 +19,11 @@ export function extractLastMatchingUserTurn(input: ResponsesInputItem[], pattern
   const matcher = pattern && new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ""));
   for (let index = input.length - 1; index >= 0; index -= 1) {
     const item = input[index];
-    if (item?.role !== "user") {
+    if (!item || !isUserTurn(item)) {
       continue;
     }
     const text = extractInputText(item.content);
-    if (text && !isInternalRuntimeContextCarrierText(text) && (!matcher || matcher.test(text))) {
+    if (!matcher || matcher.test(text)) {
       return { index, text };
     }
   }
@@ -53,9 +53,7 @@ export function extractMockSubagentContext(input: ResponsesInputItem[]) {
   if (!task) {
     return undefined;
   }
-  const inheritedUserTexts = extractAllUserTexts(input.slice(0, turn.index)).filter(
-    (text) => !isInternalRuntimeContextCarrierText(text),
-  );
+  const inheritedUserTexts = extractUserTurnTexts(input.slice(0, turn.index));
   for (const match of history.matchAll(
     /(?:^|\n\n)\[user\]\n([\s\S]*?)(?=\n\n\[[a-zA-Z]+\]\n|$)/g,
   )) {
@@ -258,6 +256,11 @@ export function extractAllUserTexts(input: ResponsesInputItem[]) {
     .filter((item) => item.role === "user")
     .map((item) => extractInputText(item.content))
     .filter(Boolean);
+}
+
+export function extractUserTurnTexts(input: ResponsesInputItem[]) {
+  // Runtime carriers are transparent, but empty user turns must fence older scenarios.
+  return input.filter(isUserTurn).map((item) => extractInputText(item.content));
 }
 
 export function extractSlackMpimRetainedBotNonce(

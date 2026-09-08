@@ -37,6 +37,13 @@ export const canvasA2UIBoardWidgetKind: Parameters<
   resources: {
     surface: "canvas",
     paths: [A2UI_V08_BUNDLE_PATH, A2UI_V09_BUNDLE_PATH],
+    readPublicResource: async (resourcePath) => {
+      if (resourcePath !== A2UI_V08_BUNDLE_PATH && resourcePath !== A2UI_V09_BUNDLE_PATH) {
+        return undefined;
+      }
+      const { readPublicA2uiResource } = await import("./host/a2ui.js");
+      return await readPublicA2uiResource(resourcePath);
+    },
   },
   validateSource(source) {
     validateSupportedA2UIJsonl(source);

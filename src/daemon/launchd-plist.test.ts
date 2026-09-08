@@ -2,12 +2,21 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildLaunchAgentPlist,
   parseLaunchdPlistLabel,
   readLaunchAgentProgramArgumentsFromFile,
 } from "./launchd-plist.js";
+import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
+
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
+  runExec: vi.fn(
+    async (_command: string, _args: string[], options: { input: string | Uint8Array }) =>
+      decodeLaunchAgentPlistFixture(options.input),
+  ),
+}));
 
 describe("LaunchAgent environment round-trip", () => {
   it.each(["", "--max-old-space-size=24576"])(

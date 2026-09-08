@@ -69,36 +69,36 @@ export function recordWorkerLiveTrajectoryEvent(
   if (!recorder) {
     return;
   }
-  const data = prepareWorkerLiveEventData(event);
-  let recorded = false;
+  // Live listeners can mutate their copy; prepare independent diagnostics only
+  // for phases that the trajectory records.
   if (event.kind === "tool") {
     if (event.payload.phase === "start") {
-      recorder.recordEvent("tool.call", data);
-      recorded = true;
+      recorder.recordEvent("tool.call", prepareWorkerLiveEventData(event));
     } else if (event.payload.phase === "result") {
       recorder.recordEvent("tool.result", {
-        ...data,
+        ...prepareWorkerLiveEventData(event),
         success: !event.payload.isError,
       });
-      recorded = true;
+    } else {
+      return;
     }
   } else if (event.kind === "approval") {
-    recorder.recordEvent(`approval.${event.payload.phase}`, data);
-    recorded = true;
+    recorder.recordEvent(`approval.${event.payload.phase}`, prepareWorkerLiveEventData(event));
   } else if (event.kind === "lifecycle") {
     if (event.payload.phase === "start") {
-      recorder.recordEvent("session.started", { ...data, backend: "cloud-worker" });
-      recorded = true;
+      recorder.recordEvent("session.started", {
+        ...prepareWorkerLiveEventData(event),
+        backend: "cloud-worker",
+      });
     } else if (event.payload.phase === "fallback_step") {
-      recorder.recordEvent("model.fallback_step", data);
-      recorded = true;
+      recorder.recordEvent("model.fallback_step", prepareWorkerLiveEventData(event));
     } else if (event.payload.phase === "finishing") {
-      recorder.recordEvent("model.finishing", data);
-      recorded = true;
+      recorder.recordEvent("model.finishing", prepareWorkerLiveEventData(event));
     } else if (
       (event.payload.phase === "end" || event.payload.phase === "error") &&
       isDefinitiveWorkerTerminalEvent(event)
     ) {
+      const data = prepareWorkerLiveEventData(event);
       const failed = event.payload.phase === "error";
       const interrupted = event.payload.aborted === true;
       recorder.recordEvent("model.completed", {
@@ -109,10 +109,10 @@ export function recordWorkerLiveTrajectoryEvent(
         ...data,
         status: interrupted ? "interrupted" : failed ? "error" : "success",
       });
-      recorded = true;
+    } else {
+      return;
     }
-  }
-  if (!recorded) {
+  } else {
     return;
   }
   // Live delivery is authoritative; trajectory diagnostics must never reject a

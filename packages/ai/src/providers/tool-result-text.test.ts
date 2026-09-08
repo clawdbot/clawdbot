@@ -85,14 +85,46 @@ describe("extractToolResultText", () => {
     ).toBe(`head\n${expected}`);
   });
 
-  it.each([
-    { text: "x".repeat(8_000), expected: "x".repeat(8_000) },
-    { text: `${"x".repeat(7_999)}😀`, expected: `${"x".repeat(7_999)}\n…(truncated)…` },
-    { text: `${"x".repeat(8_000)}😀`, expected: `${"x".repeat(8_000)}\n…(truncated)…` },
-  ])("preserves UTF-16 at the included-text cap: $#", ({ text, expected }) => {
-    const blocks = [{ type: "text", text }];
-    expect(extractToolResultText(blocks, { includeStructured: true })).toBe(expected);
-    expect(extractToolResultText(blocks)).toBe(text);
+  it.each([7_999, 8_000])(
+    "preserves explicit continuation text beyond %i UTF-16 units",
+    (length) => {
+      const text = `${"x".repeat(length)}😀\n[More content follows. Use offset=225 to continue.]\n`;
+      const blocks = [{ type: "text", text }];
+      expect(extractToolResultText(blocks, { includeStructured: true })).toBe(text);
+      expect(extractToolResultText(blocks)).toBe(text);
+    },
+  );
+
+  it("bounds and redacts aggregate structured additions without truncating explicit text", () => {
+    const explicit = `${"numbered file row\n".repeat(900)}[Use offset=225 to continue.]\n`;
+    const tail = "  final explicit block 😀  ";
+    const result = extractToolResultText(
+      [
+        {
+          type: "json",
+          bytes: [1, 2, 3],
+          encrypted_content: "opaque-ciphertext",
+          preview: "data:image/png;base64,AAECAwQFBgc=",
+          value: "x".repeat(5_000),
+        },
+        { type: "text", text: explicit },
+        { type: "json", value: "😀".repeat(5_000) },
+        { type: "text", text: tail },
+      ],
+      { includeStructured: true },
+    );
+
+    const prefix = `${explicit}\n${tail}\n`;
+    expect(result.startsWith(prefix)).toBe(true);
+    const structured = result.slice(prefix.length);
+    expect(structured.length).toBeLessThanOrEqual(8_000 + "\n…(truncated)…".length);
+    expect(structured).toContain("…(truncated)…");
+    expect(structured).toContain("[omitted bytes]");
+    expect(structured).toContain("[omitted encrypted_content]");
+    expect(structured).toContain("[inline data URI:");
+    expect(structured).not.toContain("opaque-ciphertext");
+    expect(structured).not.toContain("AAECAwQFBgc=");
+    expect(() => encodeURIComponent(result)).not.toThrow();
   });
 
   it("keeps media-only blocks out of provider replay text", () => {

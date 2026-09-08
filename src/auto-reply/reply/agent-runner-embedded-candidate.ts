@@ -7,6 +7,7 @@ import type {
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveOpenAIRuntimeProvider } from "../../agents/openai-routing.js";
+import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
 import { resolveGroupSessionKey } from "../../config/sessions.js";
 import {
   isTrustedMessageActionTurnIngress,
@@ -27,6 +28,7 @@ import {
   createAgentRunEventHandler,
   type MessageToolDeliveryState,
 } from "./agent-runner-event-handler.js";
+import type { CompletedAgentAuthSelection } from "./agent-runner-execution.types.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
@@ -43,8 +45,6 @@ export async function runEmbeddedFallbackCandidate(
     getLifecycleGeneration: () => string;
     onLifecycleGeneration: (generation: string) => void;
     allowTransientCooldownProbe?: boolean;
-    suppressAssistantErrorPersistenceForCandidate: boolean;
-    onAssistantErrorMessagePersisted: () => void;
     notifyUserAboutCompaction: boolean;
     messageToolDeliveryState: MessageToolDeliveryState;
     githubPublicationAvailable: boolean;
@@ -55,9 +55,13 @@ export async function runEmbeddedFallbackCandidate(
   },
 ): Promise<{
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
+  maintenanceAuthProfile?: CompletedAgentAuthSelection;
+  compactionRequestBudget?: CompactionRequestBudget;
   bootstrapPromptWarningSignaturesSeen: string[];
 }> {
   const turn = params.turn;
+  let maintenanceAuthProfile: CompletedAgentAuthSelection | undefined;
+  let compactionRequestBudget: CompactionRequestBudget | undefined;
   const sourceReplyDeliveryRuntime = readSourceReplyDeliveryRuntime(params.candidateRun);
   const candidateRun = {
     ...params.candidateRun,
@@ -206,8 +210,7 @@ export async function runEmbeddedFallbackCandidate(
         onUserMessagePersisted: params.notifyUserMessagePersisted,
         suppressTranscriptOnlyAssistantPersistence:
           turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
-        suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistenceForCandidate,
-        onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
+        assistantErrorTranscript: params.assistantErrorTranscript,
         prepareAssistantTranscriptMessage: turn.opts?.prepareAssistantTranscriptMessage,
         onAutoCompactionSucceeded: (count) => {
           attemptCompactionCount = Math.max(attemptCompactionCount, count);
@@ -232,6 +235,9 @@ export async function runEmbeddedFallbackCandidate(
         deferTerminalLifecycle: true,
         onCompactionAccounting: (fact) => {
           compactionAccounting = fact;
+        },
+        onCompactionRequestBudget: (budget) => {
+          compactionRequestBudget = budget;
         },
         onDeferredLifecycleOwner: params.deferredLifecycle.adopt,
         onDeferredLifecycleAbort: params.deferredLifecycle.abort,
@@ -374,12 +380,24 @@ export async function runEmbeddedFallbackCandidate(
             })()
           : undefined,
       };
+      embeddedRunParams.onSuccessfulAuthProfile = (profileId) => {
+        maintenanceAuthProfile = {
+          authProfileId: profileId,
+          authProfileIdSource: profileId
+            ? profileId === runBaseParams.authProfileId
+              ? runBaseParams.authProfileIdSource
+              : "auto"
+            : undefined,
+        };
+      };
       return runEmbeddedAgent(embeddedRunParams);
     });
     const resultCompactionCount = Math.max(0, result.meta?.agentMeta?.compactionCount ?? 0);
     attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
     return {
       result,
+      maintenanceAuthProfile,
+      compactionRequestBudget,
       bootstrapPromptWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeen(
         result.meta?.systemPromptReport,
       ),

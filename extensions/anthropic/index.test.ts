@@ -1457,7 +1457,7 @@ describe("anthropic provider replay hooks", () => {
   ] as const)(
     "publishes native Claude auth only when its CLI reports $status",
     async ({ status, authenticated }) => {
-      probeClaudeCliAuthStatusMock.mockReturnValue({ status });
+      probeClaudeCliAuthStatusMock.mockResolvedValue({ status });
       const provider = await registerSingleProviderPlugin(anthropicPlugin);
       const config = {};
 
@@ -1483,7 +1483,7 @@ describe("anthropic provider replay hooks", () => {
       expect(
         await provider.prepareSyntheticAuth?.({ provider: "claude-cli" } as never),
       ).toBeUndefined();
-      expect(probeClaudeCliAuthStatusMock).toHaveBeenCalledTimes(2);
+      expect(probeClaudeCliAuthStatusMock).toHaveBeenCalledOnce();
     },
   );
 

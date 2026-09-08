@@ -476,6 +476,11 @@ describe("resolvePluginProviders", () => {
       resolveRuntimePluginRegistry: (...args: Parameters<ResolveRuntimePluginRegistry>) =>
         resolveRuntimePluginRegistryMock(...args),
     }));
+    vi.doMock("./providers.runtime.js", async () => {
+      const { createProviderRegistryResolver } = await import("./providers.runtime-core.js");
+      const loader = await import("./loader.js");
+      return createProviderRegistryResolver(loader);
+    });
     vi.doMock("../config/plugin-auto-enable.js", () => ({
       applyPluginAutoEnable: (...args: Parameters<ApplyPluginAutoEnable>) =>
         applyPluginAutoEnableMock(...args),

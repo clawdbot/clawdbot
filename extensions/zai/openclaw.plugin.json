@@ -28,6 +28,9 @@
     ]
   },
   "modelCatalog": {
+    "modelsDev": {
+      "zai": "zai"
+    },
     "providers": {
       "zai": {
         "baseUrl": "https://api.z.ai/api/paas/v4",

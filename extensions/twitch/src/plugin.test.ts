@@ -88,6 +88,12 @@ describe("twitchPlugin.status.buildAccountSnapshot", () => {
 });
 
 describe("twitchPlugin.config", () => {
+  it("reloads channel settings through the same runtime and setup owner", () => {
+    for (const plugin of [twitchPlugin, twitchSetupPlugin]) {
+      expect(plugin.reload).toEqual({ configPrefixes: ["channels.twitch"] });
+    }
+  });
+
   it("uses configured defaultAccount for omitted-account plugin resolution", () => {
     const cfg = {
       channels: {

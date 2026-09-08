@@ -104,7 +104,7 @@ Environment variables:
 ## Development
 - Format: `./scripts/format.sh` (uses the repository SwiftFormat policy)
 - Lint: `./scripts/lint.sh` (uses local `.swiftlint.yml`)
-- Tests: `swift test` (uses swift-testing package)
+- Tests: `swift test` (XCTest)
 
 ## Roadmap
 - launchd control (load/bootout, PID + status socket)

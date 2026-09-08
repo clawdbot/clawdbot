@@ -1,13 +1,15 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { EvalFlags, QuickJS, type Snapshot } from "quickjs-wasi";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { observeWorkerActivity } from "../../test/helpers/worker-activity.js";
 import * as workerUrls from "../infra/runtime-worker-url.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
+import { CODE_MODE_CONTROLLER_SOURCE } from "./code-mode-controller-source.js";
 import { CodeModeOutputState, EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
 import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { resolveCodeModeConfig, toToolSearchConfig } from "./code-mode-runtime.js";
@@ -80,6 +82,102 @@ afterEach(() => {
 });
 
 describe("Code Mode worker lifecycle", () => {
+  it("preserves legacy snapshot errors without source-location metadata", async () => {
+    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+    const wasm = await WebAssembly.compile(
+      await readFile(createRequire(import.meta.url).resolve("quickjs-wasi/quickjs.wasm")),
+    );
+    const vm = await QuickJS.create({ wasm, memoryLimit: config.memoryLimitBytes });
+    let snapshot: Snapshot;
+    try {
+      vm.newFunction("__openclawHostRequest", (_method, _args, id) =>
+        vm.newString(id.toString()),
+      ).consume((handle) => vm.global.setProp("__openclawHostRequest", handle));
+      vm.newFunction("__openclawHostCancelRequest", () => vm.undefined).consume((handle) =>
+        vm.global.setProp("__openclawHostCancelRequest", handle),
+      );
+      for (const [name, value] of Object.entries({
+        __openclawCatalog: [],
+        __openclawNamespaces: [],
+        __openclawApiFiles: [],
+        __openclawSwarmEnabled: false,
+        __openclawMaxPendingToolCalls: config.maxPendingToolCalls,
+      })) {
+        vm.hostToHandle(value).consume((handle) => vm.global.setProp(name, handle));
+      }
+      vm.evalCode(CODE_MODE_CONTROLLER_SOURCE, "openclaw-code-mode:controller.js").dispose();
+      // The previous worker wrapped the same program without recording its source coordinates.
+      vm.evalCode(
+        'globalThis.__openclawResult = (async () => {\nawait yield_control();\nthrow new Error("legacy failure");\n})()',
+        "openclaw-code-mode:user.js",
+        EvalFlags.ASYNC,
+      ).dispose();
+      vm.executePendingJobs();
+      snapshot = vm.snapshot();
+    } finally {
+      vm.dispose();
+    }
+    const result = await runCodeModeWorker(
+      {
+        kind: "resume",
+        snapshot,
+        config,
+        settledRequests: [{ id: "bridge:yield:1", ok: true, value: null }],
+      },
+      10000,
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("Error: legacy failure"),
+    });
+    if (result.status !== "failed") {
+      throw new Error("Expected legacy guest failure");
+    }
+    expect(result.error).toMatch(/openclaw-code-mode:user\.js:3:\d+/);
+  });
+
+  it.each(["const helper = 1;", "const helper = 'é🦞';"])(
+    "accounts for a same-line prelude in syntax locations: %s",
+    async (prelude) => {
+      const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+      const result = await runCodeModeWorker(
+        {
+          kind: "exec",
+          source: "const value = ;",
+          prelude,
+          config,
+          catalog: [],
+          namespaces: [],
+        },
+        10000,
+      );
+      expect(result).toMatchObject({
+        status: "failed",
+        error: expect.stringContaining("SyntaxError"),
+      });
+      if (result.status !== "failed") {
+        throw new Error("Expected guest syntax failure");
+      }
+      expect(result.error).toContain("openclaw-code-mode:user.js:1:15");
+    },
+  );
+
+  it("does not attribute a prelude failure to submitted source", async () => {
+    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+    const result = await runCodeModeWorker(
+      {
+        kind: "exec",
+        source: "return true;",
+        prelude: 'throw new Error("prelude failure");\n',
+        config,
+        catalog: [],
+        namespaces: [],
+      },
+      10000,
+    );
+    expect(result).toMatchObject({ status: "failed", error: "Error: prelude failure" });
+  });
+
   it("transfers snapshot heaps across resumes without storage codec copies", async () => {
     const tempDirs = useAutoCleanupTempDirTracker(onTestFinished);
     const dir = tempDirs.make("code-mode-snapshot-transfer-");

@@ -38,6 +38,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "sessionDiffBaselineCapture",
   "worktree",
   "projectId",
+  "repositoryWorkspaceId",
   "pendingProjectGitUrl",
   "pendingWorktree",
   "parentSessionKey",
@@ -159,6 +160,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "transcriptByteCompactionLatch",
   "compactionCheckpoints",
   "memoryFlush",
+  "cliHistoryBoundary",
   "cliSessionIds",
   "cliSessionBindings",
   "acpSessionBinding",
@@ -183,6 +185,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "quotaSuspension",
   "pendingTranscriptRepair",
   "visibility",
+  "publicShare",
 ] as const satisfies ReadonlyArray<
   keyof SessionEntry | "__proto__" | "constructor" | "prototype" | "sessionFile" | "transcriptPath"
 >;

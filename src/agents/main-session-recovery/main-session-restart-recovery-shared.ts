@@ -8,10 +8,7 @@ import {
   type InternalSessionEntry as SessionEntry,
   resolveAllAgentSessionStoreTargetsSync,
 } from "../../config/sessions.js";
-import {
-  hasSessionEntriesByStatusReadOnly,
-  type SessionTranscriptTurnExpectedState,
-} from "../../config/sessions/session-accessor.js";
+import { hasSessionEntriesByStatusReadOnly } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveAgentSessionDirs } from "../session-dirs.js";
@@ -29,31 +26,6 @@ export type ExpectedRestartRecoveryTarget = {
 export type ExhaustedRestartRecoveryTarget = ExpectedRestartRecoveryTarget & {
   storePath: string;
 };
-
-export function buildRestartRecoveryExpectedState(
-  entry: SessionEntry,
-  mainRestartRecovery?: { cycleId: string; revision: number },
-): SessionTranscriptTurnExpectedState {
-  const expectedMainRestartRecovery = mainRestartRecovery ?? entry.mainRestartRecovery;
-  return {
-    abortedLastRun: entry.abortedLastRun,
-    mainRestartRecoveryCycleId: expectedMainRestartRecovery?.cycleId,
-    mainRestartRecoveryRevision: expectedMainRestartRecovery?.revision,
-    restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
-    restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
-    restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
-    restartRecoveryDeliveryRequestFingerprint: entry.restartRecoveryDeliveryRequestFingerprint,
-    restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
-    restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
-    restartRecoveryRequesterAccountId: entry.restartRecoveryRequesterAccountId,
-    restartRecoveryRequesterSenderId: entry.restartRecoveryRequesterSenderId,
-    restartRecoverySameChannelThreadRequired: entry.restartRecoverySameChannelThreadRequired,
-    restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
-    restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
-    restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
-    status: entry.status,
-  };
-}
 
 export function resolveRestartRecoveryTerminalClientRunId(
   entry: Pick<SessionEntry, "restartRecoveryDeliverySourceRunId" | "restartRecoverySourceIngress">,

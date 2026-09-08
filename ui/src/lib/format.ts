@@ -30,20 +30,40 @@ type FormatRelativeTimestampOptions = {
   suffix?: boolean;
 };
 
+let localeFormatters:
+  | {
+      locale: string;
+      units: Partial<Record<DurationPart["unit"], Intl.NumberFormat>>;
+      relative?: Intl.RelativeTimeFormat;
+    }
+  | undefined;
+
+function getLocaleFormatters() {
+  const locale = i18n.getLocale();
+  // Keep one locale's closed unit set; switching languages releases the old
+  // formatters without retaining labels or subscribing to component lifetimes.
+  if (localeFormatters?.locale !== locale) {
+    localeFormatters = { locale, units: {} };
+  }
+  return localeFormatters;
+}
+
 export function formatUnit({ value, unit }: DurationPart): string {
-  return new Intl.NumberFormat(i18n.getLocale(), {
+  const formatters = getLocaleFormatters();
+  return (formatters.units[unit] ??= new Intl.NumberFormat(formatters.locale, {
     style: "unit",
     unit,
     unitDisplay: "narrow",
     maximumFractionDigits: 0,
-  }).format(value);
+  })).format(value);
 }
 
 function formatRelative(value: number, unit: RelativeTimeUnit): string {
-  return new Intl.RelativeTimeFormat(i18n.getLocale(), {
+  const formatters = getLocaleFormatters();
+  return (formatters.relative ??= new Intl.RelativeTimeFormat(formatters.locale, {
     numeric: "auto",
     style: "narrow",
-  }).format(value, unit);
+  })).format(value, unit);
 }
 
 export function formatTimeAgo(

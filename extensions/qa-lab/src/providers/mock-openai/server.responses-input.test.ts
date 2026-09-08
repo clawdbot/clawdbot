@@ -59,6 +59,11 @@ describe("mock Responses input text", () => {
       ],
       requestKind: "agent-initial",
     },
+    {
+      name: "empty authored turn fences earlier QA",
+      laterInput: [{ role: "user", content: [] }],
+      requestKind: "agent-initial",
+    },
   ])("$name", async ({ laterInput, requestKind }) => {
     const server = await startQaMockOpenAiServer({ host: "127.0.0.1", port: 0 });
     try {
@@ -71,7 +76,12 @@ describe("mock Responses input text", () => {
           input: [
             {
               role: "user",
-              content: [{ type: "input_text", text: "Summarize the fixture result." }],
+              content: [
+                {
+                  type: "input_text",
+                  text: "Tool progress QA check: read `QA.md` before answering.",
+                },
+              ],
             },
             {
               type: "function_call",
@@ -91,6 +101,9 @@ describe("mock Responses input text", () => {
         res.json(),
       );
       expect(snapshot).toMatchObject({ requestKind });
+      if (requestKind === "agent-initial") {
+        expect(snapshot).not.toHaveProperty("plannedToolName");
+      }
     } finally {
       await server.stop();
     }

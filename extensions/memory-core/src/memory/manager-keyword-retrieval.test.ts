@@ -29,7 +29,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "none",
       minScore: 0.35,
-      hybrid: { enabled: true },
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
@@ -57,10 +56,110 @@ describe("memory index", () => {
     expect(noResults.length).toBe(0);
   });
 
+  it.each(["keyword-only", "lexical-only", "hybrid"] as const)(
+    "preserves relaxed global lexical recall with active projects in %s search",
+    async (mode) => {
+      providerFixture.forceNoProvider = mode === "keyword-only";
+      const manager = await getPersistentManager(
+        createCfg({ provider: mode === "keyword-only" ? "none" : undefined, minScore: 0.35 }),
+      );
+      expect(manager.status().fts?.available).toBe(true);
+      await fs.writeFile(
+        path.join(fixture.paths.memory, "2000-01-01.md"),
+        "Quokka archive detail.",
+      );
+      await manager.sync({ reason: "test" });
+
+      for (const activeProjectKeys of [undefined, ["unrelated-project"]]) {
+        const options = {
+          maxResults: 1,
+          activeProjectKeys,
+          lexicalOnly: mode === "lexical-only",
+        };
+        await expect(manager.search("unfindabletermxyz", options)).resolves.toEqual([]);
+        const partials: Array<Awaited<ReturnType<typeof manager.search>> | null> = [];
+        const results = await manager.search("quokka", {
+          ...options,
+          onPartialResults: (snapshot) => partials.push(snapshot),
+        });
+        expect(
+          results,
+          `activeProjectKeys=${JSON.stringify(activeProjectKeys ?? [])}`,
+        ).toHaveLength(1);
+        expect(results[0]).toMatchObject({
+          path: "memory/2000-01-01.md",
+          source: "memory",
+          snippet: expect.stringContaining("Quokka archive detail."),
+        });
+        expect(results[0]?.projectKey).toBeUndefined();
+        expect(results[0]?.score).toBeGreaterThan(0);
+        expect(results[0]?.score).toBeLessThan(0.35);
+        if (mode === "hybrid") {
+          expect(partials).toEqual([[expect.objectContaining({ path: "memory/2000-01-01.md" })]]);
+        }
+      }
+    },
+  );
+
+  it("keeps lexical spare capacity behind strict hybrid hits with active projects", async () => {
+    const manager = await getPersistentManager(createCfg({ minScore: 0.35 }));
+    expect(manager.status().fts?.available).toBe(true);
+    await fs.writeFile(path.join(fixture.paths.memory, "current.md"), "Current quokka detail.");
+    await fs.writeFile(path.join(fixture.paths.memory, "2000-01-01.md"), "Current archive detail.");
+    await manager.sync({ reason: "test" });
+
+    for (const activeProjectKeys of [undefined, ["unrelated-project"]]) {
+      const results = await manager.search("current", { maxResults: 2, activeProjectKeys });
+      expect(
+        results.map((entry) => entry.path),
+        `activeProjectKeys=${JSON.stringify(activeProjectKeys ?? [])}`,
+      ).toEqual(["memory/current.md", "memory/2000-01-01.md"]);
+      expect(results[0]?.score).toBeGreaterThanOrEqual(0.35);
+      expect(results[1]?.score).toBeLessThan(0.35);
+      expect(results[1]).toMatchObject({ vectorScore: 0 });
+      const limited = await manager.search("current", { maxResults: 1, activeProjectKeys });
+      expect(limited.map((entry) => entry.path)).toEqual(["memory/current.md"]);
+    }
+  });
+
+  it("keeps the strict threshold for semantic-only hits with active projects", async () => {
+    const manager = await getPersistentManager(createCfg({ minScore: 0.35 }));
+    expect(manager.status().fts?.available).toBe(true);
+    await fs.writeFile(path.join(fixture.paths.memory, "current.md"), "Alpha current detail.");
+    await fs.writeFile(path.join(fixture.paths.memory, "2000-01-01.md"), "Alpha archive detail.");
+    await manager.sync({ reason: "test" });
+
+    // The fixture embeds the alpha substring, while FTS requires the complete alphabet token.
+    for (const activeProjectKeys of [undefined, ["unrelated-project"]]) {
+      const candidates = await manager.search("alphabet", {
+        maxResults: 6,
+        minScore: 0,
+        activeProjectKeys,
+      });
+      expect(candidates).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: "memory/2000-01-01.md",
+            vectorScore: 1,
+            textScore: 0,
+          }),
+        ]),
+      );
+      const partials: Array<Awaited<ReturnType<typeof manager.search>> | null> = [];
+      const results = await manager.search("alphabet", {
+        maxResults: 6,
+        activeProjectKeys,
+        onPartialResults: (snapshot) => partials.push(snapshot),
+      });
+      expect(results.map((entry) => entry.path)).toEqual(["memory/current.md"]);
+      expect(results[0]?.score).toBeGreaterThanOrEqual(0.35);
+      expect(partials).toEqual([]);
+    }
+  });
+
   it.each([
     {
       name: "slug path stem",
-      config: { hybrid: { enabled: true } },
       exactFile: "project-lantern.md",
       bodyText: "Project lantern project lantern project lantern.",
       query: "project-lantern",
@@ -68,7 +167,6 @@ describe("memory index", () => {
     },
     {
       name: "dated path stem",
-      config: {},
       exactFile: "2020-01-01.md",
       bodyText: "2020 01 01 2020 01 01 2020 01 01",
       query: "2020-01-01",
@@ -79,7 +177,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "none",
       minScore: 0.35,
-      ...testCase.config,
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
@@ -102,12 +199,93 @@ describe("memory index", () => {
     expect(results[0]?.score).toBe(1);
   });
 
+  it.each(["keyword-only", "lexical-only", "hybrid"] as const)(
+    "preserves exact-file precedence and project scores in %s search",
+    async (mode) => {
+      providerFixture.forceNoProvider = mode === "keyword-only";
+      const manager = await getPersistentManager(
+        createCfg({ provider: mode === "keyword-only" ? "none" : undefined, minScore: 0 }),
+      );
+      expect(manager.status().fts?.available).toBe(true);
+      await fs.writeFile(
+        path.join(fixture.paths.workspace, "MEMORY.md"),
+        "- Unrelated exact-path body. <!-- project: active-project -->",
+      );
+      await fs.writeFile(
+        path.join(fixture.paths.workspace, "USER.md"),
+        "- MEMORY.md reference MEMORY.md reference MEMORY.md reference. <!-- importance: 10 -->",
+      );
+      for (let index = 0; index < 20; index += 1) {
+        await fs.writeFile(
+          path.join(fixture.paths.memory, `noise-${index}.md`),
+          "Unrelated daily record includes useful history and background context.",
+        );
+      }
+      await manager.sync({ reason: "test" });
+
+      for (const [activeProjectKeys, score] of [
+        [undefined, 1],
+        [["unrelated-project"], 0.9],
+        [["active-project"], 1.15],
+      ] as const) {
+        const partials: Array<Awaited<ReturnType<typeof manager.search>> | null> = [];
+        const results = await manager.search("MEMORY.md", {
+          maxResults: 1,
+          activeProjectKeys: activeProjectKeys ? [...activeProjectKeys] : undefined,
+          lexicalOnly: mode === "lexical-only",
+          onPartialResults: (snapshot) => partials.push(snapshot),
+        });
+        expect(results).toHaveLength(1);
+        expect(results[0]?.path).toBe("MEMORY.md");
+        expect(results[0]?.score).toBeCloseTo(score);
+        if (mode === "hybrid") {
+          expect(partials).toEqual([[expect.objectContaining({ path: "MEMORY.md", score })]]);
+        }
+      }
+    },
+  );
+
+  it.each(["keyword-only", "hybrid"] as const)(
+    "keeps qualifying project hits before truncating the %s search window",
+    async (mode) => {
+      providerFixture.forceNoProvider = mode === "keyword-only";
+      const manager = await getPersistentManager(
+        createCfg({ provider: mode === "keyword-only" ? "none" : undefined, minScore: 1 }),
+      );
+      await fs.writeFile(
+        path.join(fixture.paths.workspace, "MEMORY.md"),
+        [
+          ...Array.from(
+            { length: 4 },
+            (_, index) =>
+              `- MEMORY.md MEMORY.md MEMORY.md reference ${index}. <!-- importance: 10 --> <!-- project: foreign-project -->`,
+          ),
+          "- MEMORY.md archive context includes history and preferences for the selected workspace. <!-- importance: 1 --> <!-- project: active-project -->",
+        ].join("\n"),
+      );
+      await manager.sync({ reason: "test" });
+
+      const partials: Array<Awaited<ReturnType<typeof manager.search>> | null> = [];
+      const results = await manager.search("MEMORY.md", {
+        maxResults: 1,
+        activeProjectKeys: ["active-project"],
+        onPartialResults: (snapshot) => partials.push(snapshot),
+      });
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({ projectKey: "active-project", score: 1.15 });
+      if (mode === "hybrid") {
+        expect(partials).toEqual([
+          [expect.objectContaining({ projectKey: "active-project", score: 1.15 })],
+        ]);
+      }
+    },
+  );
+
   it("does not let fallback-term filenames consume the candidate cap", async () => {
     providerFixture.forceNoProvider = true;
     const cfg = createCfg({
       provider: "none",
       minScore: 0,
-      hybrid: { enabled: true },
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
@@ -135,9 +313,7 @@ describe("memory index", () => {
 
   it("bounds the merged six-term fallback candidate set", async () => {
     providerFixture.forceNoProvider = true;
-    const manager = await getPersistentManager(
-      createCfg({ provider: "none", minScore: 0, hybrid: { enabled: true } }),
-    );
+    const manager = await getPersistentManager(createCfg({ provider: "none", minScore: 0 }));
     const terms = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"];
     for (const term of terms) {
       for (let index = 0; index < 5; index += 1) {
@@ -157,9 +333,7 @@ describe("memory index", () => {
 
   it("counts exact candidate headroom by distinct path instead of chunk", async () => {
     providerFixture.forceNoProvider = true;
-    const manager = await getPersistentManager(
-      createCfg({ provider: "none", minScore: 0, hybrid: { enabled: true } }),
-    );
+    const manager = await getPersistentManager(createCfg({ provider: "none", minScore: 0 }));
     for (let index = 0; index < 200; index += 1) {
       const dir = path.join(fixture.paths.memory, index.toString().padStart(3, "0"));
       await fs.mkdir(dir, { recursive: true });
@@ -179,7 +353,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "none",
       minScore: 0,
-      hybrid: { enabled: true },
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
@@ -197,10 +370,16 @@ describe("memory index", () => {
     await fs.writeFile(path.join(strongDir, "foo.md"), "foo md foo md foo md strong body");
     await manager.sync({ reason: "test" });
 
-    const results = await manager.search("foo.md", { maxResults: 1, minScore: 0 });
-    expect(results).toHaveLength(1);
-    expect(results[0]?.path).toContain("memory/z/foo.md");
-    expect(results[0]?.score).toBe(1);
+    for (const activeProjectKeys of [undefined, ["unrelated-project"]]) {
+      const results = await manager.search("foo.md", {
+        maxResults: 1,
+        minScore: 0,
+        activeProjectKeys,
+      });
+      expect(results).toHaveLength(1);
+      expect(results[0]?.path).toContain("memory/z/foo.md");
+      expect(results[0]?.score).toBe(1);
+    }
   });
 
   it("returns exact basename candidates with fixed FTS ranking", async () => {
@@ -350,7 +529,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "none",
       minScore: 0,
-      hybrid: { enabled: true },
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
@@ -393,7 +571,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "none",
       minScore: 0,
-      hybrid: { enabled: true },
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
@@ -467,36 +644,45 @@ describe("memory index", () => {
     }
   });
 
-  it("ranks substring-only recall without reporting perfect confidence", async () => {
-    providerFixture.forceNoProvider = true;
-    const manager = await getPersistentManager(
-      createCfg({
-        provider: "none",
-        ftsTokenizer: "trigram",
-        minScore: 0,
-        hybrid: { enabled: true },
-      }),
-    );
-    if (!manager.status().fts?.available) {
-      return;
-    }
-    await fs.writeFile(path.join(fixture.paths.memory, "a-weak.md"), "记忆 alpha beta gamma");
-    await fs.writeFile(path.join(fixture.paths.memory, "z-strong.md"), "记忆");
-    await manager.sync({ reason: "test" });
+  it.each([
+    { query: "记忆", text: "记忆" },
+    { query: "UK", text: "uk" },
+    { query: "ΔΕ", text: "δε" },
+    { query: "ΟΣ", text: "οσ" },
+  ])(
+    "ranks substring-only recall for $query without reporting perfect confidence",
+    async ({ query, text }) => {
+      providerFixture.forceNoProvider = true;
+      const manager = await getPersistentManager(
+        createCfg({
+          provider: "none",
+          ftsTokenizer: "trigram",
+          minScore: 0,
+        }),
+      );
+      if (!manager.status().fts?.available) {
+        return;
+      }
+      await fs.writeFile(path.join(fixture.paths.memory, "a-weak.md"), `${text} alpha beta gamma`);
+      await fs.writeFile(path.join(fixture.paths.memory, "z-strong.md"), text);
+      await manager.sync({ reason: "test" });
 
-    const results = await manager.search("记忆", { maxResults: 2, minScore: 0 });
+      const results = await manager.search(query, { maxResults: 2, minScore: 0 });
 
-    expect(results.map((entry) => entry.path)).toEqual(["memory/z-strong.md", "memory/a-weak.md"]);
-    expect(results.every((entry) => entry.score > 0 && entry.score < 1)).toBe(true);
-    expect(results.every((entry) => !("hasBodyMatch" in entry))).toBe(true);
-  });
+      expect(results.map((entry) => entry.path)).toEqual([
+        "memory/z-strong.md",
+        "memory/a-weak.md",
+      ]);
+      expect(results.every((entry) => entry.score > 0 && entry.score < 1)).toBe(true);
+      expect(results.every((entry) => !("hasBodyMatch" in entry))).toBe(true);
+    },
+  );
 
   it("keeps substring-only body ranking within an exact hybrid tier", async () => {
     const manager = await getPersistentManager(
       createCfg({
         ftsTokenizer: "trigram",
         minScore: 0,
-        hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
       }),
     );
     if (!manager.status().fts?.available) {

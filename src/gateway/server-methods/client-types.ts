@@ -32,6 +32,8 @@ export type GatewayClient = {
   connect: ConnectParams;
   /** Transport-owned revocation marker; retained callers have no authority after invalidation. */
   invalidated?: boolean;
+  /** Host-owned transport retirement notification; does not cancel ordinary admitted RPCs. */
+  connectionSignal?: AbortSignal;
   connId?: string;
   presenceKey?: string;
   clientIp?: string;

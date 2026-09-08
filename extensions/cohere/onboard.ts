@@ -7,11 +7,11 @@ const COHERE_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest, "
 
 export const { applyConfig: applyCohereConfig } = createModelCatalogPresetAppliers<[]>({
   primaryModelRef: COHERE_DEFAULT_MODEL_REF,
-  resolveParams: () => ({
+  resolveParams: (cfg) => ({
     providerId: "cohere",
     api: "openai-completions",
     baseUrl: COHERE_BASE_URL,
-    catalogModels: buildCohereCatalogModels(),
+    catalogModels: cfg.models?.mode === "replace" ? buildCohereCatalogModels() : [],
     aliases: [{ modelRef: COHERE_DEFAULT_MODEL_REF, alias: "Cohere Command A+" }],
   }),
 });

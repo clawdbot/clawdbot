@@ -16,7 +16,10 @@ import { showToast } from "../../lib/toast.ts";
 const NOTICE_TRACKER_LIMIT = 256;
 
 export class CriticalObserverNoticeTracker {
-  private readonly seen = new Map<string, { health: string; revision: number }>();
+  private readonly seen = new Map<
+    string,
+    { sessionId?: string; lifecycleRevision?: string; health: string; revision: number }
+  >();
 
   clear(): void {
     this.seen.clear();
@@ -25,6 +28,8 @@ export class CriticalObserverNoticeTracker {
   record(params: {
     sessionKey: string;
     agentId?: string;
+    sessionId?: string;
+    lifecycleRevision?: string;
     health: string;
     revision: number;
   }): boolean {
@@ -33,23 +38,32 @@ export class CriticalObserverNoticeTracker {
       isUiGlobalSessionKey(sessionKey) && params.agentId
         ? `${sessionKey}:${normalizeAgentId(params.agentId)}`
         : sessionKey;
-    const previous = this.seen.get(key);
-    // Gateway revision floors keep revisions session-monotonic across run
-    // rollover, so a gap reliably means this connection missed digest state.
+    const recorded = this.seen.get(key);
+    const previous =
+      recorded?.sessionId === params.sessionId &&
+      recorded?.lifecycleRevision === params.lifecycleRevision
+        ? recorded
+        : undefined;
+    // Revision floors span runs within one lifecycle; a reset starts new notice history.
     if (previous && params.revision <= previous.revision) {
       return false;
     }
     const shouldAnnounce =
       isCriticalObserverHealth(params.health) &&
       (!previous || previous.health !== params.health || params.revision > previous.revision + 1);
-    if (!previous && this.seen.size >= NOTICE_TRACKER_LIMIT) {
+    if (!recorded && this.seen.size >= NOTICE_TRACKER_LIMIT) {
       const oldest = this.seen.keys().next().value;
       if (oldest !== undefined) {
         this.seen.delete(oldest);
       }
     }
     this.seen.delete(key);
-    this.seen.set(key, { health: params.health, revision: params.revision });
+    this.seen.set(key, {
+      sessionId: params.sessionId,
+      lifecycleRevision: params.lifecycleRevision,
+      health: params.health,
+      revision: params.revision,
+    });
     return shouldAnnounce;
   }
 }
@@ -72,6 +86,10 @@ export function showCriticalSessionObserverNotice(params: {
   if (
     !sessionKey ||
     !headline ||
+    (digest.sessionId !== undefined &&
+      (typeof digest.sessionId !== "string" || !digest.sessionId.trim())) ||
+    (digest.lifecycleRevision !== undefined &&
+      (typeof digest.lifecycleRevision !== "string" || !digest.lifecycleRevision.trim())) ||
     typeof digest.health !== "string" ||
     revision === undefined ||
     !Number.isInteger(revision) ||
@@ -82,6 +100,8 @@ export function showCriticalSessionObserverNotice(params: {
   const shouldAnnounce = params.tracker.record({
     sessionKey,
     agentId: digest.agentId,
+    sessionId: digest.sessionId,
+    lifecycleRevision: digest.lifecycleRevision,
     health: digest.health,
     revision,
   });
