@@ -6,6 +6,7 @@ import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnv } from "../test-utils/env.js";
 import {
+  appendConfiguredMediaLocalRoots,
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots as getAgentScopedMediaLocalRootsBase,
   getAgentScopedMediaLocalRootsForSources as getAgentScopedMediaLocalRootsForSourcesBase,
@@ -115,6 +116,83 @@ describe("local media roots", () => {
       expectedExcluded: expectedExcluded.map((suffix) => path.join(stateDir, suffix)),
       minLength,
     });
+  });
+
+  it("does not ambient-merge agents.defaults.mediaLocalRoots into generic agent roots", () => {
+    const stateDir = path.join("/tmp", "openclaw-configured-media-roots-state");
+    const extraRoot = process.platform === "win32" ? "C:\\data\\snapshots" : "/data/snapshots";
+    const roots = withStateDir(stateDir, () =>
+      getAgentScopedMediaLocalRoots(
+        {
+          agents: {
+            defaults: {
+              mediaLocalRoots: [extraRoot, `${extraRoot}/`],
+            },
+          },
+        },
+        "ops",
+      ),
+    );
+    expect(roots).not.toContain(extraRoot);
+    expectNormalizedRootsContain(roots, [path.join(stateDir, "workspace-ops")]);
+  });
+
+  it("skips bare ~ and ~/ mediaLocalRoots instead of authorizing the home directory", () => {
+    const home = process.env.HOME || process.env.USERPROFILE;
+    if (!home) {
+      return;
+    }
+    const roots = appendConfiguredMediaLocalRoots([], ["~", "~/", "~/captures"]);
+    expect(roots).not.toContain(path.resolve(home));
+    expect(roots).toContain(path.resolve(home, "captures"));
+  });
+
+  it("skips home-relative entries that normalize back to the home directory", () => {
+    const home = process.env.HOME || process.env.USERPROFILE;
+    if (!home) {
+      return;
+    }
+    // Defense in depth: a value that bypassed schema validation must not widen
+    // the allowlist to the whole home after normalization.
+    const roots = appendConfiguredMediaLocalRoots([], ["~/captures/..", "~/x/../y"]);
+    expect(roots).not.toContain(path.resolve(home));
+    expect(roots).toContain(path.resolve(home, "y"));
+  });
+
+  it("skips filesystem-root mediaLocalRoots instead of authorizing the volume", () => {
+    const stateDir = path.join("/tmp", "openclaw-configured-media-roots-fsroot");
+    const roots = withStateDir(stateDir, () =>
+      getAgentScopedMediaLocalRoots(
+        {
+          agents: {
+            defaults: {
+              mediaLocalRoots: [path.parse(stateDir).root, path.join(path.parse(stateDir).root)],
+            },
+          },
+        },
+        "ops",
+      ),
+    );
+    expect(roots).not.toContain(path.parse(stateDir).root);
+  });
+
+  it("skips relative mediaLocalRoots instead of resolving against cwd", () => {
+    const stateDir = path.join("/tmp", "openclaw-configured-media-roots-relative");
+    const cwdRelative = path.resolve("captures");
+    const roots = withStateDir(stateDir, () =>
+      getAgentScopedMediaLocalRoots(
+        {
+          agents: {
+            defaults: {
+              mediaLocalRoots: ["captures", "./snapshots"],
+            },
+          },
+        },
+        "ops",
+      ),
+    );
+    expect(roots).not.toContain(cwdRelative);
+    expect(roots.some((root) => root.endsWith(`${path.sep}captures`))).toBe(false);
   });
 
   it("adds concrete parent roots for local media sources without widening to filesystem root", () => {

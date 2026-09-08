@@ -270,6 +270,13 @@ export type AgentDefaultsConfig = {
   /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
   mediaMaxMb?: number;
   /**
+   * Extra absolute (or `~/…`) directories outbound MEDIA/local-file delivery may read.
+   * Merged only by the policy-gated outbound resolver for message actions and
+   * selected Telegram delivery paths — not an ambient all-channel grant.
+   * Relative paths are rejected; they must not resolve against the gateway cwd.
+   */
+  mediaLocalRoots?: string[];
+  /**
    * Max image side length (pixels) when sanitizing base64 image payloads in transcripts/tool results.
    * Default: 1200.
    */

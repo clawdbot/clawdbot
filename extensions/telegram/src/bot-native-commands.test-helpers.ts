@@ -30,8 +30,6 @@ type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
 type ResolveChunkModeFn = typeof import("./bot-native-commands.runtime.js").resolveChunkMode;
 type EnsureConfiguredBindingRouteReadyFn =
   typeof import("./bot-native-commands.runtime.js").ensureConfiguredBindingRouteReady;
-type GetAgentScopedMediaLocalRootsFn =
-  typeof import("./bot-native-commands.runtime.js").getAgentScopedMediaLocalRoots;
 type ResolveThreadSessionKeysFn =
   typeof import("./bot-native-commands.runtime.js").resolveThreadSessionKeys;
 type AnyMock = MockFn<(...args: unknown[]) => unknown>;
@@ -60,7 +58,6 @@ const replyPipelineMocks = vi.hoisted(() => {
     ensureConfiguredBindingRouteReady: vi.fn((async () => ({
       ok: true,
     })) as unknown as EnsureConfiguredBindingRouteReadyFn),
-    getAgentScopedMediaLocalRoots: vi.fn<GetAgentScopedMediaLocalRootsFn>(() => []),
     resolveThreadSessionKeys: vi.fn<ResolveThreadSessionKeysFn>(
       ({ baseSessionKey, threadId, parentSessionKey, useSuffix = true, normalizeThreadId }) => {
         const normalizedThreadId =
@@ -116,7 +113,7 @@ vi.mock("./bot-native-commands.runtime.js", () => ({
   finalizeInboundContext: replyPipelineMocks.finalizeInboundContext,
   resolveChunkMode: replyPipelineMocks.resolveChunkMode,
   ensureConfiguredBindingRouteReady: replyPipelineMocks.ensureConfiguredBindingRouteReady,
-  getAgentScopedMediaLocalRoots: replyPipelineMocks.getAgentScopedMediaLocalRoots,
+  resolveNativeCommandOutboundMediaRoots: vi.fn(() => []),
   resolveThreadSessionKeys: replyPipelineMocks.resolveThreadSessionKeys,
 }));
 vi.mock("./bot-native-commands.delivery.runtime.js", () => ({

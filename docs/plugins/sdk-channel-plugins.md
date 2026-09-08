@@ -402,10 +402,12 @@ Inbound attachments use ordered facts, not parallel `Media*` fields. Normalize
 channel records with `toInboundMediaFacts(...)` from
 `openclaw/plugin-sdk/channel-inbound` and pass them as `media` when building the
 inbound context. When a plugin must authorize local media reads, import
-`getAgentScopedMediaLocalRoots(...)` or
-`getAgentScopedMediaLocalRootsForSources(...)` from the focused
-`openclaw/plugin-sdk/media-local-roots` subpath. The old
-`agent-media-payload` builder/root facade is deprecated compatibility.
+`getAgentScopedMediaLocalRoots(...)`,
+`getAgentScopedMediaLocalRootsForSources(...)`, or
+`resolveAgentScopedOutboundMediaAccess(...)` from the focused
+`openclaw/plugin-sdk/media-local-roots` subpath. Prefer that subpath over the
+deprecated `media-runtime` barrel. The old `agent-media-payload` builder/root
+facade is deprecated compatibility.
 
 ### Native payload shaping
 

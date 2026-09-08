@@ -423,10 +423,11 @@ export async function prepareTelegramCommandDispatch(
       return null;
     }
   }
-  const mediaLocalRoots = nativeCommandRuntime.getAgentScopedMediaLocalRoots(
-    runtimeCfg,
-    route.agentId,
-  );
+  const mediaLocalRoots = nativeCommandRuntime.resolveNativeCommandOutboundMediaRoots({
+    cfg: runtimeCfg,
+    route,
+    auth,
+  });
   const tableMode = resolveMarkdownTableMode({
     cfg: runtimeCfg,
     channel: "telegram",

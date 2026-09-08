@@ -255,6 +255,8 @@ vi.mock("./bot-native-commands.runtime.js", () => {
     finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
     getAgentScopedMediaLocalRoots,
     getSessionEntry: sessionMocks.getSessionEntry,
+    resolveAgentScopedOutboundMediaAccess: vi.fn(() => ({ localRoots: [] })),
+    resolveNativeCommandOutboundMediaRoots: vi.fn(() => []),
     resolveChunkMode,
     resolveThreadSessionKeys,
     dispatchChannelInboundTurn: dispatchChannelInboundTurnMock as unknown as NonNullable<
