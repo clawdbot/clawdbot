@@ -50,7 +50,7 @@ describe("settings preference persistence", () => {
     },
   );
 
-  it("keeps live preferences scoped through cross-tab edits, gateway switches, and credential rotation", () => {
+  it("keeps live preferences scoped through cross-tab edits, gateway switches, and credential rotation", async () => {
     setTestLocation({ protocol: "https:", host: "gateway-a.example", pathname: "/" });
     const events = new EventTarget();
     vi.stubGlobal("addEventListener", events.addEventListener.bind(events));
@@ -127,6 +127,7 @@ describe("settings preference persistence", () => {
       resetServerUiPrefsSync();
       theme.dispose();
       gateway.stop();
+      await vi.dynamicImportSettled();
     }
   });
 

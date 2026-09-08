@@ -74,6 +74,7 @@ type EventHandlerContext = {
   tui: EventHandlerTui;
   state: TuiStateAccess;
   setActivityStatus: (text: string) => void;
+  updateFooter: () => void;
   refreshSessionInfo?: () => Promise<void>;
   loadHistory: () => Promise<TuiHistoryLoadResult>;
   noteLocalRunId?: (runId: string) => void;
@@ -593,6 +594,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (isActiveRun) {
         armStreamingWatchdog(evt.runId);
       }
+      context.updateFooter();
       tui.requestRender();
       return;
     }

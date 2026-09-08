@@ -48,6 +48,7 @@ function createDisplayHarness() {
     setActivityStatus: (value) => {
       state.activityStatus = value;
     },
+    updateFooter: vi.fn(),
     loadHistory: async () => ({ loaded: false }),
     streamingWatchdogMs: 0,
   });

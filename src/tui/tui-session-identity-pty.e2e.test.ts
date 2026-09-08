@@ -74,6 +74,84 @@ afterEach(async () => {
   await disposeActiveTuiFixtures();
 });
 
+it("refreshes the footer only for an accepted fallback destination without reloading history", async () => {
+  const fixture = await startTuiFixture({
+    env: {
+      OPENCLAW_TUI_PTY_MODEL: "gpt-4o",
+      OPENCLAW_TUI_PTY_COLS: "100",
+      OPENCLAW_TUI_PTY_ROWS: "30",
+    },
+  });
+  try {
+    await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+    await fixture.run.write("fallback footer proof\r", { delay: false });
+    const before = await waitForSynchronizedFrameRows(
+      fixture.run,
+      (rows) => rows.some((row) => row.includes("FALLBACK_RUN_ACTIVE")),
+      STARTUP_TIMEOUT_MS,
+    );
+    const footerRows = (rows: string[]) =>
+      rows.filter((row) => row.includes("| session main (Main) |"));
+    expect(footerRows(before)).toHaveLength(1);
+    const initialFooter = footerRows(before)[0]!;
+    expect(initialFooter).toContain("gpt-4o");
+    const backendCalls = (entries: FixtureLogEntry[]) =>
+      entries.filter((entry) =>
+        ["loadHistory", "listSessions", "patchSession", "sendChat"].includes(entry.method),
+      );
+    const initialCalls = backendCalls(await readFixtureLog(fixture.logPath));
+    expect(initialCalls.filter((entry) => entry.method === "sendChat")).toHaveLength(1);
+    expect(initialCalls.filter((entry) => entry.method === "patchSession")).toHaveLength(0);
+
+    for (const step of [1, 2, 3]) {
+      await fixture.run.write("/gateway-status\r", { delay: false });
+      const rows = await waitForSynchronizedFrameRows(
+        fixture.run,
+        (frame) => frame.some((row) => row.includes(`FALLBACK_EVENT_DELIVERED_${step}`)),
+        STARTUP_TIMEOUT_MS,
+      );
+      const entries = await readFixtureLog(fixture.logPath);
+      const calls = backendCalls(entries);
+      expect(calls).toEqual(initialCalls);
+      expect(entries.findLast((entry) => entry.method === "fallbackSelection")?.payload).toEqual({
+        step,
+        model: "gpt-4o",
+      });
+      expect(footerRows(rows)).toHaveLength(1);
+      console.info(
+        "TUI_FALLBACK_FRAME",
+        JSON.stringify({
+          step,
+          cols: fixture.run.cols,
+          rows: fixture.run.rows,
+          before,
+          frame: rows,
+          event: entries.findLast((entry) => entry.method === "fallbackEvent"),
+          selection: entries.findLast((entry) => entry.method === "fallbackSelection"),
+          initialCalls,
+          calls,
+        }),
+      );
+      if (step < 3) {
+        expect(footerRows(rows)[0]).toBe(initialFooter);
+      } else {
+        expect
+          .soft(footerRows(rows)[0], "TUI_FALLBACK_FOOTER_DESTINATION")
+          .toBe(initialFooter.replace("gpt-4o", "claude-sonnet-4"));
+      }
+    }
+  } finally {
+    try {
+      await fixture.run.write("/exit\r", { delay: false });
+      const exit = await fixture.run.waitForExit();
+      console.info("TUI_FALLBACK_EXIT", JSON.stringify(exit));
+      expect(exit.exitCode).toBe(0);
+      expect(exit.signal ?? 0).toBe(0);
+    } finally {
+      await fixture.cleanup();
+    }
+  }
+}, 65_000);
 it("submits provider-specific thinking labels with one Enter", async () => {
   const fixture = await startTuiFixture({
     env: {

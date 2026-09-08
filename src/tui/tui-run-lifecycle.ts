@@ -181,10 +181,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     if (event.stream !== "lifecycle" || formatPrimitiveString(data.phase, "") !== "fallback_step") {
       return false;
     }
-    if (typeof data.fallbackStepToModel !== "string") {
-      return false;
-    }
-    const modelRef = data.fallbackStepToModel.trim();
+    const modelRef = formatPrimitiveString(data.fallbackStepToModel).trim();
     const separator = modelRef.indexOf("/");
     if (separator <= 0 || separator >= modelRef.length - 1) {
       return false;

@@ -178,6 +178,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     const btw = createMockBtwPresenter();
     const tui = { requestRender: vi.fn() } as unknown as MockTui & HandlerTui;
     const setActivityStatus = vi.fn();
+    const updateFooter = vi.fn();
     const loadHistory = vi.fn<() => Promise<TuiHistoryLoadResult>>(async () => ({
       loaded: true,
       runOutcome: { state: "completed" },
@@ -203,6 +204,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       tui,
       state,
       setActivityStatus,
+      updateFooter,
       loadHistory,
       noteLocalRunId,
       noteLocalBtwRunId,
@@ -232,6 +234,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       state,
       localMode: params?.localMode,
       setActivityStatus: context.setActivityStatus,
+      updateFooter: context.updateFooter,
       refreshSessionInfo: params?.refreshSessionInfo,
       loadHistory: context.loadHistory,
       noteLocalRunId: context.noteLocalRunId,
@@ -859,8 +862,48 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(setActivityStatus).toHaveBeenCalledWith("error");
   });
 
+  it.each(
+    [
+      null,
+      undefined,
+      true,
+      false,
+      0,
+      1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      {},
+      ["anthropic/claude-sonnet-4"],
+      "",
+      "malformed",
+      "/model",
+      "provider/",
+    ].map((destination) => ({ destination })),
+  )("preserves model state for an invalid reported destination %#", ({ destination }) => {
+    const { state, handleAgentEvent, dispose } = createHandlersHarness({
+      state: {
+        activeChatRunId: "run-invalid-destination",
+        sessionInfo: { modelProvider: "openai", model: "gpt-4o" },
+      },
+    });
+    try {
+      handleAgentEvent({
+        runId: "run-invalid-destination",
+        data: {
+          phase: "fallback_step",
+          fallbackStepToModel: destination,
+        },
+      });
+      expect(state.sessionInfo.modelProvider).toBe("openai");
+      expect(state.sessionInfo.model).toBe("gpt-4o");
+      expect(state.activeChatRunId).toBe("run-invalid-destination");
+    } finally {
+      dispose();
+    }
+  });
+
   it("updates the displayed model from fallback lifecycle steps", () => {
-    const { state, tui, handleAgentEvent } = createHandlersHarness({
+    const { state, tui, updateFooter, handleAgentEvent } = createHandlersHarness({
       state: {
         activeChatRunId: "run-fallback",
         sessionInfo: {
@@ -883,14 +926,18 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(state.sessionInfo.modelProvider).toBe("openrouter");
     expect(state.sessionInfo.model).toBe("meta-llama/llama-3.1-70b");
+    expect(updateFooter).toHaveBeenCalledExactlyOnceWith();
+    expect(updateFooter.mock.invocationCallOrder[0]).toBeLessThan(
+      tui.requestRender.mock.invocationCallOrder.at(-1)!,
+    );
     expect(tui.requestRender).toHaveBeenCalled();
   });
 
-  it("accepts fallback model updates for the pending run before chat registration", () => {
-    const { state, tui, handleAgentEvent } = createHandlersHarness({
+  it.each(["pending", "tracked"])("refreshes the fallback model for a %s run", (ownership) => {
+    const { state, tui, updateFooter, handleAgentEvent } = createHandlersHarness({
       state: {
-        activeChatRunId: null,
-        pendingSubmit: acceptedSubmit("run-pending"),
+        activeChatRunId: ownership === "pending" ? null : "other-active-run",
+        pendingSubmit: ownership === "pending" ? acceptedSubmit("run-pending") : null,
         sessionInfo: {
           verboseLevel: "on",
           modelProvider: "llamaforge",
@@ -898,6 +945,15 @@ describe("tui-event-handlers: handleAgentEvent", () => {
         },
       },
     });
+
+    if (ownership === "tracked") {
+      handleAgentEvent({
+        runId: "run-pending",
+        sessionKey: state.currentSessionKey,
+        data: { phase: "start" },
+      });
+      expect(state.activeChatRunId).toBe("other-active-run");
+    }
 
     handleAgentEvent({
       runId: "run-pending",
@@ -911,6 +967,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(state.sessionInfo.modelProvider).toBe("nvidia");
     expect(state.sessionInfo.model).toBe("deepseek-ai/deepseek-v3.2");
+    expect(updateFooter).toHaveBeenCalledExactlyOnceWith();
     expect(tui.requestRender).toHaveBeenCalled();
   });
 
@@ -3995,6 +4052,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
       tui,
       state,
       setActivityStatus,
+      updateFooter: vi.fn(),
       loadHistory,
       noteLocalRunId,
       isLocalRunId: localRunIds.has.bind(localRunIds),
