@@ -339,6 +339,37 @@ describe("isolated setup inference detection", () => {
     }
   });
 
+  it("abandons a hung worker terminate so a later detect can start", async () => {
+    const { detectSetupInferenceIsolated } = await loadDetectionModule();
+    const terminateSpy = vi.spyOn(Worker.prototype, "terminate");
+    terminateSpy.mockImplementationOnce(() => new Promise(() => {}));
+
+    await expect(
+      detectSetupInferenceIsolated({
+        agentId: "main",
+        workerUrl: silentBlockingWorkerUrl,
+        timeoutMs: 50,
+        fallbackEnv: {},
+      }),
+    ).rejects.toThrow("AI access detection did not finish");
+
+    const fresh = detectedCodex();
+    await expect(
+      detectSetupInferenceIsolated({
+        agentId: "research",
+        workerUrl: blockingWorkerUrl,
+        workerData: {
+          blockMs: 0,
+          detection: fresh,
+          partialDetection: emptyDetection(),
+        },
+        timeoutMs: 5_000,
+        shutdownTimeoutMs: 50,
+        fallbackEnv: {},
+      }),
+    ).resolves.toEqual(fresh);
+  }, 5_000);
+
   it("returns successful worker results unchanged", async () => {
     const { detectSetupInferenceIsolated } = await loadDetectionModule();
     const detected = detectedCodex();
