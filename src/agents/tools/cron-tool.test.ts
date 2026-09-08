@@ -125,6 +125,37 @@ describe("cron tool", () => {
     expect(tool.description).toContain('tz:"Asia/Shanghai"');
   });
 
+  it("documents and forwards automation grouping filters", async () => {
+    const tool = createTestCronTool();
+    callGatewayMock.mockResolvedValueOnce({
+      jobs: [],
+      snapshotRevision: "organization-filter",
+      total: 0,
+      offset: 0,
+      limit: 50,
+      hasMore: false,
+      nextOffset: null,
+    });
+
+    await tool.execute("call-list-organization", {
+      action: "list",
+      group: " Work ",
+      tag: " reports ",
+    });
+
+    expect(readGatewayCall(0)).toEqual({
+      method: "cron.list",
+      params: {
+        includeDisabled: false,
+        compact: true,
+        group: "Work",
+        tag: "reports",
+      },
+    });
+    expect(tool.description).toContain("group is one primary operator-defined label");
+    expect(tool.description).toContain('Use group and tag on action="list" to filter');
+  });
+
   it("supports the promotion creation path: enabled add inherits conversation delivery, then a forced test run", async () => {
     // Promotion flow contract (the guidance itself lives in the system prompt,
     // since the repeat is noticed during ordinary work rather than while

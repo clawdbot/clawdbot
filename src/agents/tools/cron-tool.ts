@@ -174,8 +174,8 @@ function isOlderGatewayWithoutCompactCronList(error: unknown): boolean {
 
 function buildCronToolDescription(params: { triggersEnabled: boolean }): string {
   const addFields = params.triggersEnabled
-    ? "{name?,schedule,payload,sessionTarget?,pacing?,trigger?,delivery?,enabled?}"
-    : "{name?,schedule,payload,sessionTarget?,pacing?,delivery?,enabled?}";
+    ? "{name?,group?,tags?,schedule,payload,sessionTarget?,pacing?,trigger?,delivery?,enabled?}"
+    : "{name?,group?,tags?,schedule,payload,sessionTarget?,pacing?,delivery?,enabled?}";
   const streamScheduleLine = params.triggersEnabled
     ? '\n- {kind:"stream",command:[argv],mode?:"line"|"match",match?}: fires on supervised process output; disabled only when cron.triggers.enabled=false.'
     : "";
@@ -188,11 +188,13 @@ function buildCronToolDescription(params: { triggersEnabled: boolean }): string 
   const silentWatcherCue = params.triggersEnabled ? ' Silent watcher=>mode:"none".' : "";
   return `Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work${params.triggersEnabled ? ", event watchers" : ""}. Never exec sleep/poll as timer.
 
-ACTIONS: status | list [includeDisabled,limit?,offset?] (compact summaries with timing; use nextOffset for the next page) | get jobId (full schedule, payload, and delivery details) | add job | update jobId job (partial: only supplied fields change; null clears) | remove jobId | run jobId (runMode "force"=now) | runs jobId = history | next_check in:"30m" (own paced run only) | wake text mode?:"now"|"next-heartbeat"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).
+ACTIONS: status | list [includeDisabled,group?,tag?,limit?,offset?] (compact summaries with timing; use nextOffset for the next page) | get jobId (full schedule, payload, and delivery details) | add job | update jobId job (partial: only supplied fields change; null clears) | remove jobId | run jobId (runMode "force"=now) | runs jobId = history | next_check in:"30m" (own paced run only) | wake text mode?:"now"|"next-heartbeat"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).
 
 Authenticated Control UI administrator turns can list/get/update/run/remove any Gateway automation. Other turns have a restricted inventory; use a fresh admin Control UI turn or the Automations page for cross-session management.
 
 ADD: ${addFields}. Required: schedule+payload.
+
+ORGANIZATION: group is one primary operator-defined label; tags is an array of repeatable labels. Use group and tag on action="list" to filter. Gateway-owned jobs, including heartbeat jobs, use the read-only effective group "System"; ordinary jobs without a group are "Ungrouped". System is reserved and cannot be assigned by clients.
 
 SCHEDULE:
 - {kind:"at",at:"ISO-8601"} one-shot; no tz=UTC; auto-deletes after successful completion: delivery confirmed, not requested, intentionally silent, or explicitly bestEffort. Failed/unknown required delivery retains it disabled.
@@ -352,6 +354,8 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
             const requestedOffset = selfRemoveOnlyJobId
               ? undefined
               : readNonNegativeIntegerParam(params, "offset");
+            const requestedGroup = readToolStringParam(params, "group")?.trim() || undefined;
+            const requestedTag = readToolStringParam(params, "tag")?.trim() || undefined;
             let useCompactList = true;
             const requestListPage = async (pageParams: Record<string, unknown>) => {
               for (;;) {
@@ -360,6 +364,8 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
                     includeDisabled,
                     ...(useCompactList ? { compact: true } : {}),
                     ...(listAgentId ? { agentId: listAgentId } : {}),
+                    ...(requestedGroup ? { group: requestedGroup } : {}),
+                    ...(requestedTag ? { tag: requestedTag } : {}),
                     ...pageParams,
                   });
                 } catch (error) {

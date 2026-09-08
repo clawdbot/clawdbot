@@ -13,6 +13,25 @@ Automations are OpenClaw's built-in scheduler. The scheduler persists jobs, wake
 
 Manage automations with the `openclaw automations` CLI; `openclaw cron` remains an alias for the same commands.
 
+## Organizing a large inventory
+
+Each automation can have one primary `group` and multiple `tags`. Use a group
+for the broad bucket, such as `GitHub` or `Work`, and tags for
+cross-cutting labels such as `daily`, `reports`, or `alerts`. Groups and tags
+are optional metadata and do not affect scheduling or delivery.
+
+The Control UI can filter by group and display the inventory grouped by group
+or automation type. The CLI supports the same inventory filters:
+
+```bash
+openclaw automations list --group GitHub
+openclaw automations list --tag reports
+```
+
+Gateway-owned jobs are classified into the read-only built-in `System` group
+from their ownership metadata, including heartbeat jobs. This classification is computed
+at read time so upgrades do not rewrite existing system-owned job definitions.
+
 ## Quick start
 
 <Steps>

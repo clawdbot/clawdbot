@@ -64,6 +64,24 @@ that label with `automations add|edit --display-name`. Use
 the stable name in list and detail views. The set and clear options cannot be
 combined.
 
+## Groups and tags
+
+Use one primary `--group` plus any number of repeatable `--tag` values to keep a
+large automation inventory easy to scan:
+
+```bash
+openclaw automations add --every 1h --name "GitHub issue digest" \
+  --message "Summarize new issues" --group GitHub --tag issues --tag daily
+openclaw automations list --group GitHub
+openclaw automations list --tag daily
+```
+
+`--group` is the main application or type label; tags are secondary labels.
+Both are persisted with the job and are searchable from the Control UI. Use
+`automations edit <job-id> --group <name> --tag <tag>` to replace them, or
+`--clear-group` and `--clear-tags` to remove them. `System` is reserved for
+Gateway-owned automations such as heartbeat jobs and is shown automatically.
+
 ## Sessions
 
 `--session` accepts `main`, `isolated`, `current`, or `session:<id>`.

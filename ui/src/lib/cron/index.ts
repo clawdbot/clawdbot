@@ -44,6 +44,8 @@ type CronFormAnnounceDelivery = Extract<CronDelivery, { mode: "announce" }>;
 export type CronFormState = {
   name: string;
   description: string;
+  group: string;
+  tags: string;
   agentId: string;
   sessionKey: string;
   clearAgent: boolean;
@@ -69,6 +71,8 @@ export type CronFormState = {
   // displays it, never submits it.
   payloadKind: CronPayload["kind"];
   payloadLocked: boolean;
+  /** System-owned jobs cannot be assigned operator metadata. */
+  metadataLocked: boolean;
   payloadText: string;
   payloadModel: string;
   payloadThinking: string;
@@ -127,6 +131,15 @@ export function getCronJobPayload(job: CronJob): CronPayload | null {
   return isCronPayload(payload) ? payload : null;
 }
 
+export function getCronJobGroup(job: CronJob): string {
+  // SAFETY: CronJob is an extensible gateway response and older clients may omit this field.
+  const effectiveGroup = (job as CronJob & { effectiveGroup?: unknown }).effectiveGroup;
+  if (typeof effectiveGroup === "string") {
+    return effectiveGroup;
+  }
+  return "Ungrouped";
+}
+
 function hasCronJobPayload(job: CronJob): boolean {
   return getCronJobPayload(job) !== null;
 }
@@ -134,6 +147,8 @@ function hasCronJobPayload(job: CronJob): boolean {
 const DEFAULT_CRON_FORM: CronFormState = {
   name: "",
   description: "",
+  group: "",
+  tags: "",
   agentId: "",
   sessionKey: "",
   clearAgent: false,
@@ -155,6 +170,7 @@ const DEFAULT_CRON_FORM: CronFormState = {
   wakeMode: "now",
   payloadKind: "agentTurn",
   payloadLocked: false,
+  metadataLocked: false,
   payloadText: "",
   payloadModel: "",
   payloadThinking: "",
@@ -218,6 +234,9 @@ export type CronState = {
   cronJobsScheduleKindFilter: CronJobsScheduleKindFilter;
   cronJobsLastStatusFilter: CronJobsLastStatusFilter;
   cronJobsTriggerFilter: CronJobsTriggerFilter;
+  cronJobsGroupFilter: string;
+  cronJobsTagFilter: string;
+  cronJobsGroupBy: "none" | "group" | "type";
   cronJobsSortBy: CronJobsSortBy;
   cronJobsSortDir: CronSortDir;
   cronAgentId: string | null;
@@ -274,6 +293,9 @@ export function createInitialCronState(
     cronJobsScheduleKindFilter: "all",
     cronJobsLastStatusFilter: "all",
     cronJobsTriggerFilter: "all",
+    cronJobsGroupFilter: "",
+    cronJobsTagFilter: "",
+    cronJobsGroupBy: "none",
     cronJobsSortBy: "nextRunAtMs",
     cronJobsSortDir: "asc",
     cronAgentId: null,
@@ -699,6 +721,8 @@ export async function loadCronJobsPage(
       limit: state.cronJobsLimit,
       offset,
       query: state.cronJobsQuery.trim() || undefined,
+      group: state.cronJobsGroupFilter.trim() || undefined,
+      tag: state.cronJobsTagFilter.trim() || undefined,
       enabled: state.cronJobsEnabledFilter,
       ...(opts?.tableFilters
         ? {
@@ -753,6 +777,9 @@ export function updateCronJobsFilter(
       | "cronJobsScheduleKindFilter"
       | "cronJobsLastStatusFilter"
       | "cronJobsTriggerFilter"
+      | "cronJobsGroupFilter"
+      | "cronJobsTagFilter"
+      | "cronJobsGroupBy"
       | "cronJobsSortBy"
       | "cronJobsSortDir"
     >
@@ -766,6 +793,13 @@ export function updateCronJobsFilter(
     patch.cronJobsScheduleKindFilter ?? state.cronJobsScheduleKindFilter;
   state.cronJobsLastStatusFilter = patch.cronJobsLastStatusFilter ?? state.cronJobsLastStatusFilter;
   state.cronJobsTriggerFilter = patch.cronJobsTriggerFilter ?? state.cronJobsTriggerFilter;
+  if (typeof patch.cronJobsGroupFilter === "string") {
+    state.cronJobsGroupFilter = patch.cronJobsGroupFilter;
+  }
+  if (typeof patch.cronJobsTagFilter === "string") {
+    state.cronJobsTagFilter = patch.cronJobsTagFilter;
+  }
+  state.cronJobsGroupBy = patch.cronJobsGroupBy ?? state.cronJobsGroupBy;
   state.cronJobsSortBy = patch.cronJobsSortBy ?? state.cronJobsSortBy;
   state.cronJobsSortDir = patch.cronJobsSortDir ?? state.cronJobsSortDir;
 }
@@ -867,10 +901,45 @@ function isReadOnlyCronPayload(payload: CronPayload | null, declarationKey?: str
   );
 }
 
+function formatCronTagsForInput(tags: readonly string[] | undefined): string {
+  return (tags ?? []).map((tag) => tag.replaceAll("\\", "\\\\").replaceAll(",", "\\,")).join(", ");
+}
+
+function parseCronTagsInput(value: string): string[] {
+  const tags: string[] = [];
+  let current = "";
+  const append = () => {
+    const tag = current.trim();
+    if (tag) {
+      tags.push(tag);
+    }
+    current = "";
+  };
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === "\\") {
+      const next = value[index + 1];
+      if (next === "," || next === "\\") {
+        current += next;
+        index += 1;
+      } else {
+        current += "\\";
+      }
+    } else if (character === ",") {
+      append();
+    } else {
+      current += character;
+    }
+  }
+  append();
+  return tags;
+}
+
 function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   const failureAlert = typeof job.failureAlert === "object" ? job.failureAlert : undefined;
   const payload = getCronJobPayload(job);
-  const payloadLocked = isReadOnlyCronPayload(payload, job.declarationKey);
+  const metadataLocked = job.effectiveGroup === "System";
+  const payloadLocked = isReadOnlyCronPayload(payload, job.declarationKey) || metadataLocked;
   if (!isCronFormSessionTarget(job.sessionTarget)) {
     throw new TypeError(`Invalid cron session target: ${job.sessionTarget}`);
   }
@@ -878,6 +947,8 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     ...prev,
     name: job.name,
     description: job.description ?? "",
+    group: job.group ?? "",
+    tags: formatCronTagsForInput(job.tags),
     agentId: job.agentId ?? "",
     sessionKey: job.sessionKey ?? "",
     clearAgent: false,
@@ -899,6 +970,7 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     wakeMode: job.wakeMode,
     payloadKind: payload?.kind ?? DEFAULT_CRON_FORM.payloadKind,
     payloadLocked,
+    metadataLocked,
     payloadText:
       payload?.kind === "systemEvent"
         ? payload.text
@@ -1229,9 +1301,14 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
     const agentId = form.clearAgent ? null : form.agentId.trim();
     const sessionKeyRaw = form.sessionKey.trim();
     const sessionKey = sessionKeyRaw || (editingJob?.sessionKey ? null : undefined);
+    const tagsUnchanged = Boolean(
+      editingJob && form.tags === formatCronTagsForInput(editingJob.tags),
+    );
     const job: Record<string, unknown> = {
       name: form.name.trim(),
       description: form.description.trim(),
+      group: form.group.trim() || (editingJob?.group ? null : undefined),
+      ...(tagsUnchanged ? {} : { tags: parseCronTagsInput(form.tags) }),
       agentId: agentId === null ? null : agentId || undefined,
       sessionKey,
       enabled: form.enabled,
@@ -1616,6 +1693,7 @@ export function startCronClone(state: CronState, job: CronJob) {
     cloned.payloadKind = DEFAULT_CRON_FORM.payloadKind;
     cloned.payloadText = "";
   }
+  cloned.metadataLocked = false;
   state.cronForm = normalizeCronFormState(cloned, { payloadKind: cloned.payloadKind });
   state.cronFieldErrors = validateCronForm(state.cronForm);
 }

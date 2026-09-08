@@ -3,6 +3,8 @@ import type { CronFormState } from "../lib/cron/index.ts";
 export const DEFAULT_CRON_FORM: CronFormState = {
   name: "",
   description: "",
+  group: "",
+  tags: "",
   agentId: "",
   sessionKey: "",
   clearAgent: false,
@@ -24,6 +26,7 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   wakeMode: "now",
   payloadKind: "agentTurn",
   payloadLocked: false,
+  metadataLocked: false,
   payloadText: "",
   payloadModel: "",
   payloadThinking: "",

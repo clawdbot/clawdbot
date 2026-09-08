@@ -18732,6 +18732,8 @@ public struct CronJob: Codable, Sendable {
     public let sessionkey: String?
     public let name: String
     public let description: String?
+    public let group: String?
+    public let tags: [String]?
     public let enabled: Bool
     public let deleteafterrun: Bool?
     public let createdatms: Int
@@ -18754,6 +18756,7 @@ public struct CronJob: Codable, Sendable {
     public let lastdeliverystatus: AnyCodable?
     public let lastdeliveryerror: String?
     public let deliverysuppressionreason: String?
+    public let effectivegroup: String?
     public let lastfailurenotificationdelivered: Bool?
     public let lastfailurenotificationdeliverystatus: AnyCodable?
     public let lastfailurenotificationdeliveryerror: String?
@@ -18768,6 +18771,8 @@ public struct CronJob: Codable, Sendable {
         sessionkey: String? = nil,
         name: String,
         description: String? = nil,
+        group: String? = nil,
+        tags: [String]? = nil,
         enabled: Bool,
         deleteafterrun: Bool? = nil,
         createdatms: Int,
@@ -18790,6 +18795,7 @@ public struct CronJob: Codable, Sendable {
         lastdeliverystatus: AnyCodable? = nil,
         lastdeliveryerror: String? = nil,
         deliverysuppressionreason: String? = nil,
+        effectivegroup: String? = nil,
         lastfailurenotificationdelivered: Bool? = nil,
         lastfailurenotificationdeliverystatus: AnyCodable? = nil,
         lastfailurenotificationdeliveryerror: String? = nil)
@@ -18803,6 +18809,8 @@ public struct CronJob: Codable, Sendable {
         self.sessionkey = sessionkey
         self.name = name
         self.description = description
+        self.group = group
+        self.tags = tags
         self.enabled = enabled
         self.deleteafterrun = deleteafterrun
         self.createdatms = createdatms
@@ -18825,6 +18833,7 @@ public struct CronJob: Codable, Sendable {
         self.lastdeliverystatus = lastdeliverystatus
         self.lastdeliveryerror = lastdeliveryerror
         self.deliverysuppressionreason = deliverysuppressionreason
+        self.effectivegroup = effectivegroup
         self.lastfailurenotificationdelivered = lastfailurenotificationdelivered
         self.lastfailurenotificationdeliverystatus = lastfailurenotificationdeliverystatus
         self.lastfailurenotificationdeliveryerror = lastfailurenotificationdeliveryerror
@@ -18840,6 +18849,8 @@ public struct CronJob: Codable, Sendable {
         case sessionkey = "sessionKey"
         case name
         case description
+        case group
+        case tags
         case enabled
         case deleteafterrun = "deleteAfterRun"
         case createdatms = "createdAtMs"
@@ -18862,6 +18873,7 @@ public struct CronJob: Codable, Sendable {
         case lastdeliverystatus = "lastDeliveryStatus"
         case lastdeliveryerror = "lastDeliveryError"
         case deliverysuppressionreason = "deliverySuppressionReason"
+        case effectivegroup = "effectiveGroup"
         case lastfailurenotificationdelivered = "lastFailureNotificationDelivered"
         case lastfailurenotificationdeliverystatus = "lastFailureNotificationDeliveryStatus"
         case lastfailurenotificationdeliveryerror = "lastFailureNotificationDeliveryError"
@@ -18880,6 +18892,8 @@ public struct CronListParams: Codable, Sendable {
     public let sortby: AnyCodable?
     public let sortdir: AnyCodable?
     public let agentid: String?
+    public let group: String?
+    public let tag: String?
     public let compact: Bool?
     public let includedeliverypreviews: Bool?
 
@@ -18895,6 +18909,8 @@ public struct CronListParams: Codable, Sendable {
         sortby: AnyCodable? = nil,
         sortdir: AnyCodable? = nil,
         agentid: String? = nil,
+        group: String? = nil,
+        tag: String? = nil,
         compact: Bool? = nil,
         includedeliverypreviews: Bool? = nil)
     {
@@ -18909,6 +18925,8 @@ public struct CronListParams: Codable, Sendable {
         self.sortby = sortby
         self.sortdir = sortdir
         self.agentid = agentid
+        self.group = group
+        self.tag = tag
         self.compact = compact
         self.includedeliverypreviews = includedeliverypreviews
     }
@@ -18925,6 +18943,8 @@ public struct CronListParams: Codable, Sendable {
         case sortby = "sortBy"
         case sortdir = "sortDir"
         case agentid = "agentId"
+        case group
+        case tag
         case compact
         case includedeliverypreviews = "includeDeliveryPreviews"
     }
@@ -18940,6 +18960,8 @@ public struct CronAddParams: Codable, Sendable {
     public let agentid: AnyCodable?
     public let sessionkey: AnyCodable?
     public let description: String?
+    public let group: AnyCodable?
+    public let tags: AnyCodable?
     public let enabled: Bool?
     public let deleteafterrun: Bool?
     public let schedule: AnyCodable
@@ -18959,6 +18981,8 @@ public struct CronAddParams: Codable, Sendable {
         agentid: AnyCodable? = nil,
         sessionkey: AnyCodable? = nil,
         description: String? = nil,
+        group: AnyCodable? = nil,
+        tags: AnyCodable? = nil,
         enabled: Bool? = nil,
         deleteafterrun: Bool? = nil,
         schedule: AnyCodable,
@@ -18977,6 +19001,8 @@ public struct CronAddParams: Codable, Sendable {
         self.agentid = agentid
         self.sessionkey = sessionkey
         self.description = description
+        self.group = group
+        self.tags = tags
         self.enabled = enabled
         self.deleteafterrun = deleteafterrun
         self.schedule = schedule
@@ -18997,6 +19023,8 @@ public struct CronAddParams: Codable, Sendable {
         case agentid = "agentId"
         case sessionkey = "sessionKey"
         case description
+        case group
+        case tags
         case enabled
         case deleteafterrun = "deleteAfterRun"
         case schedule
@@ -19020,6 +19048,8 @@ public struct CronAddJobResult: Codable, Sendable {
     public let sessionkey: String?
     public let name: String
     public let description: String?
+    public let group: String?
+    public let tags: [String]?
     public let enabled: Bool
     public let deleteafterrun: Bool?
     public let createdatms: Int
@@ -19042,6 +19072,7 @@ public struct CronAddJobResult: Codable, Sendable {
     public let lastdeliverystatus: AnyCodable?
     public let lastdeliveryerror: String?
     public let deliverysuppressionreason: String?
+    public let effectivegroup: String?
     public let lastfailurenotificationdelivered: Bool?
     public let lastfailurenotificationdeliverystatus: AnyCodable?
     public let lastfailurenotificationdeliveryerror: String?
@@ -19057,6 +19088,8 @@ public struct CronAddJobResult: Codable, Sendable {
         sessionkey: String? = nil,
         name: String,
         description: String? = nil,
+        group: String? = nil,
+        tags: [String]? = nil,
         enabled: Bool,
         deleteafterrun: Bool? = nil,
         createdatms: Int,
@@ -19079,6 +19112,7 @@ public struct CronAddJobResult: Codable, Sendable {
         lastdeliverystatus: AnyCodable? = nil,
         lastdeliveryerror: String? = nil,
         deliverysuppressionreason: String? = nil,
+        effectivegroup: String? = nil,
         lastfailurenotificationdelivered: Bool? = nil,
         lastfailurenotificationdeliverystatus: AnyCodable? = nil,
         lastfailurenotificationdeliveryerror: String? = nil,
@@ -19093,6 +19127,8 @@ public struct CronAddJobResult: Codable, Sendable {
         self.sessionkey = sessionkey
         self.name = name
         self.description = description
+        self.group = group
+        self.tags = tags
         self.enabled = enabled
         self.deleteafterrun = deleteafterrun
         self.createdatms = createdatms
@@ -19115,6 +19151,7 @@ public struct CronAddJobResult: Codable, Sendable {
         self.lastdeliverystatus = lastdeliverystatus
         self.lastdeliveryerror = lastdeliveryerror
         self.deliverysuppressionreason = deliverysuppressionreason
+        self.effectivegroup = effectivegroup
         self.lastfailurenotificationdelivered = lastfailurenotificationdelivered
         self.lastfailurenotificationdeliverystatus = lastfailurenotificationdeliverystatus
         self.lastfailurenotificationdeliveryerror = lastfailurenotificationdeliveryerror
@@ -19131,6 +19168,8 @@ public struct CronAddJobResult: Codable, Sendable {
         case sessionkey = "sessionKey"
         case name
         case description
+        case group
+        case tags
         case enabled
         case deleteafterrun = "deleteAfterRun"
         case createdatms = "createdAtMs"
@@ -19153,6 +19192,7 @@ public struct CronAddJobResult: Codable, Sendable {
         case lastdeliverystatus = "lastDeliveryStatus"
         case lastdeliveryerror = "lastDeliveryError"
         case deliverysuppressionreason = "deliverySuppressionReason"
+        case effectivegroup = "effectiveGroup"
         case lastfailurenotificationdelivered = "lastFailureNotificationDelivered"
         case lastfailurenotificationdeliverystatus = "lastFailureNotificationDeliveryStatus"
         case lastfailurenotificationdeliveryerror = "lastFailureNotificationDeliveryError"

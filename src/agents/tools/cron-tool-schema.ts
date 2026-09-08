@@ -66,6 +66,15 @@ function nullableStringArraySchema(description: string) {
   return Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()], { description }));
 }
 
+function nullableCronTagsSchema() {
+  return Type.Optional(
+    Type.Union(
+      [Type.Array(Type.String({ minLength: 1, maxLength: 64 }), { maxItems: 20 }), Type.Null()],
+      { description: "Repeatable labels for filtering and discovery, or null to clear" },
+    ),
+  );
+}
+
 function deliveryStringSchema(description: string) {
   return nullableStringSchema(`${description}, or null to clear`);
 }
@@ -336,6 +345,12 @@ export function createCronToolSchema(options?: CronToolSchemaOptions): TSchema {
             description: "Human-readable label; null clears it",
           }),
         ),
+        group: Type.Optional(
+          Type.Union([Type.String({ minLength: 1, maxLength: 64 }), Type.Null()], {
+            description: "Primary group; null clears it. System is reserved for Gateway-owned jobs",
+          }),
+        ),
+        tags: nullableCronTagsSchema(),
         owner: Type.Optional(
           Type.Object(
             {
@@ -386,6 +401,20 @@ export function createCronToolSchema(options?: CronToolSchemaOptions): TSchema {
       ),
       ...gatewayCallOptionSchemaProperties(),
       includeDisabled: Type.Optional(Type.Boolean()),
+      group: Type.Optional(
+        Type.String({
+          minLength: 1,
+          maxLength: 64,
+          description: 'List filter for action="list" by primary group',
+        }),
+      ),
+      tag: Type.Optional(
+        Type.String({
+          minLength: 1,
+          maxLength: 64,
+          description: 'List filter for action="list" by tag',
+        }),
+      ),
       limit: optionalPositiveIntegerSchema({
         maximum: CRON_TOOL_LIST_MAX_LIMIT,
         description: 'Maximum jobs returned by action="list"',

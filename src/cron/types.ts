@@ -547,6 +547,8 @@ export type CronJobPatch = Partial<
   >
 > & {
   displayName?: string | null;
+  group?: string | null;
+  tags?: string[] | null;
   pacing?: CronPacing | null;
   trigger?: CronTrigger | null;
   payload?: CronPayloadPatch;

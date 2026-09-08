@@ -4,6 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronListSnapshotRevision } from "../list-snapshot-revision.js";
+import { resolveCronJobGroup } from "../metadata.js";
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
 import { readCronJobScratchState, writeCronJobScratch } from "../scratch-store.js";
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
@@ -343,6 +344,8 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
         const sortBy = opts?.sortBy ?? "nextRunAtMs";
         const sortDir = opts?.sortDir ?? "asc";
         const requestedAgentId = normalizeOptionalAgentId(opts?.agentId);
+        const requestedGroup = normalizeLowercaseStringOrEmpty(opts?.group);
+        const requestedTag = normalizeLowercaseStringOrEmpty(opts?.tag);
         const source = state.store?.jobs ?? [];
         sourceCount = source.length;
         const filtered = source.filter((job) => {
@@ -374,6 +377,18 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
           if (triggerFilter === "unconditional" && job.trigger) {
             return false;
           }
+          if (
+            requestedGroup &&
+            normalizeLowercaseStringOrEmpty(resolveCronJobGroup(job)) !== requestedGroup
+          ) {
+            return false;
+          }
+          if (
+            requestedTag &&
+            !job.tags?.some((tag) => normalizeLowercaseStringOrEmpty(tag) === requestedTag)
+          ) {
+            return false;
+          }
           if (!query) {
             return true;
           }
@@ -384,6 +399,8 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
               job.description ?? "",
               job.agentId ?? "",
               ...(job.displayName ? [job.displayName] : []),
+              resolveCronJobGroup(job),
+              ...(job.tags ?? []),
             ].join(" "),
           );
           return haystack.includes(query);

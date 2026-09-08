@@ -587,6 +587,10 @@ describe("normalizeCronJobPatch", () => {
     expect(trimmed.sessionKey).toBe("agent:main:telegram:group:-100123");
     expect(cleared.sessionKey).toBeNull();
   });
+  it("preserves group and tag clear sentinels in patches", () => {
+    expect(normalizePatch({ group: null, tags: null })).toEqual({ group: null, tags: null });
+    expect(normalizePatch({ tags: [] })).toEqual({ tags: [] });
+  });
   it("preserves completion webhook patches without delivery mode", () => {
     const normalized = normalizePatch({
       delivery: {

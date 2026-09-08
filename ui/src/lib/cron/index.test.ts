@@ -1118,6 +1118,8 @@ describe("cron controller", () => {
       id: "job-9",
       name: "Weekly report",
       description: "desc",
+      group: "Work",
+      tags: ["reports", "weekly"],
       sessionKey: "agent:ops:main",
       enabled: false,
       schedule: { kind: "every", everyMs: 7_200_000 },
@@ -1132,6 +1134,9 @@ describe("cron controller", () => {
     expect(state.cronEditingConfigRevision).toBe("config-revision-1");
     expect(state.cronRunsJobId).toBe("job-9");
     expect(state.cronForm.name).toBe("Weekly report");
+    expect(state.cronForm.group).toBe("Work");
+    expect(state.cronForm.tags).toBe("reports, weekly");
+    expect(state.cronForm.metadataLocked).toBe(false);
     expect(state.cronForm.sessionKey).toBe("agent:ops:main");
     expect(state.cronForm.enabled).toBe(false);
     expect(state.cronForm.scheduleKind).toBe("every");
@@ -1225,13 +1230,18 @@ describe("cron controller", () => {
     startCronEdit(state, scriptJob);
     expect(state.cronForm.payloadKind).toBe("script");
     expect(state.cronForm.payloadLocked).toBe(true);
+    expect(state.cronForm.metadataLocked).toBe(false);
     expect(state.cronForm.payloadText).toBe(script);
 
     state.cronForm.name = "Script renamed";
+    state.cronForm.group = "Engineering";
+    state.cronForm.tags = "release, review";
     await addCronJob(state);
 
     const patch = requestPatch(findRequestCall(request.mock.calls, "cron.update"));
     expect(patch.name).toBe("Script renamed");
+    expect(patch.group).toBe("Engineering");
+    expect(patch.tags).toEqual(["release", "review"]);
     expect(patch).not.toHaveProperty("payload");
   });
 
@@ -1452,6 +1462,72 @@ describe("cron controller", () => {
       (call[1] as { patch?: { delivery?: { channel?: string } } } | undefined)?.patch?.delivery
         ?.channel,
     ).toBe("last");
+  });
+
+  it("includes group and tags in cron.update patches", async () => {
+    const { submit } = createCronSubmitHarness("job-metadata", {
+      method: "cron.update",
+      form: {
+        name: "Grouped task",
+        group: "Work",
+        tags: "reports, github",
+        scheduleKind: "every",
+        everyAmount: "1",
+        everyUnit: "hours",
+        payloadKind: "agentTurn",
+        payloadText: "run it",
+      },
+    });
+
+    const { call } = await submit();
+    expectRecordFields(requestPatch(call), {
+      group: "Work",
+      tags: ["reports", "github"],
+    });
+  });
+
+  it("escapes comma-bearing tags and omits unchanged tags from unrelated edits", async () => {
+    const job = createCronJob({
+      id: "job-comma-tag",
+      name: "Comma tag",
+      tags: ["sales,emea", "daily"],
+    });
+    const { state, submit } = createCronEditHarness(job);
+
+    expect(state.cronForm.tags).toBe("sales\\,emea, daily");
+    state.cronForm.name = "Renamed comma tag";
+    const unchanged = await submit();
+    expect(requestPatch(unchanged)).not.toHaveProperty("tags");
+
+    const changedHarness = createCronEditHarness(job);
+    changedHarness.state.cronForm.tags = "sales\\,emea, weekly";
+    const changed = await changedHarness.submit();
+    expect(requestPatch(changed).tags).toEqual(["sales,emea", "weekly"]);
+  });
+
+  it("preserves explicit empty tag clears in cron.update patches", async () => {
+    const job = createCronJob({ id: "job-clear-tags", name: "Clear tags", tags: ["daily"] });
+    const { state, submit } = createCronEditHarness(job);
+
+    state.cronForm.tags = "";
+    const call = await submit();
+    expect(requestPatch(call).tags).toEqual([]);
+  });
+
+  it("locks metadata for declaration-owned System jobs", () => {
+    const state = createState();
+    const job = createCronJob({
+      id: "heartbeat-task",
+      name: "Heartbeat task",
+      effectiveGroup: "System",
+      declarationKey: "heartbeat-task:main:abc",
+      payload: { kind: "systemEvent", text: "task" },
+    });
+
+    startCronEdit(state, job);
+
+    expect(state.cronForm.metadataLocked).toBe(true);
+    expect(state.cronForm.payloadLocked).toBe(true);
   });
 
   it("includes trigger/model/thinking/stagger/bestEffort in cron.update patch", async () => {
@@ -2637,6 +2713,7 @@ describe("cron controller", () => {
           limit: 50,
           offset: 0,
           query: "daily",
+          group: "Work",
           enabled: "enabled",
           includeDeliveryPreviews: false,
           scheduleKind: "cron",
@@ -2667,6 +2744,7 @@ describe("cron controller", () => {
     });
     const state = createStateWithRequest(request, {
       cronJobsQuery: "daily",
+      cronJobsGroupFilter: "Work",
       cronJobsEnabledFilter: "enabled",
       cronJobsScheduleKindFilter: "cron",
       cronJobsLastStatusFilter: "error",
@@ -2680,6 +2758,27 @@ describe("cron controller", () => {
     expect(state.cronJobs).toHaveLength(1);
     expect(state.cronJobsTotal).toBe(1);
     expect(state.cronJobsHasMore).toBe(false);
+  });
+
+  it("omits whitespace-only group and tag filters from cron.list", async () => {
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method === "cron.list") {
+        expectRecordFields(requireRecord(payload, "cron.list payload"), {
+          group: undefined,
+          tag: undefined,
+        });
+        return cronJobsListResponse([], { snapshotRevision: "unfiltered-jobs" });
+      }
+      return {};
+    });
+    const state = createStateWithRequest(request, {
+      cronJobsGroupFilter: "   ",
+      cronJobsTagFilter: "\t",
+    });
+
+    await loadCronJobsPage(state);
+
+    expect(state.cronJobs).toHaveLength(0);
   });
 
   it("appends jobs only from the accepted snapshot revision", async () => {

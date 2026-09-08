@@ -343,7 +343,8 @@ describe("heartbeat payload execution", () => {
       expect(requestHeartbeat).not.toHaveBeenCalled();
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
 
-      // Doctor reserves creation, but the imported task belongs to the operator.
+      // Doctor-migrated heartbeat tasks keep their public system-event payload
+      // and remain editable/removable through the ordinary client surface.
       await expect(
         cron.update(job.id, { payload: { kind: "systemEvent", text: "Check priority inbox" } }),
       ).resolves.toMatchObject({ id: job.id });

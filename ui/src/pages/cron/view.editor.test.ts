@@ -583,7 +583,11 @@ describe("cron view editor", () => {
       payload: { kind: "agentTurn" as const, message: "Review the Workshop collection." },
     },
   ])("renders $declarationKey jobs as view-and-run only", ({ declarationKey, payload }) => {
-    const job = createJob(`system-${payload.kind}`, { declarationKey, payload });
+    const job = createJob(`system-${payload.kind}`, {
+      declarationKey,
+      effectiveGroup: "System",
+      payload,
+    });
     const onRun = vi.fn();
     const onToggle = vi.fn();
     const onClone = vi.fn();

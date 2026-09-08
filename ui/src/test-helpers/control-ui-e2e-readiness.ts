@@ -2,13 +2,22 @@ import type { Page } from "playwright";
 import { controlUiE2eWaitTimeoutMs } from "./control-ui-e2e.ts";
 
 /** A sent connect request is not the delivered Gateway handshake. */
-export async function waitForControlUiGatewayReady(page: Page): Promise<void> {
-  await page.waitForFunction(() => {
-    const app = document.querySelector("openclaw-app") as
-      | (HTMLElement & { runtime?: { context?: { gateway?: { snapshot?: { phase?: string } } } } })
-      | null;
-    return app?.runtime?.context?.gateway?.snapshot?.phase === "connected";
-  });
+export async function waitForControlUiGatewayReady(
+  page: Page,
+  options: { timeout?: number } = {},
+): Promise<void> {
+  await page.waitForFunction(
+    () => {
+      const app = document.querySelector("openclaw-app") as
+        | (HTMLElement & {
+            runtime?: { context?: { gateway?: { snapshot?: { phase?: string } } } };
+          })
+        | null;
+      return app?.runtime?.context?.gateway?.snapshot?.phase === "connected";
+    },
+    undefined,
+    { timeout: options.timeout ?? controlUiE2eWaitTimeoutMs },
+  );
 }
 
 /** Wait for both the Gateway lifecycle and its dedicated visible reconnect status. */

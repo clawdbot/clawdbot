@@ -754,6 +754,7 @@ describe("gateway server cron", () => {
       expect(compactJobs?.[0]).toMatchObject({
         id: dailyJobId,
         effectiveAgentId: "main",
+        effectiveGroup: "Ungrouped",
         name: "daily",
         enabled: true,
         scheduleKind: "every",
@@ -764,6 +765,7 @@ describe("gateway server cron", () => {
       expect(Object.keys(compactJobs?.[0] ?? {}).toSorted()).toEqual(
         [
           "effectiveAgentId",
+          "effectiveGroup",
           "enabled",
           "id",
           "lastRunAtMs",

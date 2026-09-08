@@ -8,6 +8,12 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
     .option("--name <name>", "Job name")
     .option("--display-name <name>", "Human-readable job label")
     .option("--description <text>", "Job description")
+    .option("--group <name>", "Primary application or type group")
+    .option(
+      "--tag <tag>",
+      "Automation tag (repeatable)",
+      (value: string, previous: string[] | undefined) => [...(previous ?? []), value],
+    )
     .option(
       "--delete-after-run",
       "Delete one-shot after successful completion (confirmed/no delivery, intentional silence, or best effort); failed/unknown required delivery retains it disabled",
