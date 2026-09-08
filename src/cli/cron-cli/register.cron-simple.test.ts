@@ -34,6 +34,13 @@ async function runCronToggle(command: "enable" | "disable"): Promise<void> {
   await program.parseAsync([command, "job-1"], { from: "user" });
 }
 
+async function runCronRuns(args: string[]): Promise<void> {
+  const program = new Command();
+  program.exitOverride();
+  registerCronSimpleCommands(program);
+  await program.parseAsync(["runs", ...args], { from: "user" });
+}
+
 function mockCronShowPages(readPage: (params: { offset?: number }) => unknown): void {
   callGatewayFromCli.mockImplementation(
     async (method: string, _opts: unknown, params?: { id?: string; offset?: number }) => {
@@ -342,5 +349,99 @@ describe("cron scheduler status warnings", () => {
     } else {
       expect(defaultRuntime.error).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe("cron runs query options", () => {
+  beforeEach(() => {
+    callGatewayFromCli.mockReset();
+    callGatewayFromCli.mockResolvedValue({ entries: [], total: 0 });
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(((code: number) => {
+      throw new Error(`exit ${code}`);
+    }) as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("forwards filters, paging, and sort to cron.runs", async () => {
+    await runCronRuns([
+      "job-1",
+      "--status",
+      "error",
+      "--delivery-status",
+      "not-delivered",
+      "--query",
+      "timeout",
+      "--offset",
+      "200",
+      "--sort",
+      "asc",
+      "--limit",
+      "25",
+    ]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.runs", expect.anything(), {
+      id: "job-1",
+      status: "error",
+      deliveryStatus: "not-delivered",
+      query: "timeout",
+      offset: 200,
+      sortDir: "asc",
+      limit: 25,
+    });
+  });
+
+  it("preserves the existing request defaults and --id alias", async () => {
+    await runCronRuns(["--id", "job-1"]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.runs", expect.anything(), {
+      id: "job-1",
+      limit: 50,
+    });
+  });
+
+  it("accepts the first page offset", async () => {
+    await runCronRuns(["job-1", "--offset", "0"]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.runs", expect.anything(), {
+      id: "job-1",
+      offset: 0,
+      limit: 50,
+    });
+  });
+
+  it.each(["-1", "1.5", "", "  "])("rejects invalid offset %j", async (offset) => {
+    await expect(runCronRuns(["job-1", "--offset", offset])).rejects.toThrow("exit 1");
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      "Invalid --offset (must be a non-negative integer).",
+    );
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "--status",
+      "failed",
+      "error: option '--status <status>' argument 'failed' is invalid. Allowed choices are all, ok, error, skipped.",
+    ],
+    [
+      "--delivery-status",
+      "failed",
+      "error: option '--delivery-status <status>' argument 'failed' is invalid. Allowed choices are delivered, not-delivered, unknown, not-requested.",
+    ],
+    [
+      "--sort",
+      "newest",
+      "error: option '--sort <direction>' argument 'newest' is invalid. Allowed choices are asc, desc.",
+    ],
+  ])("rejects invalid enum %s=%s", async (flag, value, expectedError) => {
+    await expect(runCronRuns(["job-1", flag, value])).rejects.toMatchObject({
+      message: expectedError,
+    });
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
   });
 });

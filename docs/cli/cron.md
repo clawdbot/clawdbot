@@ -328,10 +328,20 @@ openclaw automations run <job-id> --wait --wait-timeout 10m --poll-interval 2s
 openclaw automations runs <job-id> --limit 50
 openclaw automations runs <job-id> --limit 50 --json
 openclaw automations runs <job-id> --run-id <run-id>
+openclaw automations runs <job-id> --status error --query timeout
+openclaw automations runs <job-id> --delivery-status not-delivered
+openclaw automations runs <job-id> --sort asc --offset 200 --limit 50
 ```
 
 `automations runs` is the preferred spelling. `cron runs` and the leaf-local
 `--id <job-id>` form remain supported compatibility aliases.
+
+Run-history filters are applied by the Gateway before paging. Use `--status`
+with `all`, `ok`, `error`, or `skipped`; use `--delivery-status` with
+`delivered`, `not-delivered`, `unknown`, or `not-requested`. `--query <text>`
+searches run summaries and errors. `--sort asc|desc` selects oldest-first or
+newest-first order, and `--offset <n>` advances through the result set using the
+page metadata returned by the previous command.
 
 `openclaw automations list` shows enabled jobs across agents by default, including jobs whose owner cannot be resolved. Pass `--all` to include disabled jobs, or `--agent <id>` to filter by the effective normalized agent ID. Ownership resolves from the job's declared agent, its agent-scoped session key, then the configured system-agent owner. Unresolved jobs do not match an agent filter. The `cron list` alias has the same behavior.
 
