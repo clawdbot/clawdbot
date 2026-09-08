@@ -1,5 +1,6 @@
 import ConcurrencyExtras
 import Foundation
+import os
 import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
@@ -472,6 +473,330 @@ struct GatewayEndpointStoreTests {
         #expect(token == "service-token")
     }
 
+    @Test func `resolve gateway token resolves typed env secret ref from gateway service environment`() {
+        let snapshot = self.makeLaunchAgentSnapshot(
+            env: ["OPENCLAW_GATEWAY_TOKEN": "  service-token  "])
+        let root: [String: Any] = [
+            "gateway": [
+                "auth": [
+                    "token": [
+                        "source": "env",
+                        "provider": "default",
+                        "id": "OPENCLAW_GATEWAY_TOKEN",
+                    ],
+                ],
+            ],
+        ]
+
+        let token = GatewayEndpointStore._testResolveGatewayToken(
+            isRemote: false,
+            root: root,
+            env: [:],
+            launchdSnapshot: snapshot)
+        #expect(token == "service-token")
+    }
+
+    @Test func `typed env secret ref rejects absent provider without launchd fallback`() {
+        let snapshot = self.makeLaunchAgentTokenSnapshot("launchd-token")
+        let root: [String: Any] = [
+            "gateway": ["auth": ["token": [
+                "source": "env",
+                "provider": "vault",
+                "id": "OPENCLAW_GATEWAY_TOKEN",
+            ]]],
+        ]
+
+        let token = GatewayEndpointStore._testResolveGatewayToken(
+            isRemote: false,
+            root: root,
+            env: [:],
+            launchdSnapshot: snapshot)
+        #expect(token == nil)
+    }
+
+    @Test func `typed env secret ref enforces provider source and allowlist`() {
+        let snapshot = self.makeLaunchAgentTokenSnapshot("launchd-token")
+        let deniedRoots: [[String: Any]] = [
+            [
+                "gateway": ["auth": ["token": [
+                    "source": "env",
+                    "provider": "vault",
+                    "id": "OPENCLAW_GATEWAY_TOKEN",
+                ]]],
+                "secrets": ["providers": ["vault": ["source": "file"]]],
+            ],
+            [
+                "gateway": ["auth": ["token": [
+                    "source": "env",
+                    "provider": "restricted",
+                    "id": "OPENCLAW_GATEWAY_TOKEN",
+                ]]],
+                "secrets": ["providers": ["restricted": [
+                    "source": "env",
+                    "allowlist": ["OTHER_TOKEN"],
+                ]]],
+            ],
+        ]
+
+        for root in deniedRoots {
+            let token = GatewayEndpointStore._testResolveGatewayToken(
+                isRemote: false,
+                root: root,
+                env: [:],
+                launchdSnapshot: snapshot)
+            #expect(token == nil)
+        }
+    }
+
+    @Test func `typed env secret ref accepts configured provider allowlist`() {
+        let snapshot = self.makeLaunchAgentSnapshot(env: ["GW_TOKEN": "service-token"])
+        let root: [String: Any] = [
+            "gateway": ["auth": ["token": [
+                "source": "env",
+                "provider": "restricted",
+                "id": "GW_TOKEN",
+            ]]],
+            "secrets": ["providers": ["restricted": [
+                "source": "env",
+                "allowlist": ["GW_TOKEN"],
+            ]]],
+        ]
+
+        let token = GatewayEndpointStore._testResolveGatewayToken(
+            isRemote: false,
+            root: root,
+            env: [:],
+            launchdSnapshot: snapshot)
+        #expect(token == "service-token")
+    }
+
+    @Test func `typed env secret ref prefers gateway service environment`() {
+        let snapshot = self.makeLaunchAgentSnapshot(env: ["GW_TOKEN": "service-token"])
+        let root: [String: Any] = [
+            "gateway": ["auth": ["token": [
+                "source": "env",
+                "provider": "restricted",
+                "id": "GW_TOKEN",
+            ]]],
+            "secrets": ["providers": ["restricted": [
+                "source": "env",
+                "allowlist": ["GW_TOKEN"],
+            ]]],
+        ]
+
+        let token = GatewayEndpointStore._testResolveGatewayToken(
+            isRemote: false,
+            root: root,
+            env: ["GW_TOKEN": "stale-app-token"],
+            launchdSnapshot: snapshot)
+        #expect(token == "service-token")
+    }
+
+    @Test func `typed env secret refs control final gateway handshake auth`() async throws {
+        let snapshot = self.makeLaunchAgentSnapshot(
+            env: [
+                "GW_TOKEN": "custom-token",
+                "GW_PASSWORD": "custom-password", // pragma: allowlist secret
+                "OPENCLAW_GATEWAY_TOKEN": "fallback-token",
+            ],
+            token: "fallback-token")
+        let allowedRoot: [String: Any] = [
+            "gateway": ["auth": [
+                "mode": "token",
+                "token": ["source": "env", "provider": "restricted", "id": "GW_TOKEN"],
+                "password": ["source": "env", "provider": "restricted", "id": "GW_PASSWORD"],
+            ]],
+            "secrets": ["providers": ["restricted": [
+                "source": "env",
+                "allowlist": ["GW_TOKEN", "GW_PASSWORD"],
+            ]]],
+        ]
+        let deniedRoot: [String: Any] = [
+            "gateway": ["auth": [
+                "mode": "token",
+                "token": ["source": "env", "provider": "restricted", "id": "GW_TOKEN"],
+            ]],
+            "secrets": ["providers": ["restricted": [
+                "source": "env",
+                "allowlist": ["OTHER_TOKEN"],
+            ]]],
+        ]
+        let passwordRoot: [String: Any] = [
+            "gateway": ["auth": [
+                "mode": "password",
+                "token": ["source": "env", "provider": "restricted", "id": "GW_TOKEN"],
+                "password": ["source": "env", "provider": "restricted", "id": "GW_PASSWORD"],
+            ]],
+            "secrets": ["providers": ["restricted": [
+                "source": "env",
+                "allowlist": ["GW_TOKEN", "GW_PASSWORD"],
+            ]]],
+        ]
+        let trustedProxyRoot: [String: Any] = [
+            "gateway": ["auth": [
+                "mode": "trusted-proxy",
+                "token": ["source": "env", "provider": "restricted", "id": "GW_TOKEN"],
+                "password": ["source": "env", "provider": "restricted", "id": "GW_PASSWORD"],
+            ]],
+            "secrets": ["providers": ["restricted": [
+                "source": "env",
+                "allowlist": ["GW_TOKEN", "GW_PASSWORD"],
+            ]]],
+        ]
+
+        let cases: [(root: [String: Any], token: String?, password: String?, authPresent: Bool)] = [
+            (allowedRoot, "custom-token", nil, true),
+            (deniedRoot, nil, nil, false),
+            (passwordRoot, nil, "custom-password", true), // pragma: allowlist secret
+            (trustedProxyRoot, nil, "custom-password", true), // pragma: allowlist secret
+        ]
+        for testCase in cases {
+            let config = GatewayEndpointStore._testLocalConfig(
+                root: testCase.root,
+                env: [:],
+                launchdSnapshot: snapshot)
+            #expect(config.token == testCase.token)
+            #expect(config.password == testCase.password)
+            let recordedAuth = OSAllocatedUnfairLock<(present: Bool, token: String?, password: String?)>(
+                initialState: (false, nil, nil))
+            let session = GatewayTestWebSocketSession(taskFactory: {
+                GatewayTestWebSocketTask(sendHook: { _, message, sendIndex in
+                    guard sendIndex == 0,
+                          let params = GatewayWebSocketTestSupport.connectRequestParams(from: message)
+                    else { return }
+                    let auth = params["auth"] as? [String: Any]
+                    let authPresent = auth != nil
+                    let token = auth?["token"] as? String
+                    let password = auth?["password"] as? String
+                    recordedAuth.withLock { $0 = (authPresent, token, password) }
+                })
+            })
+            let channel = GatewayChannelActor(
+                url: config.url,
+                token: config.token,
+                password: config.password,
+                session: WebSocketSessionBox(session: session),
+                connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
+            try await channel.connect()
+
+            let auth = recordedAuth.withLock { $0 }
+            #expect(auth.present == testCase.authPresent)
+            #expect(auth.token == testCase.token)
+            #expect(auth.password == testCase.password)
+            await channel.shutdown()
+        }
+    }
+
+    @Test func `inferred gateway auth selects one typed credential surface`() {
+        let tokenRoot: [String: Any] = [
+            "gateway": ["auth": [
+                "token": ["source": "env", "provider": "restricted", "id": "GW_TOKEN"],
+            ]],
+            "secrets": ["providers": ["restricted": [
+                "source": "env",
+                "allowlist": ["GW_TOKEN"],
+            ]]],
+        ]
+        let passwordRoot: [String: Any] = [
+            "gateway": ["auth": [
+                "password": ["source": "env", "provider": "restricted", "id": "GW_PASSWORD"],
+            ]],
+            "secrets": ["providers": ["restricted": [
+                "source": "env",
+                "allowlist": ["GW_PASSWORD"],
+            ]]],
+        ]
+        let tokenSnapshot = self.makeLaunchAgentSnapshot(env: ["GW_TOKEN": "custom-token"])
+        let passwordSnapshot = self.makeLaunchAgentSnapshot(env: ["GW_PASSWORD": "custom-password"])
+        let tokenWithAmbientPassword = self.makeLaunchAgentSnapshot(
+            env: [
+                "GW_TOKEN": "custom-token",
+                "OPENCLAW_GATEWAY_PASSWORD": "ambient-password",
+            ],
+            password: "ambient-password")
+        let passwordWithAmbientToken = self.makeLaunchAgentSnapshot(
+            env: [
+                "GW_PASSWORD": "custom-password",
+                "OPENCLAW_GATEWAY_TOKEN": "ambient-token",
+            ],
+            token: "ambient-token")
+
+        let cases: [([String: Any], LaunchAgentPlistSnapshot, String?, String?)] = [
+            (tokenRoot, tokenSnapshot, "custom-token", nil),
+            (passwordRoot, passwordSnapshot, nil, "custom-password"),
+            (tokenRoot, tokenWithAmbientPassword, nil, "ambient-password"),
+            (passwordRoot, passwordWithAmbientToken, "ambient-token", nil),
+        ]
+        for (root, snapshot, expectedToken, expectedPassword) in cases {
+            let config = GatewayEndpointStore._testLocalConfig(
+                root: root,
+                env: [:],
+                launchdSnapshot: snapshot)
+            #expect(config.token == expectedToken)
+            #expect(config.password == expectedPassword)
+        }
+    }
+
+    @Test func `typed env secret ref stays authoritative over app environment`() {
+        let snapshot = self.makeLaunchAgentTokenSnapshot("service-token")
+        let root: [String: Any] = [
+            "gateway": ["auth": ["token": [
+                "source": "file",
+                "provider": "default",
+                "id": "/token",
+            ]]],
+        ]
+
+        let token = GatewayEndpointStore._testResolveGatewayToken(
+            isRemote: false,
+            root: root,
+            env: ["OPENCLAW_GATEWAY_TOKEN": "app-token"],
+            launchdSnapshot: snapshot)
+        #expect(token == nil)
+    }
+
+    @Test func `built in env default wins source alias collision`() {
+        let snapshot = self.makeLaunchAgentTokenSnapshot("service-token")
+        let root: [String: Any] = [
+            "gateway": ["auth": ["token": [
+                "source": "env",
+                "provider": "default",
+                "id": "OPENCLAW_GATEWAY_TOKEN",
+            ]]],
+            "secrets": ["providers": ["default": ["source": "file"]]],
+        ]
+
+        let token = GatewayEndpointStore._testResolveGatewayToken(
+            isRemote: false,
+            root: root,
+            env: [:],
+            launchdSnapshot: snapshot)
+        #expect(token == "service-token")
+    }
+
+    @Test func `unsupported or malformed typed token refs suppress launchd fallback`() {
+        let snapshot = self.makeLaunchAgentTokenSnapshot("launchd-token")
+        let refs: [[String: Any]] = [
+            ["source": "file", "provider": "default", "id": "/token"],
+            [
+                "source": "env",
+                "provider": "default",
+                "id": "OPENCLAW_GATEWAY_TOKEN",
+                "extra": true,
+            ],
+        ]
+
+        for ref in refs {
+            let root: [String: Any] = ["gateway": ["auth": ["token": ref]]]
+            let token = GatewayEndpointStore._testResolveGatewayToken(
+                isRemote: false,
+                root: root,
+                env: [:],
+                launchdSnapshot: snapshot)
+            #expect(token == nil)
+        }
+    }
+
     @Test func `resolve gateway token keeps invalid env template as plaintext`() {
         let snapshot = self.makeLaunchAgentTokenSnapshot("launchd-token")
         let root = self.localAuthRoot("token", value: "${custom_gateway_token}")
@@ -586,6 +911,47 @@ struct GatewayEndpointStoreTests {
             env: [:],
             launchdSnapshot: snapshot)
         #expect(password == "service-pass")
+    }
+
+    @Test func `resolve gateway password resolves typed env secret ref from gateway service environment`() {
+        let snapshot = self.makeLaunchAgentSnapshot(
+            env: ["OPENCLAW_GATEWAY_PASSWORD": "  service-pass  "])
+        let root: [String: Any] = [
+            "gateway": [
+                "auth": [
+                    "password": [
+                        "source": "env",
+                        "provider": "default",
+                        "id": "OPENCLAW_GATEWAY_PASSWORD",
+                    ],
+                ],
+            ],
+        ]
+
+        let password = GatewayEndpointStore._testResolveGatewayPassword(
+            isRemote: false,
+            root: root,
+            env: [:],
+            launchdSnapshot: snapshot)
+        #expect(password == "service-pass")
+    }
+
+    @Test func `unsupported typed password ref suppresses launchd fallback`() {
+        let snapshot = self.makeLaunchAgentPasswordSnapshot("launchd-pass")
+        let root: [String: Any] = [
+            "gateway": ["auth": ["password": [
+                "source": "store",
+                "provider": "default",
+                "id": "OPENCLAW_GATEWAY_PASSWORD",
+            ]]],
+        ]
+
+        let password = GatewayEndpointStore._testResolveGatewayPassword(
+            isRemote: false,
+            root: root,
+            env: [:],
+            launchdSnapshot: snapshot)
+        #expect(password == nil)
     }
 
     @Test func `connection mode resolver prefers config mode over defaults`() {
@@ -1366,6 +1732,7 @@ extension GatewayEndpointStoreTests {
             "gateway": [
                 "bind": "tailnet",
                 "tls": ["enabled": true],
+                "auth": ["mode": "token"],
                 "remote": [
                     "url": "wss://remote.example:443",
                     "token": "remote-token",
@@ -1381,7 +1748,7 @@ extension GatewayEndpointStoreTests {
 
         #expect(config.url.absoluteString == "wss://100.64.1.8:\(GatewayEnvironment.gatewayPort())")
         #expect(config.token == "launchd-token")
-        #expect(config.password == "launchd-pass")
+        #expect(config.password == nil)
     }
 
     @Test func `dashboard URL uses local base path in local mode`() throws {
