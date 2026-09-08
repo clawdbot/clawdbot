@@ -7,7 +7,7 @@ import { clearBootRecords, type BootRecord } from "./boot-record.ts";
 import { bootstrapApplication } from "./bootstrap.ts";
 import * as gatewayStore from "./gateway-store.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
-import { loadSettings, saveSettings } from "./settings.ts";
+import { loadSettings, persistSessionToken } from "./settings.ts";
 
 const BOOT_RECORD_PREFIX = "openclaw.control.bootRecord.v1:";
 
@@ -20,7 +20,7 @@ describe("warm boot profile validation", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());
-    saveSettings({ ...loadSettings(), token: "test-token" });
+    persistSessionToken(loadSettings().gatewayUrl, "test-token");
   });
   afterEach(() => {
     clearBootRecords();

@@ -105,6 +105,7 @@ suite.define(() => {
           // The typed hold applies again after reload and releases the normal hello payload.
           heldMethods: ["connect"],
           authMethod: profile === "trusted-proxy" || profile === "device-token" ? profile : "token",
+          authMode: profile === "trusted-proxy" ? "trusted-proxy" : "token",
           presenceUsers: [{ id: "profile-a", self: true }],
           sessions: [
             currentRow,

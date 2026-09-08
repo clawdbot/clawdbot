@@ -9,7 +9,7 @@ import "./app-host.ts";
 import type { OpenClawApp } from "./app-root.ts";
 import type { BootRecord } from "./boot-record.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
-import { loadSettings, saveSettings } from "./settings.ts";
+import { loadSettings, persistSessionToken } from "./settings.ts";
 
 const BOOT_RECORD_PREFIX = "openclaw.control.bootRecord.v1:";
 
@@ -19,7 +19,7 @@ let previousUrl: string;
 beforeEach(async () => {
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("sessionStorage", createStorageMock());
-  saveSettings({ ...loadSettings(), token: "test-token" });
+  persistSessionToken(loadSettings().gatewayUrl, "test-token");
   previousUrl = window.location.href;
   window.history.replaceState({}, "", "/chat/main");
   await i18n.setLocale("en");

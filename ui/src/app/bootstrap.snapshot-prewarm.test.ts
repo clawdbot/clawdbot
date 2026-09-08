@@ -5,7 +5,7 @@ import * as prewarm from "../pages/chat/session-snapshot-prewarm.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import type { BootRecord } from "./boot-record.ts";
 import { bootstrapApplication } from "./bootstrap.ts";
-import { loadSettings, saveSettings } from "./settings.ts";
+import { loadSettings, persistSessionToken, saveSettings } from "./settings.ts";
 
 const BOOT_RECORD_PREFIX = "openclaw.control.bootRecord.v1:";
 
@@ -44,11 +44,11 @@ describe("bootstrap routed snapshot prewarm", () => {
     vi.stubGlobal("sessionStorage", createStorageMock());
     const settings = {
       ...loadSettings(),
-      token: "test-token",
       sessionKey: key,
       lastActiveSessionKey: key,
     };
     saveSettings(settings);
+    persistSessionToken(settings.gatewayUrl, "test-token");
     const record: BootRecord = {
       version: 2,
       authMethod: "token",
@@ -109,8 +109,9 @@ describe("warm startup credential binding", () => {
       window.history.replaceState({}, "", "/chat");
       vi.stubGlobal("localStorage", createStorageMock());
       vi.stubGlobal("sessionStorage", createStorageMock());
-      const settings = { ...loadSettings(), token, sessionKey: "agent:main:main" };
+      const settings = { ...loadSettings(), sessionKey: "agent:main:main" };
       saveSettings(settings);
+      persistSessionToken(settings.gatewayUrl, token);
       localStorage.setItem(
         "openclaw-device-identity-v1",
         JSON.stringify({
