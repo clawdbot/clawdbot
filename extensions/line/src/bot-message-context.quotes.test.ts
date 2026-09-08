@@ -127,7 +127,9 @@ describe("buildLineMessageContext quotes", () => {
     expect(context?.ctxPayload.ReplyToId).toBe("m-quoted");
     expect(context?.ctxPayload.ReplyToIsQuote).toBe(true);
     expect(context?.ctxPayload.ReplyToBody).toBe("staging is on 10.0.0.5");
-    expect(context?.ctxPayload.ReplyToSender).toBe("Mika");
+    // The id rides with the name: two group members can share a display name, and
+    // this label is all the model gets to tell them apart.
+    expect(context?.ctxPayload.ReplyToSender).toBe("Mika (U-teammate)");
   });
 
   it("names the quoted author by raw id when LINE will not name them", async () => {
@@ -313,7 +315,7 @@ describe("buildLineMessageContext quotes", () => {
     });
 
     expect(context?.ctxPayload.ReplyToBody).toBe("staging is on 10.0.0.5");
-    expect(context?.ctxPayload.ReplyToSender).toBe("Mika");
+    expect(context?.ctxPayload.ReplyToSender).toBe("Mika (U-teammate)");
   });
 
   it("keeps a quoted body from a sender the allowlist has since dropped", async () => {
@@ -357,6 +359,24 @@ describe("buildLineMessageContext quotes", () => {
     expect(context?.ctxPayload.ReplyToId).toBe("m-sent");
   });
 
+  it("names the bot as the author of its own quoted message", async () => {
+    recordLineSentMessages(account.accountId, ["m-sent"]);
+
+    const context = await buildLineMessageContext({
+      groupPolicy: "open",
+      groupAllowFrom: [],
+      event: quotingEvent("m-sent", "redo that in English"),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    // Both a self-quote and a quote this account no longer holds arrive without a
+    // body, so the author is the only thing that tells them apart.
+    expect(context?.ctxPayload.ReplyToSender).toBe("Assistant");
+  });
+
   it("keeps the quote linkage when the quoted message is no longer held", async () => {
     const context = await buildLineMessageContext({
       groupPolicy: "open",
@@ -371,6 +391,8 @@ describe("buildLineMessageContext quotes", () => {
     expect(context?.ctxPayload.ReplyToId).toBe("m-evicted");
     expect(context?.ctxPayload.ReplyToIsQuote).toBe(true);
     expect(context?.ctxPayload.ReplyToBody).toBeUndefined();
+    // Unlike a self-quote, this one has no author to name.
+    expect(context?.ctxPayload.ReplyToSender).toBeUndefined();
   });
 
   it("does not repeat the bot's own message back to it", async () => {

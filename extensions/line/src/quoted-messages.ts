@@ -6,9 +6,12 @@ import { truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 /** One message a later quote can name, as this account already knew it. */
 export type LineQuotedMessage = {
   /**
-   * Text this account already showed the agent. A non-text message keeps the
-   * marker the ambient window shows (`<image>`); only a message this account
-   * sent has no body, because outbound text is never retained.
+   * Text of a message this conversation already admitted. Admission, not the
+   * prompt, is the boundary: the ambient window and the prompt each keep far
+   * fewer messages than this store, so a body here may be older than anything
+   * the agent can still see. A non-text message keeps the marker the ambient
+   * window shows (`<image>`); only a message this account sent has no body,
+   * because outbound text is never retained.
    */
   body?: string;
   /** LINE user id of the sender; absent for a message this account sent. */

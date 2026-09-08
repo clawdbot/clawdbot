@@ -378,10 +378,21 @@ async function finalizeLineInboundContext(params: {
     resolveDisplayName(quoted?.senderId),
     resolveQuotedSenderAccessGroup(),
   ]);
-  // An unreachable LINE profile must not erase the author: the quoted sender
-  // degrades to the raw id the same way the turn's own sender does below.
-  const quotedSenderLabel =
-    quotedSenderName ?? (quoted?.senderId ? `user:${quoted.senderId}` : undefined);
+  // A quote carries one sender string and no id field, so this label is the only place
+  // the author survives: the id rides along with the name because two group members can
+  // share a display name, the same pairing the ambient window makes (`bot-handlers.ts`),
+  // and the bot's own message is named rather than left blank so that "you said that"
+  // and "I no longer hold that message" stop reading alike. "Assistant" is core's own
+  // word for an assistant turn in rendered context
+  // (`session-transcript-context.runtime.ts`). An unreachable profile degrades to the
+  // raw id rather than erasing the author.
+  const quotedSenderLabel = quoted?.fromBot
+    ? "Assistant"
+    : quoted?.senderId
+      ? quotedSenderName && quotedSenderName !== quoted.senderId
+        ? `${quotedSenderName} (${quoted.senderId})`
+        : `user:${quoted.senderId}`
+      : quotedSenderName;
   // Admission only proves the quoted sender passed the gate when the message was
   // stored. That gate can narrow while the store still holds their text, so the
   // active allowlist decides again here.
@@ -396,9 +407,9 @@ async function finalizeLineInboundContext(params: {
           isSenderAllowed: (allowFrom) =>
             isLineQuoteSenderAllowed(allowFrom, quoted, quotedSenderViaAccessGroup),
         }),
-        // A quote of the bot's own message keeps its linkage without a body:
-        // the store holds no outbound text, matching the core default that
-        // never repeats an assistant message the transcript already carries.
+        // A quote of the bot's own message keeps its author but no body: the store
+        // holds no outbound text, matching the core default that never repeats an
+        // assistant message the transcript already carries.
         ...(quoted?.body ? { body: quoted.body } : {}),
         ...(quotedSenderLabel ? { sender: quotedSenderLabel } : {}),
       }
