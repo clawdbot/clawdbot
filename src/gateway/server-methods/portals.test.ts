@@ -1,5 +1,5 @@
 import { request } from "node:http";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import type {
   PortalOpenResult,
@@ -13,6 +13,8 @@ import {
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
+import { connectGatewayClient, disconnectGatewayClient } from "../test-helpers.e2e.js";
+import { installGatewayTestHooks, testState, withGatewayServer } from "../test-helpers.js";
 import { portalHandlers } from "./portals.js";
 
 const portal = {
@@ -270,5 +272,56 @@ describe("portal gateway methods", () => {
     expect(events.get("node")).toEqual([]);
     expect(events.get("read")).toEqual(["portal.changed"]);
     expect(events.get("write")).toEqual(["portal.changed"]);
+  });
+});
+
+async function httpStatus(host: string, port: number, path: string): Promise<number> {
+  return await new Promise<number>((resolve, reject) => {
+    const req = request({ host, port, path }, (res) => {
+      res.resume();
+      res.once("end", () => resolve(res.statusCode ?? 0));
+    });
+    req.once("error", reject);
+    req.end();
+  });
+}
+
+const GATEWAY_TOKEN = "portal-close-trim-e2e-token";
+
+describe("portal.close id trim Gateway client E2E", () => {
+  installGatewayTestHooks({ scope: "suite" });
+
+  test("padded portal.close via real Gateway client shuts down the listener", async () => {
+    testState.gatewayAuth = { mode: "token", token: GATEWAY_TOKEN };
+
+    await withGatewayServer(async ({ port }) => {
+      const client = await connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token: GATEWAY_TOKEN,
+        scopes: ["operator.write", "operator.read"],
+        timeoutMs: 60_000,
+      });
+      try {
+        const opened = await client.request<PortalOpenResult>("portal.open", {
+          port: 41301,
+          title: "Pad Close E2E",
+        });
+        expect(opened.id).toBeTruthy();
+        expect(opened.listenPort).toBeGreaterThan(0);
+        expect(await httpStatus("127.0.0.1", opened.listenPort, "/")).toBe(401);
+
+        const closed = await client.request<{ closed: boolean }>("portal.close", {
+          id: ` ${opened.id} `,
+        });
+        expect(closed).toEqual({ closed: true });
+
+        const listed = await client.request<{ portals: Array<{ id: string }> }>("portal.list", {});
+        expect(listed.portals.some((entry) => entry.id === opened.id)).toBe(false);
+
+        await expect(httpStatus("127.0.0.1", opened.listenPort, "/")).rejects.toThrow();
+      } finally {
+        await disconnectGatewayClient(client);
+      }
+    });
   });
 });
