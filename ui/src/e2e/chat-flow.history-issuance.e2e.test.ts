@@ -49,6 +49,9 @@ suite.define(() => {
       expect(await loader.evaluate((node) => getComputedStyle(node).visibility)).toBe("hidden");
       const opacity = await loader.evaluate(async (node) => {
         const animation = node.getAnimations()[0];
+        if (!animation) {
+          throw new Error("The loading skeleton has no reveal animation");
+        }
         await animation.ready;
         animation.pause();
         return [499, 575, 650].map((time) => {
@@ -65,6 +68,7 @@ suite.define(() => {
       await previous.waitFor({ state: "visible" });
       expect(await loader.count()).toBe(0);
       await page.emulateMedia({ reducedMotion: "reduce" });
+      await page.waitForFunction(() => matchMedia("(prefers-reduced-motion: reduce)").matches);
       await gateway.deferNext("chat.startup");
       const [revealDelay] = await Promise.all([
         page.evaluate(
@@ -117,7 +121,13 @@ suite.define(() => {
       expect(revealDelay.delay).toBeGreaterThanOrEqual(480);
       expect(revealDelay.previousVisible).toBe(false);
       expect(revealDelay.delay).toBeLessThan(1_000);
-      expect(await loader.evaluate((node) => getComputedStyle(node).opacity)).toBe("1");
+      expect(
+        await loader.evaluate((node) => ({
+          opacity: getComputedStyle(node).opacity,
+          duration: getComputedStyle(node).animationDuration,
+          reduced: matchMedia("(prefers-reduced-motion: reduce)").matches,
+        })),
+      ).toEqual({ opacity: "1", duration: "1e-05s", reduced: true });
       expect(
         await page
           .locator(".chat-pane-cache__pane--visible")
