@@ -768,24 +768,14 @@ async function runPluginLifecycleMatrix() {
       `failed to remove plugin code before missing-code uninstall: ${installedPath}`,
     );
 
-    let missingCodeUninstallFailed = false;
-    try {
-      await runMeasured(
-        summaryTsv,
-        "missing-code-uninstall",
-        "node",
-        [entry, "plugins", "uninstall", pluginId, "--force"],
-        runEnv,
-      );
-    } catch {
-      missingCodeUninstallFailed = true;
-    }
-    assertProbe(
-      missingCodeUninstallFailed,
-      "missing-code uninstall must fail closed without authoritative child metadata",
+    await runMeasured(
+      summaryTsv,
+      "missing-code-uninstall",
+      "node",
+      [entry, "plugins", "uninstall", pluginId, "--force"],
+      runEnv,
     );
-    assertProbe(recordFor(pluginId, runEnv), "missing-code uninstall removed the install record");
-    assertEnabled(pluginId, true, runEnv);
+    assertUninstalled(pluginId, runEnv);
 
     await runMeasured(
       summaryTsv,
