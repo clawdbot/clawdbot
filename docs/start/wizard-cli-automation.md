@@ -65,6 +65,10 @@ openclaw onboard --non-interactive --accept-risk \
 Add `--json` for a machine-readable summary.
 
 - `--gateway-port` defaults to `18789`. Only pass it to override that default.
+- Local onboarding generates a Gateway secret in token mode by default and
+  preserves existing password mode. Use `--gateway-auth password` with
+  `--gateway-password <value>` to supply a password explicitly; the password flag
+  also selects password mode on its own. Tailscale Funnel requires password mode.
 - `--skip-bootstrap` skips creating default workspace files, for automation that pre-seeds its own workspace.
 - `--secret-input-mode ref` stores new credentials as env-backed references, in the form `{ source: "env", provider: "default", id: "<ENV_VAR>" }`. Set the provider env var when you add a credential or pass an inline key flag. Existing resolvable named profiles and their `env`, `file`, `exec`, or `store` references are reused unchanged, without a new credential write or additional provider env var. Existing plaintext is not migrated. Run `openclaw secrets configure --apply`, then `openclaw secrets audit --check`. See [Secrets management](/gateway/secrets).
 - The gateway token follows the same mode. Setup generates that value itself, so reference mode has no env var to point at unless you supply one. With `OPENCLAW_GATEWAY_TOKEN` exported, `gateway.auth.token` becomes an `env` ref to it. Otherwise the token goes into the SQLite secret store as `OPENCLAW_GATEWAY_TOKEN`, and config keeps a `store` ref. Either way `openclaw.json` holds no plaintext gateway token. Inspect the entry with `openclaw secrets store list`.
