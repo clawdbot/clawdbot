@@ -235,7 +235,7 @@ by default, plus git-checkout installs under the same prefix flow.
   <Step title="Install local Node runtime">
     Downloads a pinned supported Node LTS tarball (the version is embedded in the script and updated independently, default `24.19.0`) to `<prefix>/tools/node-v<version>` and verifies SHA-256.
     Linux ARMv7 stops before installation because official Node 24+ ARMv7 binaries are unavailable. Use a 64-bit OS on compatible hardware or another supported host.
-    On Alpine/musl Linux, where Node does not publish compatible tarballs for the pinned runtime, installs `nodejs` and `npm` with `apk`, then verifies both Node and the actual linked SQLite library. Current stable Alpine package streams may still link vulnerable SQLite even with a new-enough Node; use an official `node:24-alpine` container or a glibc-based host when the safety check rejects the package.
+    On Alpine/musl Linux, where Node does not publish compatible tarballs for the pinned runtime, installs `nodejs` and `npm` with `apk`, then verifies both Node and the actual linked SQLite library. Current stable Alpine package streams may still link vulnerable SQLite even with a new-enough Node; use an official `node:26-alpine` container or a glibc-based host when the safety check rejects the package.
   </Step>
   <Step title="Ensure Git">
     If Git is missing, attempts install via apt/dnf/yum/apk on Linux or Homebrew on macOS.

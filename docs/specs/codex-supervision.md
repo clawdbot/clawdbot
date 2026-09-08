@@ -175,7 +175,7 @@ previews. The returned native cursor lets callers continue the scan.
 The plugin registers three Gateway-backed shell commands:
 
 ```text
-openclaw codex sessions [--search <text>] [--host <id>] [--limit <count>] [--cursor <cursor>] [--json] [gateway-options]
+openclaw codex sessions [--agent <id>] [--search <text>] [--host <id>] [--limit <count>] [--cursor <cursor>] [--json] [gateway-options]
 openclaw codex continue <thread-id> [--agent <id>] [--host <id>] [--json] [gateway-options]
 openclaw codex archive <thread-id> --confirm-no-other-runner [--agent <id>] [--host <id>] [--json] [gateway-options]
 ```

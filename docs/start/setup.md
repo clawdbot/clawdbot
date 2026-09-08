@@ -60,7 +60,7 @@ No global install yet? Run it from this repo instead:
 pnpm openclaw setup --baseline
 ```
 
-(Bare `openclaw setup`, without `--baseline`, is an alias for `openclaw onboard` and runs the full interactive wizard.)
+(Bare `openclaw setup`, without `--baseline`, opens an interactive OpenClaw chat on a configured system and falls through to guided onboarding on a fresh one. See [Setup CLI](/cli/setup) for the full routing order.)
 
 ## Run the Gateway from this repo
 

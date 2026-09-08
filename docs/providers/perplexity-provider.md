@@ -77,15 +77,15 @@ with `plugins.entries.perplexity.config.webSearch.model`.
 
 ## Native API filtering
 
-| Filter                               | Description                                                     | Transport   |
-| ------------------------------------ | --------------------------------------------------------------- | ----------- |
-| `count`                              | Results per search, 1-10 (default 5)                            | Native only |
-| `freshness`                          | Recency window: `day`, `week`, `month`, `year`                  | Both        |
-| `country`                            | 2-letter country code (`us`, `de`, `jp`)                        | Native only |
-| `language`                           | ISO 639-1 language code (`en`, `fr`, `zh`)                      | Native only |
-| `date_after` / `date_before`         | Published-date range in `YYYY-MM-DD`                            | Native only |
-| `domain_filter`                      | Max 20 domains; allowlist or `-`-prefixed denylist, never mixed | Native only |
-| `max_tokens` / `max_tokens_per_page` | Content budget across all results / per page                    | Native only |
+| Filter                               | Description                                                                             | Transport   |
+| ------------------------------------ | --------------------------------------------------------------------------------------- | ----------- |
+| `count`                              | Results per search, 1-10 (default 5); accepted but ignored on the chat-completions path | Both        |
+| `freshness`                          | Recency window: `day`, `week`, `month`, `year`                                          | Both        |
+| `country`                            | 2-letter country code (`us`, `de`, `jp`)                                                | Native only |
+| `language`                           | ISO 639-1 language code (`en`, `fr`, `zh`)                                              | Native only |
+| `date_after` / `date_before`         | Published-date range in `YYYY-MM-DD`                                                    | Native only |
+| `domain_filter`                      | Max 20 domains; allowlist or `-`-prefixed denylist, never mixed                         | Native only |
+| `max_tokens` / `max_tokens_per_page` | Content budget across all results / per page                                            | Native only |
 
 Native-only filters return a descriptive error on the chat-completions path.
 `freshness` cannot be combined with `date_after`/`date_before`.

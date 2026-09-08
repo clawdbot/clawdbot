@@ -32,7 +32,7 @@ title: "Features"
 
 **Channels:**
 
-- Telegram and WebChat ship with the core install; every other channel is an
+- A2A, Reef, Telegram, and WebChat ship with the core install; every other channel is an
   official plugin installed with `openclaw plugins install @openclaw/<id>` (or on demand
   during `openclaw onboard` / `openclaw channels add`)
 - Official plugin channels: Discord, Feishu, Google Chat, iMessage, IRC, LINE, Matrix, Mattermost,
