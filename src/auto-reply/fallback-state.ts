@@ -128,6 +128,8 @@ type ResolvedFallbackTransition = {
   fallbackCleared: boolean;
   reasonSummary: string;
   attemptSummaries: string[];
+  /** Original runtime fallback attempts, in order. */
+  attempts: RuntimeFallbackAttempt[];
   previousState: {
     selectedModel?: string;
     activeModel?: string;
@@ -208,6 +210,7 @@ export function resolveFallbackTransition(params: {
     fallbackCleared,
     reasonSummary,
     attemptSummaries,
+    attempts: params.attempts,
     previousState,
     nextState,
     stateChanged,

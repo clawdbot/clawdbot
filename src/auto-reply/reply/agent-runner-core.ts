@@ -19,6 +19,7 @@ import {
   normalizeDeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
+import { formatProviderModelRef } from "../model-runtime.js";
 import {
   isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
@@ -48,6 +49,57 @@ export const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 
 const RESTART_LIFECYCLE_REPLY_TEXT =
   "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
+
+// Reasons whose user-facing meaning is "host could not reach the provider".
+// See resolveFailoverStatus in src/agents/failover-error.ts for the 5xx/timeout partition.
+const TRANSPORT_UNREACHABLE_REASONS = new Set([
+  "server_error",
+  "overloaded",
+  "timeout",
+  "tls_certificate",
+]);
+
+function describeSelectedModelFailureReason(params: {
+  selectedModelRef: string;
+  attempts: ReturnType<typeof resolveFallbackTransition>["attempts"];
+}): string {
+  // The fallback chain runs selected first; use its attempt when present so the
+  // message describes why the *configured* model failed, not a later fallback.
+  const selectedAttempt =
+    params.attempts.find(
+      (attempt) =>
+        formatProviderModelRef(attempt.provider, attempt.model) === params.selectedModelRef,
+    ) ?? params.attempts[0];
+  const reason = selectedAttempt?.reason;
+  const target = `the configured model backend ${params.selectedModelRef}`;
+  switch (reason) {
+    case "auth":
+      return `authentication for ${target} was rejected (401)`;
+    case "auth_permanent":
+      return `authentication for ${target} was permanently rejected (403)`;
+    case "billing":
+      return `${target} refused the request due to billing (402)`;
+    case "rate_limit":
+      return `${target} is rate-limited (429)`;
+    case "context_overflow":
+      return `${target} rejected the request as too large (context overflow)`;
+    case "model_not_found":
+      return `the configured model ${params.selectedModelRef} was not found (404)`;
+    case "format":
+      return `${target} rejected the request format (400)`;
+    case "session_expired":
+      return `the session on ${params.selectedModelRef} has expired (410)`;
+    case "empty_response":
+      return `${target} returned an empty response`;
+    case "no_error_details":
+      return `${target} failed without error details`;
+    default:
+      if (reason && TRANSPORT_UNREACHABLE_REASONS.has(reason)) {
+        return `I couldn't reach the configured model backend ${params.selectedModelRef}`;
+      }
+      return reason ? `${target} failed (${reason})` : `${target} failed`;
+  }
+}
 
 export function scheduleFollowupDrainAfterReplyOperationClear(params: {
   operation: ReplyOperation;
@@ -95,9 +147,13 @@ export function buildSilentFallbackFailurePayload(params: {
   ) {
     return undefined;
   }
+  const failureSentence = describeSelectedModelFailureReason({
+    selectedModelRef: params.fallbackTransition.selectedModelRef,
+    attempts: params.fallbackTransition.attempts,
+  });
   return markReplyPayloadForSourceSuppressionDelivery({
     text:
-      `⚠️ I couldn't reach the configured model backend ${params.fallbackTransition.selectedModelRef}. ` +
+      `⚠️ ${failureSentence}. ` +
       `Fallback used ${params.fallbackTransition.activeModelRef}, but it produced no visible reply.`,
     isError: true,
   });
