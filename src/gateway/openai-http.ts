@@ -308,7 +308,7 @@ function writeAssistantContentChunk(
 
 function writeAssistantFinishChunk(
   res: ServerResponse,
-  params: ChatCompletionStreamIdentity & { finishReason: "stop" | "tool_calls" },
+  params: ChatCompletionStreamIdentity & { finishReason: "stop" | "length" | "tool_calls" },
 ) {
   writeChatCompletionChunk(res, params, {
     choices: [
@@ -1099,7 +1099,7 @@ export async function handleOpenAiHttpRequest(
           {
             index: 0,
             message: { role: "assistant", content },
-            finish_reason: "stop",
+            finish_reason: stopReason === "length" ? "length" : "stop",
           },
         ],
         usage,
@@ -1132,6 +1132,7 @@ export async function handleOpenAiHttpRequest(
   let assistantText: AssistantTextSnapshot = { text: "" };
   let pendingAssistantText: AssistantTextSnapshot | undefined;
   let finalResultText: string | undefined;
+  let finalFinishReason: "stop" | "length" = "stop";
   let finalToolCalls: ReturnType<typeof resolveStopReasonAndPendingToolCalls>["pendingToolCalls"];
   let finalUsage: OpenAiChatCompletionsUsage | undefined;
   let finalizeRequested = false;
@@ -1193,7 +1194,7 @@ export async function handleOpenAiHttpRequest(
       if (!wroteStopChunk) {
         writeAssistantFinishChunk(res, {
           ...streamIdentity,
-          finishReason: finalToolCalls ? "tool_calls" : "stop",
+          finishReason: finalToolCalls ? "tool_calls" : finalFinishReason,
         });
         wroteStopChunk = true;
       }
@@ -1351,6 +1352,7 @@ export async function handleOpenAiHttpRequest(
       }
 
       finalResultText = resolveAssistantResultText(result);
+      finalFinishReason = stopReason === "length" ? "length" : "stop";
       finalToolCalls =
         stopReason === "tool_calls" && pendingToolCalls?.length ? pendingToolCalls : undefined;
       requestFinalize();

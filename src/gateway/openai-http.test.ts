@@ -12,12 +12,18 @@ import {
 } from "../agents/agent-run-terminal-outcome.js";
 import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import { createAgentCommandLifecycle } from "../agents/command/lifecycle.js";
+import { resolveEmbeddedRunTerminal } from "../agents/embedded-agent-runner/run/terminal-resolution.js";
+import { makeTerminalInput } from "../agents/embedded-agent-runner/run/terminal-resolution.test-support.js";
 import {
   createStubSessionHarness,
   emitAssistantTextDelta,
 } from "../agents/embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "../agents/embedded-agent-subscribe.js";
 import { FailoverError } from "../agents/failover-error.js";
+import {
+  buildEmbeddedRunnerAssistant,
+  makeEmbeddedRunnerAttempt,
+} from "../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
@@ -185,6 +191,101 @@ function firstAgentCommandOptions() {
 }
 
 describe("OpenAI-compatible HTTP API (e2e)", () => {
+  it.each([
+    { stream: false, includeUsage: false },
+    { stream: true, includeUsage: false },
+    { stream: true, includeUsage: true },
+  ])(
+    "preserves the output-budget finish reason (stream=$stream, usage=$includeUsage)",
+    async ({ stream, includeUsage }) => {
+      const partialText = "Here is the first half of the answer";
+      const assistant = buildEmbeddedRunnerAssistant({
+        stopReason: "length",
+        content: [{ type: "text", text: partialText }],
+      });
+      const resolved = await resolveEmbeddedRunTerminal(
+        makeTerminalInput({
+          attempt: makeEmbeddedRunnerAttempt({
+            assistantTexts: [partialText],
+            lastAssistant: assistant,
+            currentAttemptAssistant: assistant,
+            currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+          }),
+          attemptAssistant: assistant,
+          payloadsWithToolMedia: [{ text: partialText }],
+        }),
+      );
+      expect(resolved.action).toBe("complete");
+      if (resolved.action !== "complete") {
+        throw new Error("expected a deliverable partial response");
+      }
+      expect(resolved.result.meta.stopReason).toBe("length");
+      expect(resolved.result.meta.error).toBeUndefined();
+
+      const continueAgent = createDeferred();
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
+        if (stream) {
+          const runId = (opts as { runId: string }).runId;
+          emitAgentEvent({ runId, stream: "assistant", data: { delta: partialText } });
+          emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+          await continueAgent.promise;
+        }
+        return recordAgentRunTerminalOutcome(resolved.result, "completed");
+      }) as never);
+
+      try {
+        const response = await postChatCompletions(enabledPort, {
+          stream,
+          ...(includeUsage ? { stream_options: { include_usage: true } } : {}),
+          model: "openclaw",
+          messages: [{ role: "user", content: "Explain the result." }],
+        });
+        expect(response.status).toBe(200);
+        if (!stream) {
+          const completion = (await response.json()) as OpenAI.ChatCompletion;
+          expect(completion.choices[0]?.message.content).toContain(partialText);
+          expect(completion.choices[0]?.finish_reason).toBe("length");
+          return;
+        }
+
+        if (!response.body) {
+          throw new Error("expected a streaming response body");
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let wire = "";
+        while (!wire.includes(partialText)) {
+          const { done, value } = await reader.read();
+          expect(done).toBe(false);
+          wire += decoder.decode(value, { stream: true });
+        }
+        expect(wire).not.toContain("[DONE]");
+        continueAgent.resolve();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) {
+            wire += decoder.decode();
+            break;
+          }
+          wire += decoder.decode(value, { stream: true });
+        }
+        const data = parseSseDataLines(wire);
+        const chunks = data
+          .filter((entry) => entry !== "[DONE]")
+          .map((entry) => JSON.parse(entry) as OpenAI.ChatCompletionChunk);
+        const choices = chunks.flatMap((chunk) => chunk.choices);
+        expect(choices.map((choice) => choice.delta.content ?? "").join("")).toContain(partialText);
+        expect(choices.map((choice) => choice.finish_reason).filter(Boolean)).toEqual(["length"]);
+        expect(chunks.filter((chunk) => chunk.usage)).toHaveLength(includeUsage ? 1 : 0);
+        expect(data.filter((entry) => entry === "[DONE]")).toHaveLength(1);
+        expect(data.at(-1)).toBe("[DONE]");
+      } finally {
+        continueAgent.resolve();
+      }
+    },
+  );
+
   it.each(
     (
       [
