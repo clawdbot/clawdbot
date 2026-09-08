@@ -213,13 +213,29 @@ function deriveInboundMessageHookContextBase(
 }
 
 type DerivedInboundMessageHookContext = ReturnType<typeof deriveInboundMessageHookContextBase>;
+type InboundMessageHookMetadataFields = Pick<
+  PluginHookInboundMessageMetadata,
+  | "mediaPath"
+  | "mediaUrl"
+  | "mediaType"
+  | "mediaPaths"
+  | "mediaUrls"
+  | "mediaTypes"
+  | "originalMediaPath"
+  | "originalMediaUrl"
+  | "originalMediaType"
+  | "originalMediaPaths"
+  | "originalMediaUrls"
+  | "originalMediaTypes"
+  | "mediaStagingPending"
+>;
 type CanonicalInboundMessageHookContext = Pick<
   DerivedInboundMessageHookContext,
   "from" | "content" | "channelId" | "isGroup"
 > &
   Partial<DerivedInboundMessageHookContext> &
   Partial<Pick<PluginHookMessageContext, "runId" | "trace" | "callDepth">> &
-  Partial<PluginHookInboundMessageMetadata> & {
+  Partial<InboundMessageHookMetadataFields> & {
     originalMedia?: MessageHookMediaFact[];
     mediaRemoteHost?: string;
   };
