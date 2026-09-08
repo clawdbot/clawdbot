@@ -197,7 +197,7 @@ Inline config values win over files; env vars are the last fallback for the defa
   channels: {
     line: {
       channelAccessToken: { source: "env", provider: "default", id: "LINE_CHANNEL_ACCESS_TOKEN" },
-      channelSecret: { source: "file", provider: "mounted-json", id: "/channels/line/secret" },
+      channelSecret: { source: "env", provider: "default", id: "LINE_CHANNEL_SECRET" },
       accounts: {
         support: {
           channelAccessToken: { source: "store", provider: "default", id: "LINE_SUPPORT_TOKEN" },
@@ -209,11 +209,11 @@ Inline config values win over files; env vars are the last fallback for the defa
 }
 ```
 
-Only the default account falls back to the channel-level credentials and the env vars; every other account needs its own value, file, or reference. A configured `SecretRef` owns that credential: when the runtime cannot resolve it OpenClaw reports the credential as unavailable rather than missing and does not fall back to `tokenFile`/`secretFile`, the environment variable, or the channel-level value, because that would authenticate with a credential you did not name.
+`env` and `store` references work as written; `file` and `exec` ones need a matching `secrets.providers` entry first, or the account fails to start with `SECRET_PROVIDER_NOT_CONFIGURED`. Only the default account falls back to the channel-level credentials and the env vars; every other account needs its own value, file, or reference. A configured `SecretRef` owns that credential: when the runtime cannot resolve it OpenClaw reports the credential as unavailable rather than missing and does not fall back to `tokenFile`/`secretFile`, the environment variable, or the channel-level value, because that would authenticate with a credential you did not name.
 
-If the reference cannot be resolved at startup the account does not start: `openclaw channels status` shows it stopped with the reason, and [`openclaw doctor`](/cli/doctor) points at that account's references rather than only the one that failed, with the retry command. An account that is already running can survive a later lookup failure by keeping the value it last resolved; [Secrets Management](/gateway/secrets) owns the exact conditions for that, and one of them is worth knowing here: it holds only while the account's own non-secret LINE settings are unchanged, so editing anything under `channels.line` — `historyLimit`, `webhookPath`, an `allowFrom` entry — turns the next unresolvable reload into a cold failure that stops the account.
+If the reference cannot be resolved at startup the account does not start: `openclaw channels status` shows it stopped with the reason, and [`openclaw doctor`](/cli/doctor) points at that account's references rather than only the one that failed, with the retry command. An account that is already running can survive a later lookup failure by keeping the value it last resolved; [Secrets Management](/gateway/secrets) owns the exact conditions for that, and one of them is worth knowing here: it holds only while that account's own settings and the channel-level defaults above them are both unchanged, so editing either — `historyLimit`, `webhookPath`, an `allowFrom` entry — turns the next unresolvable reload into a cold failure that stops the account. Another account's settings do not count.
 
-Rotating a stored value needs no config edit: `openclaw secrets reload` re-resolves it in place. The account is re-inspected rather than restarted, so `openclaw channels status` stays `running` across the rotation.
+Rotating a stored value needs no config edit: `openclaw secrets reload` re-resolves it and restarts the LINE channel, so the account comes back on the new value without an edit or a Gateway restart.
 
 Multiple accounts:
 
