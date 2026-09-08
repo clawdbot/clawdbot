@@ -768,11 +768,19 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       effectiveAttachmentRoots,
     } = resolveIMessageInboundBodyText(message);
 
-    const storeAllowFrom = await readChannelAllowFromStore(
-      "imessage",
-      process.env,
-      accountInfo.accountId,
-    ).catch(() => []);
+    let storeAllowFrom: string[];
+    try {
+      storeAllowFrom = await readChannelAllowFromStore(
+        "imessage",
+        process.env,
+        accountInfo.accountId,
+      );
+    } catch (err) {
+      // A store I/O failure is not "no paired senders". Substituting [] would
+      // issue pairing challenges to already-paired people.
+      runtime.error?.(`imessage: pairing-store read failed; dropping inbound: ${String(err)}`);
+      throw err;
+    }
     const isQuestionReaction = hasIMessageQuestionReactionTarget({
       accountId: accountInfo.accountId,
       message,
