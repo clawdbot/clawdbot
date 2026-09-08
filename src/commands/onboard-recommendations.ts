@@ -4,7 +4,6 @@ import {
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   createOnboardingRecommendationsStore,
@@ -45,10 +44,12 @@ type BootstrapRecommendation = {
 function createDefaultOnboardingRecommendationsStore(
   requestedAgentId?: string,
 ): OnboardingRecommendationsStore {
+  const requested = requestedAgentId?.trim();
+  if (requestedAgentId !== undefined && !requested) {
+    throw new Error("--agent must not be blank");
+  }
   const cfg = getRuntimeConfig();
-  const agentId = requestedAgentId
-    ? resolveConfiguredAgentId(cfg, normalizeAgentId(requestedAgentId))
-    : resolveDefaultAgentId(cfg);
+  const agentId = requested ? resolveConfiguredAgentId(cfg, requested) : resolveDefaultAgentId(cfg);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   return createOnboardingRecommendationsStore({ workspaceDir });
 }

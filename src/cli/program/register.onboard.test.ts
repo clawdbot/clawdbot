@@ -91,25 +91,25 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
-  it("routes an explicit agent to the recommendations commands", async () => {
-    await runCli(["onboard", "recommendations", "--agent", "writer", "--json"]);
-    expect(mocks.onboardRecommendationsCommand).toHaveBeenCalledWith(
-      { agent: "writer", json: true },
-      runtime,
-    );
+  it.each(["writer", "", "   ", "writer!"])(
+    "preserves explicit agent '%s' for command validation",
+    async (agent) => {
+      await runCli(["onboard", "recommendations", "--agent", agent, "--json"]);
+      expect(mocks.onboardRecommendationsCommand).toHaveBeenCalledWith(
+        { agent, json: true },
+        runtime,
+      );
 
-    await runCli(["onboard", "recommendations", "--agent", "writer", "acknowledge"]);
-    expect(mocks.acknowledgeOnboardRecommendationsCommand).toHaveBeenCalledWith(
-      { agent: "writer", retry: undefined },
-      runtime,
-    );
+      await runCli(["onboard", "recommendations", "--agent", agent, "acknowledge"]);
+      expect(mocks.acknowledgeOnboardRecommendationsCommand).toHaveBeenCalledWith(
+        { agent, retry: undefined },
+        runtime,
+      );
 
-    await runCli(["onboard", "recommendations", "--agent", "writer", "refresh"]);
-    expect(mocks.refreshOnboardRecommendationsCommand).toHaveBeenCalledWith(
-      { agent: "writer" },
-      runtime,
-    );
-  });
+      await runCli(["onboard", "recommendations", "--agent", agent, "refresh"]);
+      expect(mocks.refreshOnboardRecommendationsCommand).toHaveBeenCalledWith({ agent }, runtime);
+    },
+  );
 
   it("routes the recommendations acknowledgement subcommand", async () => {
     await runCli(["onboard", "recommendations", "acknowledge"]);

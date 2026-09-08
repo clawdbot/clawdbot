@@ -50,7 +50,7 @@ async function validateRecommendationParentOptions(
 ): Promise<boolean> {
   const unsupported = listExplicitOptionFlagsExcept(
     command,
-    json ? RECOMMENDATION_READ_PARENT_OPTIONS : NO_RECOMMENDATION_PARENT_OPTIONS,
+    json ? RECOMMENDATION_READ_PARENT_OPTIONS : RECOMMENDATION_MUTATION_PARENT_OPTIONS,
   );
   if (unsupported.length === 0) {
     return true;
@@ -65,7 +65,7 @@ async function validateRecommendationParentOptions(
 
 const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({ includeSkip: true });
 const RECOMMENDATION_READ_PARENT_OPTIONS = new Set(["json"]);
-const NO_RECOMMENDATION_PARENT_OPTIONS = new Set(["agent"]);
+const RECOMMENDATION_MUTATION_PARENT_OPTIONS = new Set(["agent"]);
 
 type OnboardAuthFlag = {
   readonly cliOption: string;
@@ -328,7 +328,10 @@ export function registerOnboardCommand(program: Command): void {
         const { onboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
         const agent = readStringValue(opts.agent);
-        onboardRecommendationsCommand({ json, ...(agent ? { agent } : {}) }, defaultRuntime);
+        onboardRecommendationsCommand(
+          { json, ...(agent !== undefined ? { agent } : {}) },
+          defaultRuntime,
+        );
       });
     });
 
@@ -349,7 +352,7 @@ export function registerOnboardCommand(program: Command): void {
           await import("../../commands/onboard-recommendations.js");
         const agent = readStringValue(recommendations.opts().agent);
         acknowledgeOnboardRecommendationsCommand(
-          { retry: opts.retry, ...(agent ? { agent } : {}) },
+          { retry: opts.retry, ...(agent !== undefined ? { agent } : {}) },
           defaultRuntime,
         );
       });
@@ -370,7 +373,7 @@ export function registerOnboardCommand(program: Command): void {
         const { refreshOnboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
         const agent = readStringValue(recommendations.opts().agent);
-        refreshOnboardRecommendationsCommand(agent ? { agent } : {}, defaultRuntime);
+        refreshOnboardRecommendationsCommand(agent !== undefined ? { agent } : {}, defaultRuntime);
       });
     });
 
