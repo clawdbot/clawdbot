@@ -138,7 +138,7 @@ openclaw plugins uninstall release-marketplace-plugin --force >/tmp/openclaw-rel
 node "$marketplace_assertions" \
   assert-update-log \
   /tmp/openclaw-release-plugin-marketplace-uninstall.log \
-  "Removed: config entry, install record, allowlist entry, denylist entry, load path, directory."
+  "Removed: plugin settings, install record, allowlist entry, denylist entry, load path, directory."
 if openclaw release-market ping >/tmp/openclaw-release-plugin-marketplace-cli-after-uninstall.log 2>&1; then
   echo "release-market CLI should be gone after uninstall" >&2
   exit 1

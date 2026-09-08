@@ -125,6 +125,7 @@ flow:
               - install
               - expr: config.pluginSpec
               - --force
+              - --accept-capabilities
             - timeoutMs: 180000
         - call: runQaCli
           args:
