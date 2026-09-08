@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ExecMode } from "../infra/exec-approvals.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
+import type { PreparedPairedComputerUse } from "./computer-use-node-capabilities.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "./exec-defaults.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
@@ -100,6 +101,7 @@ export type OpenClawToolsOptions = {
   /** Mutable model-context generation used to expire screenshot coordinate frames. */
   computerContextEpoch?: { value: number };
   computerTransport?: import("./tools/computer-tool.js").ComputerToolTransport | null;
+  pairedNodeComputerUse?: PreparedPairedComputerUse;
   /** Registers run-owned cleanup for tools that hold node resources. */
   registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
   /** Internal review-run restrictions and proposal provenance. */

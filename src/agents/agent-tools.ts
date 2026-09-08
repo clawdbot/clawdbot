@@ -233,6 +233,10 @@ type OpenClawCodingToolsOptions = {
   requesterThinkingLevel?: ThinkLevel;
   /** Exact admitted run instance for lifecycle-bound subprocess capabilities. */
   operationalRunInstance?: OperationalRunInstanceRef;
+  /** Session-owned desktop resolved before optional paired-node discovery. */
+  computerTransport?: import("./tools/computer-tool.js").ComputerToolTransport | null;
+  /** Host-prepared effective paired-node Computer Use surface. */
+  pairedNodeComputerUse?: import("./computer-use-node-capabilities.js").PreparedPairedComputerUse;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
   /** Diagnostic trace context for hook/log correlation during this run. */
@@ -940,7 +944,12 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             hasRepliedRef: options?.hasRepliedRef,
             modelHasVision: options?.modelHasVision,
             computerContextEpoch: options?.computerContextEpoch,
-            computerTransport: resolveSessionPlacementComputer(options?.operationalRunInstance),
+            computerTransport:
+              options?.computerTransport === null
+                ? null
+                : (options?.computerTransport ??
+                  resolveSessionPlacementComputer(options?.operationalRunInstance)),
+            pairedNodeComputerUse: options?.pairedNodeComputerUse,
             registerRunCleanup: options?.registerRunCleanup,
             requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
             sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,

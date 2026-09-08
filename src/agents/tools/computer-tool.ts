@@ -2,7 +2,9 @@ import crypto from "node:crypto";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ComputerUseV2ActionName } from "../../plugins/computer-use-contract.js";
+import { COMPUTER_USE_V2_ACTION_NAMES } from "../../plugins/computer-use-contract.js";
 import { sleep } from "../../utils/sleep.js";
+import type { PreparedPairedComputerUse } from "../computer-use-node-capabilities.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { type AnyAgentTool, readFiniteNumberParam, readToolStringParam } from "./common.js";
 import { buildComputerToolDescription } from "./computer-tool-guidance.js";
@@ -44,6 +46,8 @@ export function createComputerTool(options?: {
   contextEpoch?: ComputerContextEpoch;
   /** Host-owned session desktop; omitted for ordinary paired-node selection. */
   transport?: ComputerToolTransport;
+  /** Host-prepared effective paired-node action surface for pre-execution serialization. */
+  pairedNodeComputerUse?: PreparedPairedComputerUse;
   /** Attempt owner for deterministic provider-execution cleanup. */
   registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
 }): AnyAgentTool {
@@ -56,9 +60,17 @@ export function createComputerTool(options?: {
   const targetScope = options?.transport ? "session" : "paired";
   // Harnesses serialize the schema before execution; a prepared desktop must
   // advertise its full action surface before the first observation.
-  const initialCapabilities = options?.transport?.computerUse;
+  const initialCapabilities =
+    options?.transport?.computerUse ?? options?.pairedNodeComputerUse?.guidanceCapabilities;
+  const preparedPairedActions = options?.transport ? undefined : options?.pairedNodeComputerUse;
+  const initialPairedActions = preparedPairedActions
+    ? COMPUTER_USE_V2_ACTION_NAMES.filter(
+        (action) =>
+          COMPUTER_TOOL_ACTIONS.includes(action) || preparedPairedActions.actions.includes(action),
+      )
+    : COMPUTER_TOOL_ACTIONS;
   const parameterSchema = createComputerToolSchema(
-    availableActions(initialCapabilities?.actions ?? COMPUTER_TOOL_ACTIONS),
+    availableActions(options?.transport?.computerUse?.actions ?? initialPairedActions),
     targetScope,
   );
   const replaceParameterSchema = (actions: readonly ComputerUseV2ActionName[]) => {
