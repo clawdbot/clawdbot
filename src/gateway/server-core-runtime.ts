@@ -26,6 +26,7 @@ import {
   indexPluginNodeCapabilitySurfaces,
   reconcileClientPluginNodeCapabilities,
 } from "./plugin-node-capability.js";
+import { observeGatewayProviderUsageMetrics } from "./provider-usage-metrics-observer.js";
 import type { prepareGatewayLifecycle } from "./server-lifecycle.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
@@ -606,6 +607,7 @@ export async function startGatewayCoreRuntime(input: {
         workspaceDir: pluginWorkspaceDir,
         broadcastPluginEvent,
         getCronService: () => runtimeState.cronState.cron,
+        observeProviderUsage: observeGatewayProviderUsageMetrics,
         onHandle: (handle) => pluginRuntimeGeneration.publishServices(replacement.claim, handle),
       });
       if (

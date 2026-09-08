@@ -10,6 +10,10 @@ import {
 } from "../infra/diagnostic-events.js";
 import { markTrustedOtelDiagnosticListener } from "../infra/diagnostic-otel-listener-provenance.js";
 import { registerDiagnosticTracePropagationBridge } from "../infra/diagnostic-trace-propagation.js";
+import type {
+  ProviderUsageMetricsListener,
+  ProviderUsageMetricsSnapshot,
+} from "../infra/provider-usage-metrics.types.js";
 import {
   recordDiagnosticExporterHealth,
   type DiagnosticExporterHealthUpdate,
@@ -40,7 +44,13 @@ type TrustedExporterInternalDiagnostics = NonNullable<
   OpenClawPluginServiceContext["internalDiagnostics"]
 > & {
   reportExporterHealth: (update: DiagnosticExporterHealthUpdate) => void;
+  observeProviderUsage?: (listener: ProviderUsageMetricsListener) => Promise<() => void>;
 };
+
+type ObserveProviderUsage = (params: {
+  isActive: () => boolean;
+  listener: (snapshot: ProviderUsageMetricsSnapshot) => void;
+}) => Promise<() => void>;
 
 function createPluginLogger(): PluginLogger {
   return {
@@ -59,6 +69,7 @@ function createServiceContext(params: {
   serviceHealth: NonNullable<OpenClawPluginServiceContext["serviceHealth"]>;
   gatewayEvents?: OpenClawPluginServiceContext["gatewayEvents"];
   getCron?: OpenClawPluginServiceContext["getCron"];
+  observeProviderUsage?: ObserveProviderUsage;
   lease: PluginRuntimeCapabilityLease;
 }): OpenClawPluginServiceContext {
   const isDiagnosticsExporter =
@@ -66,6 +77,9 @@ function createServiceContext(params: {
     (params.service?.service.id === "diagnostics-otel" ||
       params.service?.service.id === "diagnostics-prometheus");
   const isOtelExporter = isDiagnosticsExporter && params.service.service.id === "diagnostics-otel";
+  const isPrometheusExporter =
+    isDiagnosticsExporter && params.service.service.id === "diagnostics-prometheus";
+  const observeProviderUsage = params.observeProviderUsage;
   const grantsInternalDiagnostics =
     isDiagnosticsExporter &&
     (params.service?.origin === "bundled" || params.service?.trustedOfficialInstall === true);
@@ -100,6 +114,18 @@ function createServiceContext(params: {
               recordDiagnosticExporterHealth(params.service.service.id, update);
             }
           },
+          ...(isPrometheusExporter && observeProviderUsage
+            ? {
+                observeProviderUsage: async (listener: ProviderUsageMetricsListener) => {
+                  params.lease.assertActive("provider usage observer");
+                  const release = await observeProviderUsage({
+                    isActive: params.lease.isActive,
+                    listener,
+                  });
+                  return params.lease.retain(release);
+                },
+              }
+            : {}),
         }
       : undefined;
 
@@ -206,6 +232,7 @@ export async function startPluginServices(params: {
   broadcastPluginEvent?: GatewayPluginEventBroadcastFn;
   getCronService?: () => PluginServiceCronHost | null | undefined;
   oneShotStopTimeouts?: { eventDrainMs: number; serviceStopMs: number };
+  observeProviderUsage?: ObserveProviderUsage;
   onHandle?: (handle: PluginServicesHandle) => void;
 }): Promise<PluginServicesHandle> {
   const healthGeneration = createPluginServiceHealthGeneration(params.registry);
@@ -427,6 +454,7 @@ export async function startPluginServices(params: {
       service: entry,
       serviceHealth: serviceHealth.health,
       gatewayEvents: scopedGatewayEvents.gatewayEvents,
+      ...(params.observeProviderUsage ? { observeProviderUsage: params.observeProviderUsage } : {}),
       ...(params.getCronService
         ? {
             getCron: createPluginServiceCronGetter({
