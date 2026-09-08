@@ -19,4 +19,4 @@ export {
 export { editMessageReplyMarkupTelegram, editMessageTelegram } from "./send-edit.js";
 export { sendLocationTelegram } from "./send-location.js";
 export { sendMessageTelegram } from "./send-message.js";
-export { sendPollTelegram, sendStickerTelegram } from "./send-special.js";
+export { sendDiceTelegram, sendPollTelegram, sendStickerTelegram } from "./send-special.js";

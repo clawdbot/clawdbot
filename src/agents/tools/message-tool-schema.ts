@@ -228,6 +228,20 @@ function buildSendSchema(options: {
   return props;
 }
 
+// Scoped groups merge into one flat object, so a key contributed by two groups keeps only
+// the last description. `emoji` belongs to reactions; dice carries its own key instead, or
+// enabling dice would silently retitle the reaction parameter wherever both are in scope.
+function buildDiceSchema() {
+  return {
+    diceEmoji: Type.Optional(
+      Type.String({
+        description:
+          "Dice face: 🎲 🎯 🏀 ⚽ 🎳 🎰 (default 🎲). The platform rolls the outcome and returns it; it cannot be requested.",
+      }),
+    ),
+  };
+}
+
 function buildReactionSchema() {
   return {
     messageId: Type.Optional(
@@ -466,6 +480,7 @@ function buildMessageToolSchemaProps(options: {
     ...buildPollSchema(),
     ...buildChannelTargetSchema(),
     ...buildStickerSchema(),
+    ...buildDiceSchema(),
     ...buildThreadSchema(),
     ...buildEventSchema(),
     ...buildModerationSchema(),
@@ -490,6 +505,7 @@ export const MESSAGE_TOOL_SCHEMA_BUILDERS = {
     poll: buildPollSchema,
     channelTarget: buildChannelTargetSchema,
     sticker: buildStickerSchema,
+    dice: buildDiceSchema,
     thread: buildThreadSchema,
     event: buildEventSchema,
     moderation: buildModerationSchema,

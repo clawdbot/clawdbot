@@ -5,6 +5,7 @@ import {
   actionHasResourceReference,
   actionHasTarget,
   actionRequiresTarget,
+  MESSAGE_ACTION_TARGET_MODE,
 } from "./message-action-spec.js";
 
 vi.mock("../../channels/plugins/bootstrap-registry.js", async () => ({
@@ -137,5 +138,12 @@ describe("actionHasResourceReference", () => {
     },
   ])("$action resource classification is $expected", ({ action, params, channel, expected }) => {
     expect(actionHasResourceReference(action, params, { channel })).toBe(expected);
+  });
+});
+
+describe("MESSAGE_ACTION_TARGET_MODE coverage", () => {
+  it("routes dice to the `to` field like other outbound sends", () => {
+    expect(MESSAGE_ACTION_TARGET_MODE.dice).toBe("to");
+    expect(actionRequiresTarget("dice")).toBe(true);
   });
 });

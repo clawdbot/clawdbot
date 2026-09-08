@@ -386,6 +386,35 @@ describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
     ).toBe(true);
   });
 
+  it("accepts a confirmed native send the reply-action name list does not enumerate", () => {
+    // The producer already proved the roll reached this run's conversation; without
+    // trusting that fact the run sends a redundant text reply after the visible send.
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "message_tool_only",
+        toolName: "message",
+        args: { action: "dice", to: "direct:user-1", diceEmoji: "\u{1F3B2}" },
+        result: {
+          details: {
+            ok: true,
+            sourceReplyRoute: "current-source",
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects an unconfirmed native send outside the reply-action name list", () => {
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "message_tool_only",
+        toolName: "message",
+        args: { action: "dice", to: "direct:someone-else", diceEmoji: "\u{1F3B2}" },
+        result: { details: { ok: true } },
+      }),
+    ).toBe(false);
+  });
+
   it("rejects an unconfirmed thread reply outside message-tool-only mode", () => {
     expect(
       isDeliveredMessageToolOnlySourceReplyResult({
