@@ -338,6 +338,10 @@ describe("Discord show_widget contextual presenter process proof", () => {
         controlUiEnabled: false,
         mutateConfig: (cfg) => ({
           ...cfg,
+          models: {
+            ...cfg.models,
+            catalogRefresh: { ...cfg.models?.catalogRefresh, enabled: false },
+          },
           // Public message actions do not need QA Lab's private runtime tools.
           plugins: {
             ...cfg.plugins,
