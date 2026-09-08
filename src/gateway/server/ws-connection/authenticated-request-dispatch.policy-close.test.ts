@@ -100,12 +100,13 @@ describe("policy writer response ownership", () => {
         started: createDeferredCore(),
         release: createDeferredCore(),
       }));
+      const settled = vi.fn();
       const readStarted = createDeferredCore();
       const readRelease = createDeferredCore();
       runtime.handler.mockImplementation(async ({ req, respond }) => {
         const writer = writers.find(({ id }) => id === req.id);
         if (writer) {
-          holdGatewayPolicyResponse(respond);
+          void holdGatewayPolicyResponse(respond)?.settled.then(settled);
           writer.started.resolve();
           await writer.release.promise;
           respond(true, { committed: req.id });
@@ -126,6 +127,7 @@ describe("policy writer response ownership", () => {
         readRelease.resolve();
         await dispatches[0];
         expect(fixture.harness.send).not.toHaveBeenCalled();
+        expect(settled).not.toHaveBeenCalled();
         for (const [index, writer] of writers.entries()) {
           expect(fixture.socketClose).not.toHaveBeenCalled();
           writer.release.resolve();
@@ -134,6 +136,8 @@ describe("policy writer response ownership", () => {
         }
         await fixture.closed.promise;
         expect(fixture.socketClose).toHaveBeenCalledOnce();
+        expect(settled).toHaveBeenCalledTimes(writers.length);
+        expect(fixture.harness.send).toHaveBeenCalledBefore(settled);
       } finally {
         readRelease.resolve();
         for (const writer of writers) {
@@ -222,8 +226,9 @@ describe("policy writer response ownership", () => {
     "releases a revoked writer when its handler exits with %s",
     async (completion) => {
       const fixture = createFixture();
+      const settled = vi.fn();
       runtime.handler.mockImplementation(async ({ respond }) => {
-        holdGatewayPolicyResponse(respond);
+        void holdGatewayPolicyResponse(respond)?.settled.then(settled);
         disconnectAllSharedGatewayAuthClients([fixture.client]);
         if (completion === "throw") {
           throw new Error("write failed");
@@ -232,6 +237,7 @@ describe("policy writer response ownership", () => {
       await fixture.dispatch("writer", "config.apply");
       await fixture.closed.promise;
       expect(fixture.socketClose).toHaveBeenCalledOnce();
+      expect(settled).toHaveBeenCalledOnce();
       if (completion === "throw") {
         expect(await fixture.harness.awaitResponseFrame("writer")).toMatchObject({
           ok: false,

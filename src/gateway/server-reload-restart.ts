@@ -11,6 +11,7 @@ import {
   setGatewaySigusr1RestartPolicy,
 } from "../infra/restart.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createAppliedConfigHashPublisher } from "./applied-config-hash-publisher.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import {
@@ -90,6 +91,10 @@ class GatewayRestartTransaction {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private restartDeferral: RestartDeferralHandle | null = null;
   private requestGeneration = 0;
+  // Responses outlive config supersession: watcher echoes and newer writes may
+  // replace restart debt, but cannot release an earlier writer's response gate.
+  private responseSettled: Promise<void> | undefined;
+  private readonly stopEmission = createDeferredCore();
   // onReady/onTimeout precede async restart preparation. Keep committed details
   // debt-eligible until the emitter confirms this generation won.
   private operation: GatewayRestartOperation = { kind: "idle" };
@@ -166,6 +171,7 @@ class GatewayRestartTransaction {
     nextConfig: OpenClawConfig,
     options?: GatewayRestartRequestOptions,
   ): void {
+    this.holdResponse(options);
     this.preserveDebt(this.createRequestDetails(plan, nextConfig, options));
   }
 
@@ -249,6 +255,7 @@ class GatewayRestartTransaction {
     if (this.retryStopped) {
       return { status: "recovery-pending", settle: () => {} };
     }
+    this.holdResponse(options);
     // Only another restart requirement supersedes accepted restart work. A
     // duplicate, hot-only, or failed config transaction must preserve it.
     this.supersedeRequest();
@@ -273,9 +280,27 @@ class GatewayRestartTransaction {
 
   stop(): void {
     this.retryStopped = true;
+    this.stopEmission.resolve();
+    this.responseSettled = undefined;
     this.pausedDebt = null;
     this.conservativeDebt = null;
     this.supersedeRequest();
+  }
+
+  private holdResponse(options?: GatewayRestartRequestOptions): void {
+    if (!options?.beforeRestartEmission || this.retryStopped) {
+      return;
+    }
+    const responseSettled = Promise.all([
+      this.responseSettled,
+      options.beforeRestartEmission(),
+    ]).then(() => {});
+    this.responseSettled = responseSettled;
+    void responseSettled.then(() => {
+      if (this.responseSettled === responseSettled) {
+        this.responseSettled = undefined;
+      }
+    });
   }
 
   private createRequestDetails(
@@ -408,6 +433,12 @@ class GatewayRestartTransaction {
     let emissionPrepared = true;
     const prepareForEmit = async () => {
       try {
+        if (this.responseSettled) {
+          await Promise.race([this.responseSettled, this.stopEmission.promise]);
+        }
+        if (!this.isCurrentRequest(requestGeneration)) {
+          return false;
+        }
         await params.assertRestartReady?.();
         if (!this.isCurrentRequest(requestGeneration)) {
           return false;
@@ -430,7 +461,12 @@ class GatewayRestartTransaction {
 
     const active = this.options.getActiveCounts();
 
-    if (active.totalActive > 0 || options?.prepareRuntimeConfig || params.assertRestartReady) {
+    if (
+      active.totalActive > 0 ||
+      options?.prepareRuntimeConfig ||
+      this.responseSettled ||
+      params.assertRestartReady
+    ) {
       // Avoid spinning up duplicate polling loops from repeated config changes.
       if (this.restartPending) {
         params.logReload.info(

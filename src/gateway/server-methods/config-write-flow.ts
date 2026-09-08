@@ -156,13 +156,13 @@ function resolveConfigRestartRequirement(params: {
   return { requiresRestart: false, scheduleDirectRestart: false };
 }
 
-/** Returns whether a managed config write can settle without restarting the Gateway. */
+/** Returns whether the managed reloader owns application or restart admission. */
 export function shouldAwaitGatewayConfigApplication(params: {
   changedPaths: string[];
   previousConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
 }): boolean {
-  return !resolveConfigRestartRequirement(params).requiresRestart;
+  return !resolveConfigRestartRequirement(params).scheduleDirectRestart;
 }
 
 function resolveConfigRestartRequest(params: unknown): {
@@ -246,10 +246,13 @@ export async function commitGatewayConfigWrite(params: {
   application?: Promise<RuntimeConfigWriteApplicationStatus>;
   queueFollowUp: () => void;
 }> {
+  const responseSettled = holdGatewayPolicyResponse(params.respond)?.settled;
   const application = params.awaitRuntimeApplication
-    ? createRuntimeConfigWriteApplication(captureGatewayRootWorkAdmissionContinuationScope()?.run)
+    ? createRuntimeConfigWriteApplication(
+        captureGatewayRootWorkAdmissionContinuationScope()?.run,
+        responseSettled,
+      )
     : undefined;
-  holdGatewayPolicyResponse(params.respond);
   const result = await replaceConfigFile({
     sourceConfig: params.nextConfig,
     // The early RPC hash check is only advisory until this lock-time CAS. Without

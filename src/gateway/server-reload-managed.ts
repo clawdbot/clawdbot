@@ -261,9 +261,11 @@ export function startManagedGatewayConfigReloader(
       // Restart successors inherit process.env. Publish the prepared layer at
       // the admission edge, then roll it back if this restart is rejected.
       transactionOwnership.publishRuntimeEnv();
+      const responseSettled = transactionOwnership.runtimeApplication?.responseSettled;
       restartTransaction = requestGatewayRestart(plan, preparedRuntimeConfig, {
         ...restartOptions,
         debtConfig: sourceConfig,
+        ...(responseSettled ? { beforeRestartEmission: () => responseSettled } : {}),
         prepareRuntimeConfig: async () => {
           for (;;) {
             const prepared = await tryPrepareRuntimeSecrets(

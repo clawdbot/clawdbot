@@ -106,6 +106,7 @@ export type GatewayConfigReloadTransactionOwnership = {
   reapplyRuntimeOverlays: (config: OpenClawConfig) => OpenClawConfig;
   runtimeEnv?: NonNullable<ConfigWriteNotification["preparedCandidate"]>["runtimeEnv"];
   runtimeRefresh?: RuntimeConfigSnapshotRefreshOptions;
+  runtimeApplication?: RuntimeConfigWriteApplicationClaim;
 };
 
 type PreparedGatewayConfigCandidate = {
@@ -476,6 +477,7 @@ export function startGatewayConfigReloader(opts: {
       reapplyRuntimeOverlays: preparedCandidate?.reapplyRuntimeOverlays ?? ((config) => config),
       ...(preparedCandidate?.runtimeEnv ? { runtimeEnv: preparedCandidate.runtimeEnv } : {}),
       ...(runtimeRefresh ? { runtimeRefresh } : {}),
+      ...(application ? { runtimeApplication: application } : {}),
       publishRuntimeEnv: () => {
         assertCurrent();
         if (runtimeEnvCommitted) {

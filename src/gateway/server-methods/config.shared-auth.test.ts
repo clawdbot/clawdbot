@@ -18,7 +18,10 @@ import {
 const readConfigFileSnapshotForWriteMock = vi.fn();
 const writeConfigFileMock = vi.fn();
 const persistedConfigResultMock = vi.fn((config: OpenClawConfig) => config);
-const runtimeApplication = { claimed: true };
+const runtimeApplication = {
+  claimed: true,
+  status: "applied" as "applied" | "restart-pending",
+};
 const validateConfigObjectWithPluginsMock = vi.fn();
 const prepareSecretsRuntimeSnapshotMock = vi.fn();
 const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({
@@ -40,7 +43,9 @@ vi.mock("../../config/config.js", async () => {
     replaceConfigFile: async (params: { sourceConfig: OpenClawConfig; writeOptions?: object }) => {
       await writeConfigFileMock(params.sourceConfig, params.writeOptions);
       if (params.writeOptions && runtimeApplication.claimed) {
-        getRuntimeConfigWriteApplication(params.writeOptions)?.claim()?.settle("applied");
+        getRuntimeConfigWriteApplication(params.writeOptions)
+          ?.claim()
+          ?.settle(runtimeApplication.status);
       }
       const persistedConfig = persistedConfigResultMock(params.sourceConfig);
       return {
@@ -172,7 +177,7 @@ async function runConfigPatch(
   raw: unknown,
   params: { sessionKey?: string; restartDelayMs?: number; replacePaths?: string[] } = {},
 ) {
-  const { options, disconnectClientsUsingSharedGatewayAuth } = createConfigHandlerHarness({
+  const { options, respond, disconnectClientsUsingSharedGatewayAuth } = createConfigHandlerHarness({
     method: "config.patch",
     params: {
       baseHash: "base-hash",
@@ -188,7 +193,7 @@ async function runConfigPatch(
     'configHandlers["config.patch"] test invariant',
   )(options);
   await flushConfigHandlerMicrotasks();
-  return { disconnectClientsUsingSharedGatewayAuth };
+  return { respond, disconnectClientsUsingSharedGatewayAuth };
 }
 
 function expectNoDirectRestart(): void {
@@ -202,6 +207,7 @@ afterEach(() => {
 
 beforeEach(() => {
   runtimeApplication.claimed = true;
+  runtimeApplication.status = "applied";
   validateConfigObjectWithPluginsMock.mockImplementation((config: OpenClawConfig) => ({
     ok: true,
     config,
@@ -487,6 +493,7 @@ describe("config shared auth disconnects", () => {
           const previous = { gateway: { auth: { mode, [mode]: "old-credential" } } };
           const nextMode = changesMode ? (mode === "token" ? "password" : "token") : mode;
           const next = { gateway: { auth: { mode: nextMode, [nextMode]: "new-credential" } } };
+          runtimeApplication.status = changesMode ? "restart-pending" : "applied";
           mockPreviousConfig(previous);
           const { options, respond, disconnectClientsUsingSharedGatewayAuth } =
             createConfigHandlerHarness({
@@ -509,9 +516,9 @@ describe("config shared auth disconnects", () => {
             }),
             undefined,
           );
-          expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(
-            changesMode ? 1 : 0,
-          );
+          // Both hot application and restart admission are claimed by the
+          // managed reloader, which owns generation invalidation and close.
+          expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
         }
       }
     },
@@ -528,7 +535,8 @@ describe("config shared auth disconnects", () => {
     expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
   });
 
-  it("disconnects gateway-auth clients when active trusted-proxy policy changes", async () => {
+  it("leaves active trusted-proxy policy invalidation to the managed reloader", async () => {
+    runtimeApplication.status = "restart-pending";
     mockPreviousConfig(
       trustedProxyConfig({
         allowUsers: ["alice@example.com"],
@@ -536,7 +544,7 @@ describe("config shared auth disconnects", () => {
       }),
     );
 
-    const { disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch(
+    const { respond, disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch(
       {
         gateway: {
           auth: {
@@ -550,18 +558,20 @@ describe("config shared auth disconnects", () => {
       { replacePaths: ["gateway.auth.trustedProxy.allowUsers"] },
     );
 
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
     expectNoDirectRestart();
-    expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(1);
+    expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
   });
 
-  it("disconnects gateway-auth clients when trusted-proxy source list changes", async () => {
+  it("leaves trusted-proxy source invalidation to the managed reloader", async () => {
+    runtimeApplication.status = "restart-pending";
     mockPreviousConfig(
       trustedProxyConfig({
         trustedProxies: ["127.0.0.1"],
       }),
     );
 
-    const { disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch(
+    const { respond, disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch(
       {
         gateway: {
           trustedProxies: ["10.0.0.10"],
@@ -570,8 +580,9 @@ describe("config shared auth disconnects", () => {
       { replacePaths: ["gateway.trustedProxies"] },
     );
 
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
     expectNoDirectRestart();
-    expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(1);
+    expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
   });
 
   it("does not disconnect gateway-auth clients when trusted-proxy lists are reordered", async () => {

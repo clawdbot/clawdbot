@@ -1,3 +1,4 @@
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { RespondFn } from "../server-methods/response-types.js";
 
 export type GatewayPolicyClient = {
@@ -17,7 +18,12 @@ const policyMethods = new Set([
   "device.token.rotate",
   "device.token.revoke",
 ]);
-type PolicyResponse = { readonly pending: boolean; hold: () => void; finish: () => void };
+type PolicyResponse = {
+  readonly pending: boolean;
+  readonly settled: Promise<void>;
+  hold: () => void;
+  finish: () => void;
+};
 type PolicyClientState = { pending: number; close?: () => void };
 const responses = new WeakMap<RespondFn, PolicyResponse>();
 const clients = new WeakMap<GatewayPolicyClient, PolicyClientState>();
@@ -31,8 +37,10 @@ export function registerGatewayPolicyResponse(
   if (!policyMethods.has(method)) {
     return undefined;
   }
+  const settled = createDeferredCore();
   let state: PolicyClientState | undefined;
   const response: PolicyResponse = {
+    settled: settled.promise,
     get pending() {
       return state !== undefined;
     },
@@ -48,6 +56,8 @@ export function registerGatewayPolicyResponse(
       clients.set(client, state);
     },
     finish() {
+      // Settle on send, throw, and silent return so abandoned handlers cannot strand restart.
+      settled.resolve();
       responses.delete(respond);
       if (!state) {
         return;
@@ -65,10 +75,12 @@ export function registerGatewayPolicyResponse(
 }
 
 /** Claim only at the mutation owner, after request validation and before publication can revoke it. */
-export function holdGatewayPolicyResponse(respond: RespondFn | undefined): void {
-  if (respond) {
-    responses.get(respond)?.hold();
-  }
+export function holdGatewayPolicyResponse(
+  respond: RespondFn | undefined,
+): Pick<PolicyResponse, "settled"> | undefined {
+  const response = respond ? responses.get(respond) : undefined;
+  response?.hold();
+  return response;
 }
 
 /** Fence authority immediately; only already accepted policy writers may send their final result. */

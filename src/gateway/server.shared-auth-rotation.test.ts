@@ -16,13 +16,16 @@ import {
   verifyDeviceToken,
 } from "../infra/device-pairing-tokens.js";
 import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
+import { resetGatewayRestartStateForInProcessRestart } from "../infra/restart.js";
 import { resetLogger } from "../logging/logger.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
+import type { GatewayServerOptions } from "./server-public.js";
 import { startGatewayServerCore } from "./server-start.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
@@ -66,13 +69,20 @@ describe("gateway shared auth rotation", () => {
         await server?.close();
         server = undefined;
       },
+      // The injected emitter does not start a successor process. Retire its
+      // process-wide restart fence after server shutdown before the next fixture.
+      () => resetGatewayRestartStateForInProcessRestart(),
+      () => resetGatewayWorkAdmission(),
       () => state.cleanup(),
       () => resetLogger(),
       () => clearPluginMetadataLifecycleCaches(),
     );
   });
 
-  async function startGateway(token: GatewayAuthConfig["token"] = OLD_TOKEN) {
+  async function startGateway(
+    token: GatewayAuthConfig["token"] = OLD_TOKEN,
+    hotReloadRecovery?: GatewayServerOptions["hotReloadRecovery"],
+  ) {
     await state.writeConfig({
       gateway: {
         mode: "local",
@@ -84,7 +94,7 @@ describe("gateway shared auth rotation", () => {
       logging: { level: "silent", consoleLevel: "silent" },
       agents: { defaults: { workspace: state.workspaceDir } },
     });
-    server = await startGatewayServerCore(port, { controlUiEnabled: false });
+    server = await startGatewayServerCore(port, { controlUiEnabled: false, hotReloadRecovery });
     await server.startupSettled;
   }
 
@@ -216,6 +226,42 @@ describe("gateway shared auth rotation", () => {
     await rotateSharedToken(connection.client);
     await expectAuthChangedClose(connection);
   });
+
+  it.each(["config.patch", "config.apply"])(
+    "acknowledges restart admission before auth close for %s",
+    async (method) => {
+      const emitted = createDeferredCore();
+      await startGateway(OLD_TOKEN, () => {
+        emitted.resolve();
+        return { status: "emitted" };
+      });
+      const connection = await connect({ token: OLD_TOKEN });
+      const before = await connection.client.request<ConfigSnapshot>("config.get");
+      const events: string[] = [];
+      void connection.closed.then(() => events.push("auth-close"));
+      const gateway = {
+        ...before.config.gateway,
+        port: await getFreePort(),
+        auth: { mode: "token", token: NEW_TOKEN },
+      };
+      const ack = await connection.client.request<ConfigAck>(method, {
+        baseHash: before.hash,
+        raw: JSON.stringify(
+          method === "config.apply" ? { ...before.config, gateway } : { gateway },
+        ),
+      });
+      events.push("success-response");
+      expect(ack).toMatchObject({
+        hash: expect.any(String),
+        sentinel: { payload: { stats: { requiresRestart: true } } },
+      });
+      await expectAuthChangedClose(connection);
+      expect(events).toEqual(["success-response", "auth-close"]);
+      // Use the real RPC, config watcher, and socket; observe the production
+      // emission callback without restarting the test runner process.
+      await withTestTimeout(emitted.promise, 10_000, "gateway restart was not emitted");
+    },
+  );
 
   it("keeps existing device-token websocket sessions connected after shared token rotation", async () => {
     await startGateway();

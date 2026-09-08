@@ -672,13 +672,11 @@ async function respondWithConfigRestartWrite(params: {
 }): Promise<void> {
   if (params.writeResult.application) {
     const outcome = await params.writeResult.application;
-    if (outcome !== "applied") {
+    if (outcome !== "applied" && outcome !== "restart-pending") {
       const message =
         outcome === "applied-restart-required"
           ? `${params.mode} persisted and updated the active Gateway, but a recovery restart is required; wait for the Gateway to restart, then run config.get to confirm the active revision`
-          : outcome === "restart-pending"
-            ? `${params.mode} persisted and was accepted for restart; wait for the Gateway to restart, then run config.get to confirm the active revision`
-            : `${params.mode} persisted but was not applied to the active Gateway (${outcome}); run config.get, then use config.apply to reapply the saved config or restart the Gateway`;
+          : `${params.mode} persisted but was not applied to the active Gateway (${outcome}); run config.get, then use config.apply to reapply the saved config or restart the Gateway`;
       params.respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
       params.writeResult.queueFollowUp();
       return;

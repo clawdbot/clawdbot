@@ -273,22 +273,15 @@ describe("config application settlement", () => {
     );
   });
 
-  it.each(
-    (["config.patch", "config.apply"] as const).flatMap((method) =>
-      (["applied-restart-required", "restart-pending"] as const).map((outcome) => ({
-        method,
-        outcome,
-      })),
-    ),
-  )(
-    "reports $method $outcome without misrepresenting active config",
-    async ({ method, outcome }) => {
+  it.each(["config.patch", "config.apply"] as const)(
+    "reports $method applied-restart-required without misrepresenting active config",
+    async (method) => {
       const queueFollowUp = vi.fn();
       configWriteMocks.commitGatewayConfigWrite.mockResolvedValueOnce({
         path: "/tmp/openclaw.json",
         config: { hooks: { enabled: true } },
         hash: "restart-hash",
-        application: Promise.resolve(outcome),
+        application: Promise.resolve("applied-restart-required"),
         queueFollowUp,
       });
 
@@ -298,21 +291,15 @@ describe("config application settlement", () => {
       });
       await operation;
 
-      const expectedMessage =
-        outcome === "restart-pending" ? "accepted for restart" : "updated the active Gateway";
       expect(harness.respond).toHaveBeenCalledWith(
         false,
         undefined,
         expect.objectContaining({
           code: "UNAVAILABLE",
-          message: expect.stringContaining(expectedMessage),
+          message: expect.stringContaining("updated the active Gateway"),
         }),
       );
-      const excludedMessages =
-        outcome === "restart-pending"
-          ? ["updated the active Gateway", "recovery restart", "reapply"]
-          : ["was not applied", "reapply"];
-      for (const excluded of excludedMessages) {
+      for (const excluded of ["was not applied", "reapply"]) {
         expect(harness.respond).toHaveBeenCalledWith(
           false,
           undefined,
@@ -327,6 +314,33 @@ describe("config application settlement", () => {
         }),
       );
       expect(harness.respond).toHaveBeenCalledOnce();
+      expect(queueFollowUp).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["config.patch", "config.apply"] as const)(
+    "acknowledges $method after its managed restart is admitted",
+    async (method) => {
+      const queueFollowUp = vi.fn();
+      configWriteMocks.commitGatewayConfigWrite.mockResolvedValueOnce({
+        path: "/tmp/openclaw.json",
+        config: { gateway: { port: 18_790 } },
+        hash: "restart-hash",
+        application: Promise.resolve("restart-pending"),
+        queueFollowUp,
+      });
+
+      const { harness, operation } = startConfigWrite(method, {
+        raw: { gateway: { port: 18_790 } },
+        baseHash: "base-hash",
+      });
+      await operation;
+
+      expect(harness.respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ ok: true, hash: "restart-hash" }),
+        undefined,
+      );
       expect(queueFollowUp).toHaveBeenCalledOnce();
     },
   );
