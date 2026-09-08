@@ -12,10 +12,12 @@ export type RuntimeDependencyOwnership = {
 };
 
 function isRuntimeDependencyOwners(value: unknown): value is RuntimeDependencyOwners {
-  if (!isRecord(value) || typeof value.root !== "boolean" || !Array.isArray(value.extensions))
+  if (!isRecord(value) || typeof value.root !== "boolean" || !Array.isArray(value.extensions)) {
     return false;
-  if (!value.extensions.every((entry) => typeof entry === "string" && entry.length > 0))
+  }
+  if (!value.extensions.every((entry) => typeof entry === "string" && entry.length > 0)) {
     return false;
+  }
   const extensions = value.extensions as string[];
   return (
     new Set(extensions).size === extensions.length &&
@@ -30,14 +32,16 @@ export function parseRuntimeDependencyOwnership(value: unknown): RuntimeDependen
     !isRecord(value) ||
     value.formatVersion !== RUNTIME_DEPENDENCY_OWNERSHIP_FORMAT_VERSION ||
     !isRecord(value.dependencies)
-  )
+  ) {
     return null;
+  }
   for (const [dependencyName, owners] of Object.entries(value.dependencies)) {
     if (
       packageNameFromSpecifier(dependencyName) !== dependencyName ||
       !isRuntimeDependencyOwners(owners)
-    )
+    ) {
       return null;
+    }
   }
   return value as RuntimeDependencyOwnership;
 }
