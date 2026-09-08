@@ -487,18 +487,25 @@ public struct OpenClawChatSessionGroupsRouteLease: Sendable {
     private let renameGroupImpl: RenameGroup
     private let deleteGroupImpl: DeleteGroup
 
+    /// Negotiated at lease capture: whether the connected Gateway advertises
+    /// `sessions.groups.add`. Unsupported or unknown routes keep the legacy
+    /// read-modify-write replacement instead of probing the atomic add.
+    public let supportsGroupAdd: Bool
+
     public init(
         listGroups: @escaping ListGroups,
         putGroups: @escaping PutGroups,
         addGroup: @escaping AddGroup,
         renameGroup: @escaping RenameGroup,
-        deleteGroup: @escaping DeleteGroup)
+        deleteGroup: @escaping DeleteGroup,
+        supportsGroupAdd: Bool = false)
     {
         self.listGroupsImpl = listGroups
         self.putGroupsImpl = putGroups
         self.addGroupImpl = addGroup
         self.renameGroupImpl = renameGroup
         self.deleteGroupImpl = deleteGroup
+        self.supportsGroupAdd = supportsGroupAdd
     }
 
     public func listGroups() async throws -> OpenClawChatSessionGroupsResponse? {
@@ -1061,12 +1068,17 @@ extension OpenClawChatTransport {
 
     public func acquireSessionGroupsRouteLease() async -> OpenClawChatSessionGroupsRouteLease? {
         let transport = self
+        // Negotiate before dispatch: a writer-only connection to an older
+        // Gateway never probes the unknown method, so authorization and
+        // transport failures stay out of any legacy fallback.
+        let supportsGroupAdd = await transport.gatewayAdvertisesMethod("sessions.groups.add") == true
         return OpenClawChatSessionGroupsRouteLease(
             listGroups: { try await transport.listSessionGroups() },
             putGroups: { try await transport.putSessionGroups(names: $0) },
             addGroup: { try await transport.addSessionGroup(name: $0) },
             renameGroup: { try await transport.renameSessionGroup(name: $0, to: $1) },
-            deleteGroup: { try await transport.deleteSessionGroup(name: $0) })
+            deleteGroup: { try await transport.deleteSessionGroup(name: $0) },
+            supportsGroupAdd: supportsGroupAdd)
     }
 
     public func acquireNewSessionRouteLease() async -> OpenClawChatNewSessionRouteLease? {

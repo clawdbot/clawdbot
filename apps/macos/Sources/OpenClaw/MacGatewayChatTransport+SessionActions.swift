@@ -43,6 +43,13 @@ extension MacGatewayChatTransport {
                 timeoutMs: request.timeoutMs,
                 ifCurrentServerLease: serverLease)
         }
+        // Negotiate before dispatch: writer-only connections to older
+        // Gateways keep the legacy replacement instead of probing the unknown
+        // atomic add and receiving a scope rejection.
+        let addAdvertised = await self.connection.supportsServerMethod(
+            "sessions.groups.add",
+            ifCurrentServerLease: serverLease)
+        let supportsGroupAdd = addAdvertised == true
         return OpenClawChatSessionGroupsRouteLease(
             listGroups: {
                 let data = try await request(OpenClawChatGatewayRequests.sessionGroupsList())
@@ -63,7 +70,8 @@ extension MacGatewayChatTransport {
             deleteGroup: { name in
                 let data = try await request(OpenClawChatGatewayRequests.sessionGroupsDelete(name: name))
                 return try JSONDecoder().decode(OpenClawChatSessionGroupsMutationResponse.self, from: data)
-            })
+            },
+            supportsGroupAdd: supportsGroupAdd)
     }
 
     func acquireSessionMutationRouteLease() async -> OpenClawChatSessionMutationRouteLease? {

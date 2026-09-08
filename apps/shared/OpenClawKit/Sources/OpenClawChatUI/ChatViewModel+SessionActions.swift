@@ -178,15 +178,14 @@ extension OpenClawChatViewModel {
     {
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return try await self.fetchSessionGroups(using: routeLease) }
-        // Prefer the atomic add RPC; fall back to the legacy read-modify-write put
-        // when talking to an older gateway that does not advertise sessions.groups.add.
+        // Support is negotiated when the route lease is captured, so the atomic
+        // add is only dispatched to Gateways that advertise it. Authorization
+        // and transport failures therefore propagate instead of retrying a
+        // fallback the older writer-only connection never had.
         let response: OpenClawChatSessionGroupsMutationResponse
-        do {
+        if routeLease.supportsGroupAdd {
             response = try await routeLease.addGroup(name: name)
-        } catch let error as GatewayResponseError
-            where error.code == "INVALID_REQUEST" && error.message.contains("unknown method: sessions.groups.add") {
-            // Older gateways do not advertise sessions.groups.add; fall back to the
-            // legacy read-modify-write replacement only for that recognized case.
+        } else {
             let current = try await self.fetchSessionGroups(using: routeLease)
             response = try await routeLease.putGroups(names: current.map(\.name) + [name])
         }

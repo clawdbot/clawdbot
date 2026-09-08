@@ -208,6 +208,7 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
     private let historyFailureIndices: Set<Int>
     private let sendSucceeds: Bool
     private let addGroupError: GatewayResponseError?
+    private let supportsGroupAdd: Bool
 
     init(
         createGate: SessionActionCompletionGate? = nil,
@@ -229,7 +230,8 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         historyGates: [Int: SessionActionCompletionGate] = [:],
         historyFailureIndices: Set<Int> = [],
         sendSucceeds: Bool = false,
-        addGroupError: GatewayResponseError? = nil)
+        addGroupError: GatewayResponseError? = nil,
+        supportsGroupAdd: Bool = true)
     {
         self.createGate = createGate
         self.resetGate = resetGate
@@ -251,6 +253,7 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         self.historyFailureIndices = historyFailureIndices
         self.sendSucceeds = sendSucceeds
         self.addGroupError = addGroupError
+        self.supportsGroupAdd = supportsGroupAdd
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
@@ -382,7 +385,8 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
             },
             deleteGroup: { _ in
                 OpenClawChatSessionGroupsMutationResponse(ok: true, groups: [], updatedSessions: nil)
-            })
+            },
+            supportsGroupAdd: self.supportsGroupAdd)
     }
 
     func acquireNewSessionRouteLease() async -> OpenClawChatNewSessionRouteLease? {
@@ -599,23 +603,20 @@ struct ChatViewModelSessionActionTests {
     }
 
     @Test func `group create falls back to put when add is unsupported`() async throws {
-        let transport = SessionActionTransport(addGroupError: GatewayResponseError(
-            method: "sessions.groups.add",
-            code: "INVALID_REQUEST",
-            message: "unknown method: sessions.groups.add",
-            details: [:]))
+        let transport = SessionActionTransport(supportsGroupAdd: false)
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
         let lease = try await viewModel.sessionGroupsRouteLease()
 
         let groups = try await viewModel.createSessionGroup(named: "New", using: lease)
 
         #expect(groups.map(\.name) == ["Existing", "New"])
-        #expect(await transport.groupAdds() == ["New"])
+        // The unsupported route never dispatches the atomic add.
+        #expect(await transport.groupAdds().isEmpty)
         #expect(await transport.groupPuts() == [["Existing", "New"]])
         #expect(viewModel.sessionGroupsRevision == 1)
     }
 
-    @Test func `group create does not fall back to put for non-unsupported errors`() async {
+    @Test func `group create does not fall back to put for non-unsupported errors`() async throws {
         let transport = SessionActionTransport(addGroupError: GatewayResponseError(
             method: "sessions.groups.add",
             code: "FORBIDDEN",
