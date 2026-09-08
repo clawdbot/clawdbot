@@ -236,7 +236,9 @@ function entryMatches(
   allowSnapshotPromotion = false,
 ): boolean {
   if (sameTranscriptIdentity(left.identity, right.identity)) {
-    return true;
+    // A keyed commentary fallback and the full row share an id but are distinct display segments.
+    const itemId = readAssistantStreamSegmentIdentity(left.message)?.itemId;
+    return itemId === readAssistantStreamSegmentIdentity(right.message)?.itemId;
   }
   const durableEntry = left.identity?.id ? left : right.identity?.id ? right : null;
   const provisionalEntry = durableEntry === left ? right : durableEntry === right ? left : null;
