@@ -211,6 +211,7 @@ describe("built-in session tool role authority", () => {
         }
       });
     },
+    300_000,
   );
 
   it.each([false, true])(

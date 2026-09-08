@@ -128,4 +128,37 @@ describe("resolveTransientCronRetryDecision", () => {
       reason: "transient retry",
     });
   });
+
+  it("holds the retry when a timed-out run's cleanup cannot confirm termination", () => {
+    // #137215: a job that times out may still be running (abort ignored). When
+    // cleanup cannot confirm the original execution stopped, hold the retry
+    // instead of overlapping the still-running work.
+    const error = "cron webhook delivery timed out: the job exceeded its timeout";
+    const errorClassification = { kind: "reason", reason: "timeout" } as const;
+
+    // Without an unconfirmed cleanup, a timeout error retries normally.
+    expect(
+      resolveTransientCronRetryDecision({
+        error,
+        errorClassification,
+        consecutiveErrors: 1,
+      }),
+    ).toMatchObject({
+      retryable: true,
+      reason: "transient retry",
+    });
+
+    // When cleanup cannot confirm the original execution stopped, hold the retry.
+    expect(
+      resolveTransientCronRetryDecision({
+        error,
+        errorClassification,
+        timeoutCleanupUnconfirmed: true,
+        consecutiveErrors: 1,
+      }),
+    ).toMatchObject({
+      retryable: false,
+      reason: "original execution may still be running",
+    });
+  });
 });

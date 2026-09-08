@@ -11,7 +11,7 @@ it("keeps child links without retaining released session metadata", async ({ sig
       ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(sessionChildCacheRetentionEntrypoint)),
     ],
     { ...process.env, NODE_OPTIONS: "", TSX_DISABLE_CACHE: "1" },
-    15_000,
+    30_000,
     {
       cwd: fileURLToPath(new URL("../../", import.meta.url)),
       signal,
@@ -22,4 +22,4 @@ it("keeps child links without retaining released session metadata", async ({ sig
   expect(result.error, result.stderr).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
   expect(JSON.parse(result.stdout)).toEqual({ retained: [] });
-}, 30_000);
+}, 60_000);

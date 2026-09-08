@@ -32,7 +32,11 @@ type TransientCronRetryDecision = {
   consecutiveErrors: number;
   retryCategory?: CronRetryOn;
   backoffMs?: number;
-  reason: "transient retry" | "max retries exhausted" | "permanent error";
+  reason:
+    | "transient retry"
+    | "max retries exhausted"
+    | "permanent error"
+    | "original execution may still be running";
 };
 
 type DisabledHeartbeatOneShotRetryDecision = {
@@ -149,7 +153,19 @@ export function resolveTransientCronRetryDecision(params: {
   lastErrorReason?: CronJob["state"]["lastErrorReason"];
   executionStarted?: boolean;
   consecutiveErrors: number | undefined;
+  /** True when a timed-out run's original execution could not be confirmed cancelled. */
+  timeoutCleanupUnconfirmed?: boolean;
 }): TransientCronRetryDecision {
+  // #137215: do not retry a timed-out job while its original execution may
+  // still be running (abort ignored). Cleanup confirms termination before the
+  // retry is allowed; an unconfirmed cleanup holds the retry for review.
+  if (params.timeoutCleanupUnconfirmed) {
+    return {
+      retryable: false,
+      consecutiveErrors: params.consecutiveErrors ?? 0,
+      reason: "original execution may still be running",
+    };
+  }
   if (params.errorClassification?.kind === "permanent") {
     return {
       retryable: false,
