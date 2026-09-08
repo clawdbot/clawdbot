@@ -874,6 +874,27 @@ describe("resolveExecWorkdir", () => {
     });
   });
 
+  it("maps host workspace paths whose directory name starts with two dots", async () => {
+    await withTempDir(async (workspaceDir) => {
+      // `..cache` is an ordinary child directory, not a parent-directory escape.
+      const localDir = path.join(workspaceDir, "..cache");
+      await mkdir(localDir);
+
+      await expect(
+        resolveExecWorkdir({
+          host: "sandbox",
+          workdir: localDir,
+          sandbox: backendSandboxConfig(workspaceDir),
+        }),
+      ).resolves.toEqual({
+        kind: "sandbox",
+        hostCwd: localDir,
+        containerCwd: "/remote/workspace/..cache",
+        scriptPreflightCwd: localDir,
+      });
+    });
+  });
+
   it("defers missing absolute backend workdirs to remote validation when roots overlap", async () => {
     await withTempDir(async (workspaceDir) => {
       const missingRemoteDir = path.join(workspaceDir, "generated");

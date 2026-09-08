@@ -337,6 +337,26 @@ describe("pruneProcessedHistoryImages", () => {
     expect(firstUser?.content).toBe(PRUNED_HISTORY_MEDIA_REFERENCE_MARKER);
   });
 
+  it("redacts a workspace child alias whose directory name begins with two dots", () => {
+    // `..cache` is an ordinary child of the workspace, not a traversal out of
+    // it. A lexical `startsWith("..")` check discards the alias, leaving the
+    // processed-media marker in replayed context.
+    const message = buildPersistedUserTurnMessage({
+      text: "[media attached: ..cache/photo.png (image/png)]",
+      media: [
+        {
+          path: "/workspace/..cache/photo.png",
+          workspaceDir: "/workspace",
+          contentType: "image/png",
+        },
+      ],
+    }) as AgentMessage;
+
+    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
+    const firstUser = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
+    expect(firstUser?.content).toBe(PRUNED_HISTORY_MEDIA_REFERENCE_MARKER);
+  });
+
   it("does not claim a basename-only marker for an absolute owned fact", () => {
     const message = buildPersistedUserTurnMessage({
       text: "caption mentions [media attached: ./photo.png (image/png)]",

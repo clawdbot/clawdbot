@@ -1,5 +1,6 @@
 import path from "node:path";
 import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
+import { isPathInside } from "../../../infra/path-guards.js";
 import {
   readPersistedMediaFacts,
   readRuntimePromptMediaFacts,
@@ -112,8 +113,11 @@ function resolveWorkspaceRelativeMarkerAliases(fact: MediaFact): string[] {
   ) {
     return [];
   }
+  if (!isPathInside(fact.workspaceDir, fact.path)) {
+    return [];
+  }
   const relativePath = path.relative(fact.workspaceDir, fact.path);
-  if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+  if (!relativePath) {
     return [];
   }
   const normalizedRelativePath = normalizeMarkerIdentity(relativePath);

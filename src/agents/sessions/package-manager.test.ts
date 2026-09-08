@@ -68,6 +68,39 @@ describe("DefaultPackageManager", () => {
     expect(skillPaths).not.toContain(outsideSkill);
   });
 
+  it("keeps manifest resource entries in directories starting with two dots", async () => {
+    // `..cache` is an ordinary child directory; only a `..` path segment escapes.
+    const root = tempDirs.make("openclaw-package-manager-");
+    const packageRoot = join(root, "package");
+    const outsideRoot = join(root, "outside");
+    // The two-dot directory sits directly under the package root, so the path
+    // relative to that root is itself `..cache/SKILL.md`.
+    const twoDotSkill = join(packageRoot, "..cache", "SKILL.md");
+    const outsideSkill = join(outsideRoot, "SKILL.md");
+    await mkdir(join(packageRoot, "..cache"), { recursive: true });
+    await mkdir(outsideRoot, { recursive: true });
+    await writeFile(twoDotSkill, "# Two dot\n", "utf-8");
+    await writeFile(outsideSkill, "# Outside\n", "utf-8");
+    await writeFile(
+      join(packageRoot, "package.json"),
+      JSON.stringify({
+        openclaw: { skills: ["..cache/SKILL.md", "../outside/SKILL.md"] },
+      }),
+      "utf-8",
+    );
+
+    const manager = new DefaultPackageManager({
+      cwd: root,
+      agentDir: join(root, "agent"),
+      settingsManager: SettingsManager.inMemory({ packages: [packageRoot] }),
+    });
+
+    const skillPaths = (await manager.resolve()).skills.map((skill) => skill.path);
+
+    expect(skillPaths).toContain(twoDotSkill);
+    expect(skillPaths).not.toContain(outsideSkill);
+  });
+
   it("expands manifest resource globs without hidden paths", async () => {
     const root = tempDirs.make("openclaw-package-manager-");
     const packageRoot = join(root, "package");

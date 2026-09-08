@@ -55,6 +55,27 @@ describe("sandbox bind mounts", () => {
     ).toEqual([path.resolve("/tmp/readonly-parent/work")]);
   });
 
+  it("omits writable bind roots whose read-only shadow starts with two dots", () => {
+    // `..cache` is an ordinary child directory, not a parent escape, so the
+    // read-only shadow inside the writable root must still be detected.
+    expect(
+      resolveWritableSandboxBindHostRoots([
+        "/tmp/data:/tmp/data:rw",
+        "/tmp/data/..cache:/tmp/data/..cache:ro",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("keeps writable bind roots whose two-dot sibling is genuinely outside", () => {
+    // `/tmp/data..cache` shares a prefix with `/tmp/data` but is not inside it.
+    expect(
+      resolveWritableSandboxBindHostRoots([
+        "/tmp/data:/tmp/data:rw",
+        "/tmp/data..cache:/tmp/data..cache:ro",
+      ]),
+    ).toEqual([path.resolve("/tmp/data")]);
+  });
+
   it("detects bind mounts whose container path differs from the host path", () => {
     expect(hasSandboxBindContainerPathAliases(["/tmp/data:/tmp/data:rw"])).toBe(
       process.platform === "win32",
@@ -74,6 +95,21 @@ describe("sandbox bind mounts", () => {
       hasSandboxBindReadonlyHostShadows([
         "/tmp/data:/tmp/data:ro",
         "/tmp/data/work:/tmp/data/work:rw",
+      ]),
+    ).toBe(false);
+  });
+
+  it("detects two-dot read-only bind shadows and ignores two-dot siblings", () => {
+    expect(
+      hasSandboxBindReadonlyHostShadows([
+        "/tmp/data:/tmp/data:rw",
+        "/tmp/data/..cache:/tmp/data/..cache:ro",
+      ]),
+    ).toBe(true);
+    expect(
+      hasSandboxBindReadonlyHostShadows([
+        "/tmp/data:/tmp/data:rw",
+        "/tmp/data..cache:/tmp/data..cache:ro",
       ]),
     ).toBe(false);
   });
