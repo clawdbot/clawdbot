@@ -293,6 +293,13 @@ export type SessionCapability = {
     names: readonly string[],
     sectionOrder?: readonly string[],
   ) => Promise<SessionGroupMutationResult>;
+  /** Adds one group atomically; falls back to groups.put on older gateways. */
+  groupsAdd: (name: string) => Promise<SessionGroupMutationResult>;
+  /** Reorders groups atomically and optionally persists the full sidebar section order. */
+  groupsReorder: (
+    names: readonly string[],
+    sectionOrder?: readonly string[],
+  ) => Promise<SessionGroupMutationResult>;
   /** Renames a group; stale means the initiating connection retired before reconciliation. */
   groupsRename: (from: string, to: string) => Promise<SessionGroupMutationResult>;
   /** Updates the New Session defaults for one group. */

@@ -198,6 +198,21 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
     func createSession(
         key: String,
         label: String?,
+        parentSessionKey: String?,
+        worktree: Bool?) async throws -> OpenClawChatCreateSessionResponse
+    {
+        try await self.createSession(
+            key: key,
+            label: label,
+            agentID: nil,
+            parentSessionKey: parentSessionKey,
+            worktree: worktree,
+            worktreeBaseRef: nil)
+    }
+
+    func createSession(
+        key: String,
+        label: String?,
         agentID: String?,
         parentSessionKey: String?,
         worktree: Bool?,

@@ -706,6 +706,8 @@ enum class GatewayMethod(
   SessionsGroupsList("sessions.groups.list"),
   SessionsGroupsDefaults("sessions.groups.defaults"),
   SessionsGroupsPut("sessions.groups.put"),
+  SessionsGroupsAdd("sessions.groups.add"),
+  SessionsGroupsReorder("sessions.groups.reorder"),
   SessionsGroupsRename("sessions.groups.rename"),
   SessionsGroupsUpdate("sessions.groups.update"),
   SessionsGroupsDelete("sessions.groups.delete"),

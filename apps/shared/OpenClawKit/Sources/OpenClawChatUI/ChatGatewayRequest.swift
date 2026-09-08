@@ -282,6 +282,13 @@ public enum OpenClawChatGatewayRequests {
             timeoutMs: self.mutationTimeoutMs)
     }
 
+    public static func sessionGroupsAdd(name: String) -> OpenClawChatGatewayRequest {
+        OpenClawChatGatewayRequest(
+            method: "sessions.groups.add",
+            params: ["name": AnyCodable(name)],
+            timeoutMs: self.mutationTimeoutMs)
+    }
+
     public static func sessionGroupsRename(
         name: String,
         to: String) -> OpenClawChatGatewayRequest

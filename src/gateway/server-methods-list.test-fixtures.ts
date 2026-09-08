@@ -49,7 +49,8 @@ sessions.compaction.branch sessions.compaction.restore sessions.branches.list
 sessions.branches.switch sessions.rewind sessions.fork sessions.create sessions.recover
 sessions.send sessions.abort sessions.patch sessions.goal.update sessions.goal.clear
 sessions.pluginPatch sessions.cleanup sessions.reset sessions.delete sessions.compact
-sessions.groups.list sessions.groups.defaults sessions.groups.put sessions.groups.rename
+sessions.groups.list sessions.groups.defaults sessions.groups.put sessions.groups.add
+sessions.groups.reorder sessions.groups.rename
 sessions.groups.update sessions.groups.delete last-heartbeat set-heartbeats wake node.pair.list
 node.pair.approve node.pair.reject node.pair.remove device.pair.list device.pair.approve
 device.pair.reject device.pair.remove device.pair.rename device.token.rotate device.token.revoke

@@ -160,12 +160,18 @@ export async function openSessionMenuSubmenu(page: Page, name: string): Promise<
 }
 
 /** Fills the owned input dialog and submits it the way Enter does. */
-export async function submitInputDialog(page: Page, value: string): Promise<void> {
+export async function submitInputDialog(
+  page: Page,
+  value: string,
+  options: { waitForClose?: boolean } = {},
+): Promise<void> {
   const field = page.locator("openclaw-modal-dialog input");
   await field.waitFor({ state: "visible" });
   await field.fill(value);
   await field.press("Enter");
-  await field.waitFor({ state: "detached" });
+  if (options.waitForClose !== false) {
+    await field.waitFor({ state: "detached" });
+  }
 }
 
 export async function captureUiProof(

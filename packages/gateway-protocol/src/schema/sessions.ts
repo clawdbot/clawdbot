@@ -6,7 +6,7 @@ import { ErrorShapeSchema } from "./frames.js";
 import { HumanMentionsSchema } from "./human-mentions.js";
 import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { PluginJsonValueSchema } from "./plugins.js";
-import { NonEmptyString, SessionLabelString } from "./primitives.js";
+import { NonEmptyString } from "./primitives.js";
 import { SessionsCreateParamsSchema } from "./sessions-create.js";
 import { SessionsRecoverParamsSchema, SessionsRecoverResultSchema } from "./sessions-recover.js";
 import { SessionOwnerSchema } from "./sessions-row.js";
@@ -551,74 +551,6 @@ export const SessionsAssignOwnerResultSchema = closedObject({
   owner: SessionOwnerSchema,
 });
 
-/** Lists the gateway-owned custom session group catalog (names + order). */
-export const SessionsGroupsListParamsSchema = closedObject({});
-
-/** One custom session group catalog entry. */
-export const SessionGroupSchema = closedObject({
-  name: SessionLabelString,
-  position: Type.Integer({ minimum: 0 }),
-});
-
-/** New Session defaults visible only to operators who can update them. */
-export const SessionGroupDefaultsSchema = closedObject({
-  name: SessionLabelString,
-  cwd: Type.Optional(NonEmptyString),
-  worktree: Type.Optional(Type.Boolean()),
-});
-
-const SidebarSectionIdString = Type.String({ minLength: 1, maxLength: 512 });
-
-/** Custom session group catalog in display order. */
-export const SessionsGroupsListResultSchema = closedObject({
-  groups: Type.Array(SessionGroupSchema),
-  sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString)),
-});
-
-/** Reads the New Session defaults for the custom group catalog. */
-export const SessionsGroupsDefaultsParamsSchema = closedObject({});
-
-/** Write-scoped group defaults, kept separate from the read-scoped catalog. */
-export const SessionsGroupsDefaultsResultSchema = closedObject({
-  defaults: Type.Array(SessionGroupDefaultsSchema),
-});
-
-/** Replaces the ordered group catalog; creates listed names, keeps member categories untouched. */
-export const SessionsGroupsPutParamsSchema = closedObject({
-  names: Type.Array(SessionLabelString),
-  sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString)),
-});
-
-/** Renames a group and repoints every member session's category. */
-export const SessionsGroupsRenameParamsSchema = closedObject({
-  name: SessionLabelString,
-  to: SessionLabelString,
-});
-
-/** Updates the New Session defaults owned by one custom group. */
-export const SessionsGroupsUpdateParamsSchema = closedObject({
-  name: SessionLabelString,
-  cwd: Type.Union([NonEmptyString, Type.Null()]),
-  worktree: Type.Boolean(),
-});
-
-/** Result after updating defaults without widening the read-scoped catalog. */
-export const SessionsGroupsUpdateResultSchema = closedObject({
-  ok: Type.Literal(true),
-  defaults: Type.Array(SessionGroupDefaultsSchema),
-});
-
-/** Deletes a group and clears every member session's category. */
-export const SessionsGroupsDeleteParamsSchema = closedObject({ name: SessionLabelString });
-
-/** Result for group catalog mutations, with member sessions updated where applicable. */
-export const SessionsGroupsMutationResultSchema = closedObject({
-  ok: Type.Literal(true),
-  groups: Type.Array(SessionGroupSchema),
-  sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString)),
-  updatedSessions: Type.Optional(Type.Integer({ minimum: 0 })),
-});
-
 /** Requests manual compaction for a session transcript. */
 export const SessionsCompactParamsSchema = closedObject({
   key: NonEmptyString,
@@ -849,18 +781,6 @@ export type SessionsPluginPatchResult = Static<typeof SessionsPluginPatchResultS
 export type SessionsResetParams = Static<typeof SessionsResetParamsSchema>;
 export type SessionsAssignOwnerParams = Static<typeof SessionsAssignOwnerParamsSchema>;
 export type SessionsAssignOwnerResult = Static<typeof SessionsAssignOwnerResultSchema>;
-export type SessionGroup = Static<typeof SessionGroupSchema>;
-export type SessionGroupDefaults = Static<typeof SessionGroupDefaultsSchema>;
-export type SessionsGroupsListParams = Static<typeof SessionsGroupsListParamsSchema>;
-export type SessionsGroupsListResult = Static<typeof SessionsGroupsListResultSchema>;
-export type SessionsGroupsDefaultsParams = Static<typeof SessionsGroupsDefaultsParamsSchema>;
-export type SessionsGroupsDefaultsResult = Static<typeof SessionsGroupsDefaultsResultSchema>;
-export type SessionsGroupsPutParams = Static<typeof SessionsGroupsPutParamsSchema>;
-export type SessionsGroupsRenameParams = Static<typeof SessionsGroupsRenameParamsSchema>;
-export type SessionsGroupsUpdateParams = Static<typeof SessionsGroupsUpdateParamsSchema>;
-export type SessionsGroupsUpdateResult = Static<typeof SessionsGroupsUpdateResultSchema>;
-export type SessionsGroupsDeleteParams = Static<typeof SessionsGroupsDeleteParamsSchema>;
-export type SessionsGroupsMutationResult = Static<typeof SessionsGroupsMutationResultSchema>;
 export type SessionsCompactParams = Static<typeof SessionsCompactParamsSchema>;
 export type SessionsUsageParams = Static<typeof SessionsUsageParamsSchema>;
 export type SessionFileContentEncoding = Static<typeof SessionFileContentEncodingSchema>;

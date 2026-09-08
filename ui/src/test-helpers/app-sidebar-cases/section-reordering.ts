@@ -161,7 +161,7 @@ describe("AppSidebar section reordering", () => {
     dispatchDragEvent(threadsSection, "drop", dataTransfer);
 
     expect(dataTransfer.types).toEqual([]);
-    expect(harness.groupsPut).not.toHaveBeenCalled();
+    expect(harness.groupsReorder).not.toHaveBeenCalled();
   });
 
   it("keeps new-session link gestures separate from section dragging and menus", async () => {
@@ -200,7 +200,7 @@ describe("AppSidebar section reordering", () => {
     dispatchDragEvent(alphaSection, "drop", dataTransfer);
 
     await waitForFast(() =>
-      expect(harness.groupsPut).toHaveBeenCalledWith(
+      expect(harness.groupsReorder).toHaveBeenCalledWith(
         ["Gamma", "Alpha", "Beta"],
         ["category:Gamma", "category:Alpha", "category:Beta", "ungrouped", "groups", "work"],
       ),
@@ -219,7 +219,7 @@ describe("AppSidebar section reordering", () => {
     dispatchDragEvent(threadsSection, "drop", dataTransfer);
 
     await waitForFast(() =>
-      expect(harness.groupsPut).toHaveBeenCalledWith([], ["work", "ungrouped", "groups"]),
+      expect(harness.groupsReorder).toHaveBeenCalledWith([], ["work", "ungrouped", "groups"]),
     );
   });
 
@@ -264,7 +264,7 @@ describe("AppSidebar section reordering", () => {
     dispatchDragEvent(threadsSection, "drop", dataTransfer);
 
     await waitForFast(() =>
-      expect(harness.groupsPut).toHaveBeenCalledWith(
+      expect(harness.groupsReorder).toHaveBeenCalledWith(
         [],
         ["work", "ungrouped", "groups", "catalog:codex"],
       ),
@@ -283,7 +283,7 @@ describe("AppSidebar section reordering", () => {
     dispatchDragEvent(codingSection, "drop", dataTransfer);
 
     await waitForFast(() =>
-      expect(harness.groupsPut).toHaveBeenCalledWith(
+      expect(harness.groupsReorder).toHaveBeenCalledWith(
         [],
         ["ungrouped", "groups", "catalog:codex", "work"],
       ),

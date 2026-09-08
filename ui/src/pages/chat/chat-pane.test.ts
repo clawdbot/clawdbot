@@ -217,14 +217,14 @@ describe("chat pane header state", () => {
         defaults: { modelProvider: null, model: null, contextTokens: null },
         sessions: [session],
       };
-      const groupsPut = vi.fn(
+      const groupsAdd = vi.fn(
         () =>
           new Promise<"completed">((resolve) => {
             landCatalogWrite = () => resolve("completed");
           }),
       );
       const sessions = createSessionCapabilityFixture({
-        groupsPut,
+        groupsAdd,
         patch,
         state: { error: null, groups: [], result },
       });
@@ -236,7 +236,7 @@ describe("chat pane header state", () => {
       const pending = pane.handleHeaderSessionAction({ kind: "new-group" }, session);
       await waitForInputDialog();
       await submitInputDialog("Projects");
-      await vi.waitFor(() => expect(groupsPut).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(groupsAdd).toHaveBeenCalledOnce());
 
       result.sessions = [];
       landCatalogWrite();

@@ -282,6 +282,71 @@ export function putSessionGroups(params: {
 }
 
 /**
+ * Reorders the listed groups by their input position. Groups not in the input
+ * keep their current position and are not inserted or deleted.
+ * When sectionOrder is provided, the full sidebar section order is persisted atomically.
+ */
+export function reorderSessionGroups(
+  names: readonly string[],
+  sectionOrder?: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): SessionGroupRecord[] {
+  const normalized = normalizeGroupNames(names);
+  const shouldPersistSectionOrder = sectionOrder !== undefined;
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const kysely = kyselyFor(db);
+      // Read existing groups so unlisted groups can be assigned unique
+      // contiguous positions after the listed groups, preserving their
+      // prior relative order. Without this compaction a partial reorder
+      // can persist duplicate positions and make later catalog reads
+      // depend on a name tie-break instead of the caller's intent.
+      const existing = executeSqliteQuerySync(
+        db,
+        kysely.selectFrom("session_groups").select(["name", "position"]),
+      ).rows;
+      const existingNames = new Set(existing.map((row) => row.name));
+      // Discard nonexistent names so they do not consume positions or leave gaps.
+      const listed = normalized.filter((name) => existingNames.has(name));
+      const listedSet = new Set(listed);
+      const unlisted = existing
+        .filter((row) => !listedSet.has(row.name))
+        .toSorted((a, b) => a.position - b.position || a.name.localeCompare(b.name));
+
+      // Build the complete resulting catalog so sidebar normalization can keep
+      // sections for unlisted groups instead of stripping them.
+      const resultingCatalogNames = [...listed, ...unlisted.map((row) => row.name)];
+
+      let pos = 0;
+      for (const name of listed) {
+        executeSqliteQuerySync(
+          db,
+          kysely.updateTable("session_groups").set({ position: pos++ }).where("name", "=", name),
+        );
+      }
+      for (const row of unlisted) {
+        executeSqliteQuerySync(
+          db,
+          kysely
+            .updateTable("session_groups")
+            .set({ position: pos++ })
+            .where("name", "=", row.name),
+        );
+      }
+      if (shouldPersistSectionOrder) {
+        const normalizedSectionOrder = normalizeSidebarSectionOrder(
+          sectionOrder,
+          resultingCatalogNames,
+        );
+        updateSidebarSectionOrder(db, () => normalizedSectionOrder);
+      }
+    },
+    { env },
+  );
+  return listSessionGroups(env);
+}
+
+/**
  * Absorbs a category assigned through sessions.patch so the catalog keeps
  * covering every group an operator UI can observe, appended at the end.
  */

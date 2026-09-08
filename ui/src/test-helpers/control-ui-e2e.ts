@@ -320,11 +320,13 @@ export const defaultControlUiFeatureMethods = [
   "sessions.delete",
   "sessions.dispatch",
   "sessions.fork",
+  "sessions.groups.add",
   "sessions.groups.delete",
   "sessions.groups.defaults",
   "sessions.groups.list",
   "sessions.groups.put",
   "sessions.groups.rename",
+  "sessions.groups.reorder",
   "sessions.groups.update",
   "sessions.patch",
   "sessions.reclaim",
@@ -477,6 +479,8 @@ export type ControlUiMockGatewayScenario = {
   sessionGroups?: string[];
   /** Optional New Session defaults keyed by custom group name. */
   sessionGroupDefaults?: Record<string, { cwd?: string; worktree?: boolean }>;
+  /** Persist the group catalog in localStorage and sync mutations across tabs. */
+  shareSessionGroupsAcrossTabs?: boolean;
   terminalEnabled?: boolean;
   cliAgentsEnabled?: boolean;
   workspace?: string;
@@ -1095,6 +1099,7 @@ function normalizeScenario(
     sessionScope: scenario.sessionScope ?? "per-sender",
     sessionGroups: scenario.sessionGroups ?? [],
     sessionGroupDefaults: scenario.sessionGroupDefaults ?? {},
+    shareSessionGroupsAcrossTabs: scenario.shareSessionGroupsAcrossTabs ?? false,
     terminalEnabled: scenario.terminalEnabled ?? false,
     cliAgentsEnabled: scenario.cliAgentsEnabled ?? false,
     workspace: scenario.workspace ?? "",
@@ -1294,6 +1299,7 @@ function installControlUiMockGateway(
     readonly readyState: number;
     readonly url: string;
     close: (code?: number, reason?: string) => void;
+    deliver: (frame: unknown) => void;
     openConnection: () => void;
   }> = [];
   let sessionMessageEventIndex = 0;
@@ -1303,7 +1309,17 @@ function installControlUiMockGateway(
   // sessionStorage so a page reload keeps the catalog the way the real
   // gateway's SQLite store does; renames replay onto static sessions.list
   // fixtures because the real gateway rewrites member categories server-side.
+  // Cross-tab proof scenarios can opt into localStorage sharing instead.
   const groupsStateKey = "openclaw.control-ui-e2e.sessionGroups";
+  // Storage-denied browser contexts throw on property access; keep the
+  // in-memory catalog working instead of failing mock installation.
+  const groupsStorage: Storage | null = (() => {
+    try {
+      return scenario.shareSessionGroupsAcrossTabs ? window.localStorage : window.sessionStorage;
+    } catch {
+      return null;
+    }
+  })();
   let groupsState: {
     names: string[];
     defaults: Record<string, { cwd?: string; worktree?: boolean }>;
@@ -1322,7 +1338,7 @@ function installControlUiMockGateway(
     // Storage-disabled browser contexts still get the in-memory mock default.
   }
   try {
-    const rawGroups = window.sessionStorage.getItem(groupsStateKey);
+    const rawGroups = groupsStorage?.getItem(groupsStateKey);
     if (rawGroups) {
       groupsState = JSON.parse(rawGroups) as typeof groupsState;
       groupsState.sectionOrder ??= [];
@@ -1330,6 +1346,41 @@ function installControlUiMockGateway(
     }
   } catch {
     // Storage-disabled browser contexts still get the scenario catalog.
+  }
+  if (scenario.shareSessionGroupsAcrossTabs) {
+    window.addEventListener("storage", (event) => {
+      if (event.key !== groupsStateKey || event.storageArea !== groupsStorage) {
+        return;
+      }
+      try {
+        const next = event.newValue ? JSON.parse(event.newValue) : null;
+        if (
+          isRecord(next) &&
+          Array.isArray(next.names) &&
+          typeof next.defaults === "object" &&
+          next.defaults !== null &&
+          Array.isArray(next.sectionOrder) &&
+          Array.isArray(next.renames)
+        ) {
+          groupsState = {
+            names: [...next.names],
+            defaults: { ...(next.defaults as typeof groupsState.defaults) },
+            sectionOrder: [...next.sectionOrder],
+            renames: [...(next.renames as typeof groupsState.renames)],
+          };
+          for (const socket of sockets) {
+            socket.deliver({
+              event: "sessions.changed",
+              payload: { reason: "groups" },
+              seq: ++seq,
+              type: "event",
+            });
+          }
+        }
+      } catch {
+        // Ignore malformed cross-tab catalog updates.
+      }
+    });
   }
   let seq = 0;
   // Stateful config store: config.set/config.apply persist the submitted raw
@@ -1401,7 +1452,7 @@ function installControlUiMockGateway(
 
   function persistGroupsState(): void {
     try {
-      window.sessionStorage.setItem(groupsStateKey, JSON.stringify(groupsState));
+      groupsStorage?.setItem(groupsStateKey, JSON.stringify(groupsState));
     } catch {
       // In-memory catalog still serves the current page.
     }
@@ -2445,6 +2496,29 @@ function installControlUiMockGateway(
         return groupDefaultsPayload();
       case "sessions.groups.put": {
         groupsState.names = normalizedGroupNames(isRecord(params) ? params.names : undefined);
+        if (isRecord(params) && Array.isArray(params.sectionOrder)) {
+          groupsState.sectionOrder = normalizedGroupNames(params.sectionOrder);
+        }
+        persistGroupsState();
+        return { ok: true, ...groupsPayload() };
+      }
+      case "sessions.groups.add": {
+        const name = isRecord(params) && typeof params.name === "string" ? params.name.trim() : "";
+        if (name && !groupsState.names.includes(name)) {
+          groupsState.names.push(name);
+          persistGroupsState();
+        }
+        return { ok: true, ...groupsPayload() };
+      }
+      case "sessions.groups.reorder": {
+        const requested = normalizedGroupNames(isRecord(params) ? params.names : undefined);
+        const existingSet = new Set(groupsState.names);
+        const reordered = requested.filter((name) => existingSet.has(name));
+        const reorderedSet = new Set(reordered);
+        groupsState.names = [
+          ...reordered,
+          ...groupsState.names.filter((name) => !reorderedSet.has(name)),
+        ];
         if (isRecord(params) && Array.isArray(params.sectionOrder)) {
           groupsState.sectionOrder = normalizedGroupNames(params.sectionOrder);
         }

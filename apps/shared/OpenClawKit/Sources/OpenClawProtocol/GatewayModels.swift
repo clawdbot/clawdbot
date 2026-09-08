@@ -10971,6 +10971,16 @@ public struct SessionsGroupsDefaultsResult: Codable, Sendable {
     }
 }
 
+public struct SessionsGroupsAddParams: Codable, Sendable {
+    public let name: String
+
+    public init(
+        name: String)
+    {
+        self.name = name
+    }
+}
+
 public struct SessionsGroupsPutParams: Codable, Sendable {
     public let names: [String]
     public let sectionorder: [String]?
@@ -10999,6 +11009,24 @@ public struct SessionsGroupsRenameParams: Codable, Sendable {
     {
         self.name = name
         self.to = to
+    }
+}
+
+public struct SessionsGroupsReorderParams: Codable, Sendable {
+    public let names: [String]
+    public let sectionorder: [String]?
+
+    public init(
+        names: [String],
+        sectionorder: [String]? = nil)
+    {
+        self.names = names
+        self.sectionorder = sectionorder
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case names
+        case sectionorder = "sectionOrder"
     }
 }
 

@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import OSLog
 
 private let chatSessionActionsLogger = Logger(
@@ -177,13 +178,17 @@ extension OpenClawChatViewModel {
     {
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return try await self.fetchSessionGroups(using: routeLease) }
-        // Read-modify-write matches web group creation (app-sidebar-session-groups,
-        // custom-groups); the gateway has no atomic add/CAS. A concurrent edit can
-        // lose catalog names/order only — session categories are untouched by
-        // sessions.groups.put, so memberships survive. Accepted tradeoff until the
-        // gateway grows a revisioned groups API.
-        let current = try await self.fetchSessionGroups(using: routeLease)
-        let response = try await routeLease.putGroups(names: current.map(\.name) + [name])
+        // Support is negotiated when the route lease is captured, so the atomic
+        // add is only dispatched to Gateways that advertise it. Authorization
+        // and transport failures therefore propagate instead of retrying a
+        // fallback the older writer-only connection never had.
+        let response: OpenClawChatSessionGroupsMutationResponse
+        if routeLease.supportsGroupAdd {
+            response = try await routeLease.addGroup(name: name)
+        } else {
+            let current = try await self.fetchSessionGroups(using: routeLease)
+            response = try await routeLease.putGroups(names: current.map(\.name) + [name])
+        }
         self.sessionGroupsRevision += 1
         return response.groups
     }

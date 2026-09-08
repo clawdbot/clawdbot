@@ -47,7 +47,7 @@ suite.define(() => {
       const batch = surface === "selection";
       const method = batch ? "sessions.patchMany" : "sessions.patch";
       const gateway = await installMockGateway(page, {
-        deferredMethods: ["sessions.groups.put", method],
+        deferredMethods: ["sessions.groups.add", method],
         methodResponses: { "sessions.list": sessionsListResponse([original, survivor]) },
         sessionKey: original.key,
       });
@@ -96,7 +96,7 @@ suite.define(() => {
         await input.fill(group);
         await capture("editing", page.locator("openclaw-modal-dialog dialog"), [input]);
         await input.press("Enter");
-        await gateway.waitForRequest("sessions.groups.put");
+        await gateway.waitForRequest("sessions.groups.add");
 
         // Deletion/recreation changes the durable identity, unlike ordinary reset.
         await gateway.setSessionsListResponse(sessionsListResponse([replacement, survivor]));
@@ -106,7 +106,7 @@ suite.define(() => {
           reason: "create",
         });
         await expect.poll(() => row.textContent()).toContain(replacement.label);
-        await gateway.resolveDeferred("sessions.groups.put");
+        await gateway.resolveDeferred("sessions.groups.add");
         const request = await gateway.waitForRequest(method);
         const params = requireRecord(request.params);
         const targets =

@@ -464,6 +464,7 @@ struct ChatGatewayRequestTests {
     @Test func `session group requests encode exact gateway contracts`() {
         let list = OpenClawChatGatewayRequests.sessionGroupsList()
         let put = OpenClawChatGatewayRequests.sessionGroupsPut(names: ["Work", "Personal"])
+        let add = OpenClawChatGatewayRequests.sessionGroupsAdd(name: "Work")
         let rename = OpenClawChatGatewayRequests.sessionGroupsRename(name: "Work", to: "Projects")
         let delete = OpenClawChatGatewayRequests.sessionGroupsDelete(name: "Personal")
 
@@ -471,6 +472,8 @@ struct ChatGatewayRequestTests {
         #expect(list.params.isEmpty)
         #expect(put.method == "sessions.groups.put")
         #expect(put.params["names"]?.value as? [String] == ["Work", "Personal"])
+        #expect(add.method == "sessions.groups.add")
+        #expect(add.params["name"]?.value as? String == "Work")
         #expect(rename.method == "sessions.groups.rename")
         #expect(rename.params["name"]?.value as? String == "Work")
         #expect(rename.params["to"]?.value as? String == "Projects")
