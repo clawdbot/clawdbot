@@ -464,6 +464,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.note).toContain(
       "This is the only collector child in its group so far; unless more parallel children follow, an ordinary spawn (omit collect) is simpler and can be steered.",
     );
+    expect(result).not.toHaveProperty("sessionId");
     const registerInput = firstRegisteredSubagentRun();
     expect(registerInput).toMatchObject({
       runId: result.runId,
@@ -1573,11 +1574,16 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.expectsCompletionMessage).toBe(true);
     expect(result.modelApplied).toBe(true);
     expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
+    expect(typeof result.sessionId).toBe("string");
+    expect(result.sessionId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
+    expect(result.sessionKey).toBeUndefined();
 
     const childSessionKey = result.childSessionKey as string;
     expect(hoisted.updateSessionStoreMock).toHaveBeenCalledOnce();
     expect(persistedStore?.[childSessionKey]).toMatchObject({
-      sessionId: expect.any(String),
+      sessionId: result.sessionId,
       lifecycleRevision: expect.any(String),
       spawnedBy: "agent:main:main",
       completionOwnerSessionKey: "agent:main:main",

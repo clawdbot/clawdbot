@@ -68,6 +68,39 @@ export function withSubagentGatewayExecutionIdentity<T extends object>(
   return carried;
 }
 
+export function buildSubagentLaunchExecutionIdentityFacts(params: {
+  enabled: boolean;
+  parentAgentId: string;
+  requesterRef: string;
+  controllerRef: string;
+  depth: number;
+  maxDepth?: number;
+  targetAgentId: string;
+  sandbox: "inherit" | "require";
+  inheritedToolAllowlist?: string[];
+  inheritedToolDenylist?: string[];
+  parentExecutionIdentityToken?: ExecutionIdentityAdmissionToken;
+}): SubagentGatewayExecutionIdentity {
+  return {
+    sessionSpawnContext: buildSubagentExecutionSessionSpawnContext({
+      enabled: params.enabled,
+      backend: "subagent",
+      parentAgentId: params.parentAgentId,
+      requesterRef: params.requesterRef,
+      controllerRef: params.controllerRef,
+      depth: params.depth,
+      maxDepth: params.maxDepth,
+      targetAgentId: params.targetAgentId,
+      sandbox: params.sandbox,
+      inheritedToolAllowlist: params.inheritedToolAllowlist,
+      inheritedToolDenylist: params.inheritedToolDenylist,
+    }),
+    ...(params.parentExecutionIdentityToken
+      ? { parentExecutionIdentityToken: params.parentExecutionIdentityToken }
+      : {}),
+  };
+}
+
 export function readSubagentGatewayExecutionIdentity(
   params: object,
 ): SubagentGatewayExecutionIdentity | undefined {
