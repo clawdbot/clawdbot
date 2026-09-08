@@ -4,6 +4,7 @@ import type {
   CronListPageResult,
 } from "../../cron/service/list-page-types.js";
 import type { CronJob } from "../../cron/types.js";
+import type { CronListDiagnostics } from "./cron-list-diagnostics.js";
 
 type CronListCallerScopeContext = {
   cron: {
@@ -17,24 +18,33 @@ export async function listCronPageWithVisibility({
   matchesJob,
   context,
   options,
+  diagnostics,
 }: {
   matchesJob: (job: CronJob) => boolean;
   context: CronListCallerScopeContext;
   options: CronListPageOptions;
+  diagnostics?: Pick<CronListDiagnostics, "startScopeAttempt" | "startSourcePage">;
 }): Promise<CronListPageResult> {
   let stableScopedJobs: CronJob[] | undefined;
   for (let attempt = 0; attempt < CRON_LIST_SCOPED_SNAPSHOT_MAX_ATTEMPTS; attempt += 1) {
+    diagnostics?.startScopeAttempt();
     const scopedJobs: CronJob[] = [];
     let offset = 0;
     let snapshotRevision: string | undefined;
     let snapshotChanged = false;
 
     for (;;) {
-      const sourcePage = await context.cron.listPage({
-        ...options,
-        limit: 200,
-        offset,
-      });
+      const finishPage = diagnostics?.startSourcePage();
+      let sourcePage: CronListPageResult;
+      try {
+        sourcePage = await context.cron.listPage({
+          ...options,
+          limit: 200,
+          offset,
+        });
+      } finally {
+        finishPage?.();
+      }
       if (snapshotRevision && sourcePage.snapshotRevision !== snapshotRevision) {
         snapshotChanged = true;
         break;
