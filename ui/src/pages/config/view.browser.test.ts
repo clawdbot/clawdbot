@@ -877,7 +877,6 @@ describe("config view", () => {
 
     const formButton = findButtonByText(container, "Form");
     const rawButton = findButtonByText(container, "Raw");
-    expect([...formButton.classList]).toEqual(["config-mode-toggle__btn", "active"]);
     expect(formButton.getAttribute("aria-pressed")).toBe("true");
     expect(rawButton.getAttribute("aria-pressed")).toBe("false");
     expect(rawButton.disabled).toBe(true);

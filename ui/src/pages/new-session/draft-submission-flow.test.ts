@@ -8,39 +8,27 @@ import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import {
   getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
-  registerChatAttachmentPayload,
 } from "../chat/attachment-payload-store.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
-import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import {
+  createDraftFixture,
+  registerTextPayload,
+  stubObjectUrls,
+} from "./draft-submission-flow.test-support.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 afterEach(() => {
+  document.body.replaceChildren();
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   sessionStorage.clear();
   localStorage.clear();
 });
-
-function registerTextPayload(id: string) {
-  return registerChatAttachmentPayload({
-    attachment: { id, mimeType: "text/plain", fileName: `${id}.txt` },
-    dataUrl: `data:text/plain;base64,${btoa(id)}`,
-    file: new File([id], `${id}.txt`, { type: "text/plain" }),
-  });
-}
-
-function stubObjectUrls(...urls: string[]) {
-  const createObjectURL = vi.fn();
-  urls.forEach((url) => createObjectURL.mockReturnValueOnce(url));
-  const revokeObjectURL = vi.fn();
-  vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
-  return revokeObjectURL;
-}
 
 describe("DraftSubmissionFlow", () => {
   it("starts a cloud repository with its selected ref without cloning on the Gateway", async () => {
@@ -283,204 +271,6 @@ describe("DraftSubmissionFlow", () => {
     await initialSubmission;
     clock.mockRestore();
   });
-
-  it.each(["codex", "claude"])(
-    "primary submission starts %s in a native terminal, never Chat",
-    async (catalogId) => {
-      const dispatch = vi.spyOn(window, "dispatchEvent");
-      const { context, flow, request } = createDraftFixture({
-        scopes: ["operator.admin", "operator.read", "operator.write"],
-        methods: ["sessions.create", "sessions.catalog.startTerminal", "terminal.open"],
-        data: {
-          agentId: "main",
-          requestedAgentId: "main",
-          catalogId,
-          model: "openai/test",
-          catalogLabel: catalogId,
-          startTerminal: true,
-          terminalHosts: [{ hostId: "gateway:local", label: "Local CLI" }],
-        },
-        request: async (method) =>
-          method === "sessions.catalog.startTerminal" ? { sessionId: "terminal-created" } : {},
-      });
-      flow.setMessage("start this task");
-      await flow.submit();
-
-      expect(request).toHaveBeenCalledWith("sessions.catalog.startTerminal", {
-        catalogId,
-        agentId: "main",
-        hostId: "gateway:local",
-        cwd: "/workspace",
-        initialMessage: "start this task",
-      });
-      expect(context.sessions.createResult).not.toHaveBeenCalled();
-      expect(request.mock.calls.some(([method]) => method === "sessions.create")).toBe(false);
-      expect(context.navigateAndWait).not.toHaveBeenCalled();
-      expect(flow.message).toBe("");
-      expect(dispatch).toHaveBeenCalledWith(
-        expect.objectContaining({
-          detail: { open: true, terminalSessionId: "terminal-created", agentOwned: false },
-        }),
-      );
-    },
-  );
-
-  it("provisions the chosen local worktree before opening the native CLI", async () => {
-    const { flow, place, request, context } = createDraftFixture({
-      scopes: ["operator.admin"],
-      methods: ["sessions.catalog.startTerminal", "worktrees.create", "terminal.open"],
-      agents: [{ id: "main", workspace: "/repo", workspaceGit: true }],
-      data: {
-        agentId: "main",
-        requestedAgentId: "main",
-        catalogId: "codex",
-        catalogLabel: "Codex",
-        model: "",
-        startTerminal: true,
-        terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
-      },
-      request: async (method) =>
-        method === "worktrees.branches"
-          ? { repositoryStatus: "git", branches: ["main"], headBranch: "main" }
-          : method === "worktrees.create"
-            ? { path: "/repo/worktrees/native" }
-            : { sessionId: "native-worktree" },
-    });
-    await vi.waitFor(() => expect(place.repository.kind).toBe("git"));
-    place.selectWorktree(true);
-    place.setWorktreeName("native");
-    place.setBaseRef("main");
-    await flow.submit();
-    expect(request).toHaveBeenCalledWith("worktrees.create", {
-      repoRoot: "/repo",
-      name: "native",
-      baseRef: "main",
-    });
-    expect(request).toHaveBeenLastCalledWith("sessions.catalog.startTerminal", {
-      catalogId: "codex",
-      agentId: "main",
-      hostId: "gateway:local",
-      cwd: "/repo/worktrees/native",
-    });
-    expect(context.sessions.createResult).not.toHaveBeenCalled();
-  });
-
-  it.each(["codex", "claude"])(
-    "%s native launch preserves node ownership and refuses stale capabilities",
-    async (catalogId) => {
-      const data = {
-        agentId: "main",
-        requestedAgentId: "main",
-        catalogId,
-        model: "",
-        catalogLabel: catalogId,
-        startTerminal: true,
-        terminalHosts: [{ hostId: "node:chosen", label: "Chosen" }],
-      };
-      const { context, flow, gateway, place, request } = createDraftFixture({
-        data,
-        agents: [{ id: "main", workspace: "/gateway-only" }],
-        scopes: ["operator.admin"],
-        methods: ["sessions.catalog.startTerminal", "terminal.open"],
-        request: async () => ({ sessionId: "native-node" }),
-      });
-      place.selectTerminalHost("node:chosen");
-      expect(flow.submitDisabledReason()).toBeTruthy();
-      place.applyFolder("/node/existing-project");
-      const persistPreference = vi.spyOn(gateway, "persistPreference");
-      request.mockClear();
-      place.invalidateGatewayDiscovery(false);
-      place.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true });
-      expect(persistPreference).not.toHaveBeenCalled();
-      expect(request).not.toHaveBeenCalled();
-      flow.setMessage("native prompt");
-      await flow.submit();
-      expect(request).toHaveBeenCalledWith("sessions.catalog.startTerminal", {
-        catalogId,
-        agentId: "main",
-        hostId: "node:chosen",
-        cwd: "/node/existing-project",
-        initialMessage: "native prompt",
-      });
-      expect(context.sessions.createResult).not.toHaveBeenCalled();
-      request.mockClear();
-      data.terminalHosts = [];
-      await flow.submit();
-      expect(flow.blockedSubmitNotice()).toContain("Native CLI host unavailable");
-      expect(request).not.toHaveBeenCalled();
-      expect(place.terminalHostId).toBe("node:chosen");
-      expect(place.folder).toBe("/node/existing-project");
-
-      // Same-route revalidation can retire the capability without changing the chosen node.
-      data.startTerminal = false;
-      data.catalogLabel = "";
-      place.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true });
-      request.mockClear();
-      persistPreference.mockClear();
-      place.applyFolder("/node/revalidated-project");
-      expect(request).not.toHaveBeenCalled();
-      expect(persistPreference).not.toHaveBeenCalled();
-      expect(place.terminalHostId).toBe("node:chosen");
-      expect(place.folder).toBe("/node/revalidated-project");
-      await flow.submit();
-      expect(flow.blockedSubmitNotice()).toBe("This session target is unavailable.");
-      expect(context.sessions.createResult).not.toHaveBeenCalled();
-      expect(request).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["disabled", "attachments", "overrides", "mentions", "missing method", "non-admin"])(
-    "native launch fails visibly for %s without Chat fallback",
-    async (failure) => {
-      const { context, flow, request } = createDraftFixture({
-        scopes: failure === "non-admin" ? ["operator.write"] : ["operator.admin"],
-        methods:
-          failure === "missing method"
-            ? ["sessions.create"]
-            : ["sessions.catalog.startTerminal", "terminal.open"],
-        data: {
-          agentId: "main",
-          requestedAgentId: "main",
-          catalogId: "codex",
-          model: "",
-          catalogLabel: "Codex",
-          startTerminal: true,
-          terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
-        },
-      });
-      if (failure === "disabled") {
-        context.config.current.cliAgentsEnabled = false;
-      }
-      if (failure === "attachments") {
-        stubObjectUrls("blob:native-attachment");
-        flow.attachmentDraft.replace([registerTextPayload("native-attachment")]);
-      }
-      if (failure === "overrides") {
-        flow.capabilities.setToolOverrides({ skills: { release: false } });
-      }
-      const message =
-        failure === "mentions" ? "@Alex do not turn this into Chat" : "do not turn this into Chat";
-      flow.setMessage(
-        message,
-        failure === "mentions" ? [{ profileId: "profile-alex", start: 0, end: 5 }] : undefined,
-      );
-      await flow.submit();
-      expect(flow.blockedSubmitNotice()).toBeTruthy();
-      expect(context.sessions.createResult).not.toHaveBeenCalled();
-      expect(request).not.toHaveBeenCalled();
-      expect(flow.message).toBe(message);
-      if (failure === "mentions") {
-        expect(flow.mentions).toEqual([{ profileId: "profile-alex", start: 0, end: 5 }]);
-        expect(flow.blockedSubmitNotice()).toBe(
-          "Human mentions are not available in this mode. Remove the selected mentions or send from a normal chat.",
-        );
-      }
-      if (failure === "overrides") {
-        flow.capabilities.setToolOverrides(null);
-        expect(flow.canSubmit()).toBe(true);
-      }
-    },
-  );
 
   it("makes attachment restore release only displaced payload ids", () => {
     const revokeObjectURL = stubObjectUrls("blob:shared", "blob:displaced", "blob:incoming");

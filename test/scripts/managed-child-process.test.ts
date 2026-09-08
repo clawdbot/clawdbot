@@ -510,6 +510,31 @@ setInterval(() => {}, 1_000);
     });
   });
 
+  it.each<{
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
+    signal: NodeJS.Signals;
+  }>([
+    { exitCode: 0, signalCode: null, signal: "SIGTERM" },
+    { exitCode: null, signalCode: "SIGTERM", signal: "SIGKILL" },
+  ])(
+    "does not target a known-exited Windows child ($exitCode/$signalCode)",
+    ({ exitCode, signalCode, signal }) => {
+      const child = { exitCode, signalCode, kill: vi.fn(() => true), pid: 12345 };
+      const runTaskkill = vi.fn(() => ({ status: 0 }));
+
+      const result = terminateManagedChild(child, signal, {
+        platform: "win32",
+        runTaskkill,
+      });
+
+      expect(runTaskkill).not.toHaveBeenCalled();
+      expect(child.kill).not.toHaveBeenCalled();
+      // Exit retires PID authority, not proof that inherited descendants are gone.
+      expect(result).toEqual({ processTreeState: "indeterminate" });
+    },
+  );
+
   it("force-kills Windows managed process trees when graceful taskkill fails", () => {
     withDefaultWindowsSystemRoot(() => {
       const child = {

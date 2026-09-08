@@ -12,8 +12,6 @@ import {
 import type {
   ImageGenerationIgnoredOverride,
   ImageGenerationBackground,
-  ImageGenerationOpenAIBackground,
-  ImageGenerationOpenAIModeration,
   ImageGenerationOpenAIOptions,
   ImageGenerationOutputFormat,
   ImageGenerationProvider,
@@ -30,6 +28,7 @@ import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.
 import { getImageMetadata } from "../../media/media-services.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
+import { createEnumOptionParser } from "../../shared/enum-option.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
@@ -93,7 +92,6 @@ const SUPPORTED_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const SUPPORTED_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 const SUPPORTED_OPENAI_MODERATIONS = ["low", "auto"] as const;
 const SUPPORTED_FAL_CREATIVITY = ["raw", "low", "medium", "high"] as const;
-type FalCreativity = (typeof SUPPORTED_FAL_CREATIVITY)[number];
 const SUPPORTED_ASPECT_RATIOS = new Set([
   "1:1",
   "2:1",
@@ -258,75 +256,7 @@ function normalizeAspectRatio(raw: string | undefined): string | undefined {
   );
 }
 
-function normalizeQuality(raw: string | undefined): ImageGenerationQuality | undefined {
-  const normalized = raw?.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if ((SUPPORTED_QUALITIES as readonly string[]).includes(normalized)) {
-    return normalized as ImageGenerationQuality;
-  }
-  throw new ToolInputError("quality must be one of low, medium, high, or auto");
-}
-
-function normalizeOutputFormat(raw: string | undefined): ImageGenerationOutputFormat | undefined {
-  const normalized = raw?.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if ((SUPPORTED_OUTPUT_FORMATS as readonly string[]).includes(normalized)) {
-    return normalized as ImageGenerationOutputFormat;
-  }
-  throw new ToolInputError("outputFormat must be one of png, jpeg, or webp");
-}
-
-function normalizeOpenAIBackground(
-  raw: string | undefined,
-): ImageGenerationOpenAIBackground | undefined {
-  const normalized = raw?.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if ((SUPPORTED_BACKGROUNDS as readonly string[]).includes(normalized)) {
-    return normalized as ImageGenerationOpenAIBackground;
-  }
-  throw new ToolInputError("openai.background must be one of transparent, opaque, or auto");
-}
-
-function normalizeBackground(raw: string | undefined): ImageGenerationBackground | undefined {
-  const normalized = raw?.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if ((SUPPORTED_BACKGROUNDS as readonly string[]).includes(normalized)) {
-    return normalized as ImageGenerationBackground;
-  }
-  throw new ToolInputError("background must be one of transparent, opaque, or auto");
-}
-
-function normalizeOpenAIModeration(
-  raw: string | undefined,
-): ImageGenerationOpenAIModeration | undefined {
-  const normalized = raw?.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if ((SUPPORTED_OPENAI_MODERATIONS as readonly string[]).includes(normalized)) {
-    return normalized as ImageGenerationOpenAIModeration;
-  }
-  throw new ToolInputError("openai.moderation must be one of low or auto");
-}
-
-function normalizeFalCreativity(raw: string | undefined): FalCreativity | undefined {
-  const normalized = raw?.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if ((SUPPORTED_FAL_CREATIVITY as readonly string[]).includes(normalized)) {
-    return normalized as FalCreativity;
-  }
-  throw new ToolInputError("fal.creativity must be one of raw, low, medium, or high");
-}
+const parseImageOption = createEnumOptionParser(ToolInputError);
 
 function readRecordParam(params: Record<string, unknown>, key: string): Record<string, unknown> {
   const raw = params[key];
@@ -337,8 +267,16 @@ function readRecordParam(params: Record<string, unknown>, key: string): Record<s
 
 function normalizeOpenAIOptions(args: Record<string, unknown>): ImageGenerationOpenAIOptions {
   const raw = readRecordParam(args, "openai");
-  const background = normalizeOpenAIBackground(readToolStringParam(raw, "background"));
-  const moderation = normalizeOpenAIModeration(readToolStringParam(raw, "moderation"));
+  const background = parseImageOption(
+    readToolStringParam(raw, "background"),
+    SUPPORTED_BACKGROUNDS,
+    "openai.background",
+  );
+  const moderation = parseImageOption(
+    readToolStringParam(raw, "moderation"),
+    SUPPORTED_OPENAI_MODERATIONS,
+    "openai.moderation",
+  );
   if (readSnakeCaseParamRaw(raw, "outputCompression") === null) {
     throw new ToolInputError("openai.outputCompression must be between 0 and 100");
   }
@@ -361,7 +299,11 @@ function normalizeProviderOptions(
   args: Record<string, unknown>,
 ): ImageGenerationProviderOptions | undefined {
   const falRaw = readRecordParam(args, "fal");
-  const falCreativity = normalizeFalCreativity(readToolStringParam(falRaw, "creativity"));
+  const falCreativity = parseImageOption(
+    readToolStringParam(falRaw, "creativity"),
+    SUPPORTED_FAL_CREATIVITY,
+    "fal.creativity",
+  );
   const openai = normalizeOpenAIOptions(args);
   const fal = falCreativity ? { creativity: falCreativity } : undefined;
   return fal || Object.keys(openai).length > 0
@@ -834,9 +776,21 @@ export function createImageGenerateTool(options?: {
       const aspectRatio = normalizeAspectRatio(readToolStringParam(params, "aspectRatio"));
       const explicitResolution = normalizeResolution(readToolStringParam(params, "resolution"));
       const timeoutMs = readGenerationTimeoutMs(params) ?? imageGenerationModelConfig.timeoutMs;
-      const quality = normalizeQuality(readToolStringParam(params, "quality"));
-      const outputFormat = normalizeOutputFormat(readToolStringParam(params, "outputFormat"));
-      const background = normalizeBackground(readToolStringParam(params, "background"));
+      const quality = parseImageOption(
+        readToolStringParam(params, "quality"),
+        SUPPORTED_QUALITIES,
+        "quality",
+      );
+      const outputFormat = parseImageOption(
+        readToolStringParam(params, "outputFormat"),
+        SUPPORTED_OUTPUT_FORMATS,
+        "outputFormat",
+      );
+      const background = parseImageOption(
+        readToolStringParam(params, "background"),
+        SUPPORTED_BACKGROUNDS,
+        "background",
+      );
       const providerOptions = normalizeProviderOptions(params);
       const imageGenerationProviders =
         preparedProviders ?? listRuntimeImageGenerationProviders({ config: effectiveCfg });

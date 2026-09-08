@@ -1,5 +1,5 @@
-import { isSettingsNavigationRoute } from "../app-navigation.ts";
-import { isSessionRouteId, routeIdFromPath, type RouteId } from "../app-route-paths.ts";
+import { isSettingsTakeover } from "../app-navigation.ts";
+import { isSessionRouteId, routeIdFromPath } from "../app-route-paths.ts";
 import {
   applyCommandPaletteTargetEvent,
   COMMAND_PALETTE_OPEN_EVENT,
@@ -73,10 +73,6 @@ type KeyboardShortcutsDialogElement = HTMLElement & {
 };
 
 let nativeCommandsOwner: AbortController | undefined;
-
-function isSettingsTakeover(routeId: RouteId | undefined): boolean {
-  return routeId !== undefined && isSettingsNavigationRoute(routeId);
-}
 
 export interface ShellChromeHost extends HTMLElement, ShellPanelHost {
   readonly activeSessionKey: string;

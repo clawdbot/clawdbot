@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { insideGitCheckout, runGit } from "../agents/worktrees/git.js";
@@ -17,6 +16,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { createOpenClawStateSchemaEnsurer } from "../state/openclaw-state-feature-schema.js";
 import {
   type OpenClawStateLeaseContext,
   withOpenClawStateLease,
@@ -34,43 +34,19 @@ export type ProjectRegistryRecord = {
 type ProjectsDatabase = Pick<OpenClawStateKyselyDatabase, "projects">;
 type ProjectRow = Selectable<OpenClawStateKyselyDatabase["projects"]>;
 
-const ensuredDatabases = new WeakSet<DatabaseSync>();
 const PROJECT_ID_MAX_LENGTH = 64;
 const PROJECT_CHECKOUT_LEASE_MS = 30_000;
 const PROJECT_CHECKOUT_WAIT_MS = 30_000;
-const PROJECTS_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS projects (
-  id TEXT NOT NULL PRIMARY KEY,
-  display_name TEXT NOT NULL,
-  repo_root TEXT NOT NULL,
-  origin_url TEXT,
-  source TEXT NOT NULL CHECK (source IN ('registered', 'cloned')),
-  created_at_ms INT NOT NULL,
-  updated_at_ms INT NOT NULL
-) STRICT;
-`;
+const ensureProjectRegistrySchema = createOpenClawStateSchemaEnsurer({
+  table: "projects",
+  operationLabel: "projects.registry.schema.ensure",
+});
 
 export class ProjectCheckoutError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ProjectCheckoutError";
   }
-}
-
-function ensureProjectRegistrySchema(options: OpenClawStateDatabaseOptions = {}): void {
-  const database = openOpenClawStateDatabase(options);
-  if (ensuredDatabases.has(database.db)) {
-    return;
-  }
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      // sqlite-allow-raw -- feature-local additive schema DDL; project rows use Kysely below.
-      db.exec(PROJECTS_SCHEMA_SQL);
-    },
-    options,
-    { operationLabel: "projects.registry.schema.ensure" },
-  );
-  ensuredDatabases.add(database.db);
 }
 
 function openProjectsDatabase(options: OpenClawStateDatabaseOptions = {}) {

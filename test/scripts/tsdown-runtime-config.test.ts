@@ -182,6 +182,9 @@ describe("tsdown config", () => {
     expect(workerGraph?.plugins).toContainEqual(
       expect.objectContaining({ name: STATE_SCHEMA_INLINE_PLUGIN_NAME }),
     );
+    expect(entrySources(unifiedGraph)["native-hook-relay/entry"]).toBe(
+      "src/cli/native-hook-relay-entry.ts",
+    );
     expect(inlinePlugins).toHaveLength(2);
   });
 

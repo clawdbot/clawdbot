@@ -1,3 +1,4 @@
+import { clearTaskRegistrySqliteForTests } from "../test-utils/task-registry-sqlite.js";
 import type {
   JsonValue,
   TaskFlowRecord,
@@ -29,7 +30,7 @@ type CreateFlowRecordParams = {
 
 type TaskFlowRegistryTestApi = {
   createFlowRecord(params: CreateFlowRecordParams): TaskFlowRecord | null;
-  resetTaskFlowRegistryForTests(opts?: { persist?: boolean }): void;
+  resetTaskFlowRegistryForTests(): void;
 };
 
 function getTestApi(): TaskFlowRegistryTestApi {
@@ -47,5 +48,8 @@ export function createFlowRecord(params: CreateFlowRecordParams): TaskFlowRecord
 }
 
 export function resetTaskFlowRegistryForTests(opts?: { persist?: boolean }): void {
-  getTestApi().resetTaskFlowRegistryForTests(opts);
+  getTestApi().resetTaskFlowRegistryForTests();
+  if (opts?.persist !== false) {
+    clearTaskRegistrySqliteForTests("flow");
+  }
 }

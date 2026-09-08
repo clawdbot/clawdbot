@@ -22,6 +22,35 @@ plugin supports.
   [Provider Plugins](/plugins/sdk-provider-plugins) for step-by-step guides.
 </Tip>
 
+## Tool policy vocabulary
+
+`openclaw/plugin-sdk/agent-harness-runtime` exposes core's synchronous policy
+primitives through `toolPolicy`:
+
+- `toolPolicy.expandToolGroups(list?)` normalizes tool aliases, drops blank entries, expands
+  core groups, and returns unique tool ids in first-seen order. Members of each
+  expanded group follow that group's catalog order.
+- `toolPolicy.createToolPolicyMatcher(policy?, writeAllowsApplyPatch = true)` returns a
+  matcher for tool names. Deny entries win, an empty allow list is unrestricted,
+  and `*` patterns and aliases use core normalization. Set the second argument
+  to `false` to disable the runtime compatibility where allowing `write` also
+  allows `apply_patch`.
+
+For conformance coverage, negate a matcher built with `{ deny: entries }`;
+this keeps an empty coverage list false and avoids allow-side compatibility.
+Prepare matchers for one synchronous operation; do not retain an authorization
+decision across awaited work.
+
+## Sandbox bind parsing
+
+`openclaw/plugin-sdk/agent-harness-runtime` exports
+`splitSandboxBindSpec(spec, options?)`. It returns raw `{ host, container, options }`
+segments, or `null` when no host/container separator exists. Windows host drive
+prefixes are always preserved. Pass `{ allowWindowsContainerPath: true }` to
+preserve drive prefixes in container paths too, as Policy does for its existing
+Windows bind grammar. The default keeps POSIX container parsing unchanged.
+This helper splits text; it does not validate or authorize a mount.
+
 ## Package entries
 
 Installed plugins point `package.json` `openclaw` fields at both source and
@@ -502,9 +531,20 @@ Pair `defineSetupPluginEntry(...)` with the narrow setup helper families:
 | `openclaw/plugin-sdk/channel-setup`     | Optional-install setup surfaces                                                                                                                                                    |
 | `openclaw/plugin-sdk/channel-dm-policy` | Account-aware DM policy descriptors for setup flows                                                                                                                                |
 | `openclaw/plugin-sdk/setup-tools`       | Setup/install CLI, archive, and docs helpers                                                                                                                                       |
-| `openclaw/plugin-sdk/archive`           | Bounded archive extraction and single-entry reads                                                                                                                                  |
+| `openclaw/plugin-sdk/archive`           | Bounded TAR/gzip member inspection, archive extraction, and single-entry reads                                                                                                     |
 | `openclaw/plugin-sdk/root-walk`         | Budgeted, root-bounded directory walking                                                                                                                                           |
 | `openclaw/plugin-sdk/secret-file`       | Pinned secret reads and first-writer-wins creation                                                                                                                                 |
+
+`inspectTarArchive({ archivePath, timeoutMs, limits, entryFilter, onFiltered })`
+returns a bounded, frozen list of accepted `{ path, kind, size }` TAR/gzip members
+without creating an extracted tree. It uses fs-safe's complete admission and
+zero-strip extraction policy, not tar display output. Paths use the existing
+canonical archive identity; LF and Unicode spelling are preserved. Use matching
+filter/limit settings and retain or verify the same archive bytes for subsequent
+extraction: inspection results are not reusable write authority. Only the resolved
+result is complete-admission evidence; a filter callback can precede a later
+policy failure. The member manifest does not synthesize implicit parent directories,
+so whole-tree consumers must authorize those parent paths separately.
 
 Keep heavy SDKs, CLI registration, and long-lived runtime services in the
 full entry.
@@ -640,3 +680,26 @@ Use `openclaw plugins inspect <id>` to see a plugin's shape.
 - [Setup and Config](/plugins/sdk-setup) - manifest and setup entry loading
 - [Channel Plugins](/plugins/sdk-channel-plugins) - building the `ChannelPlugin` object
 - [Provider Plugins](/plugins/sdk-provider-plugins) - provider registration and hooks
+
+## MCP subprocess runtime
+
+**Import:** `mcpStdioRuntime` from `openclaw/plugin-sdk/agent-harness-runtime` using dynamic `import()` when opening a connection. Its frozen object lazily loads one factory:
+
+```ts
+const { mcpStdioRuntime } = await import("openclaw/plugin-sdk/agent-harness-runtime");
+const { createMcpStdioClient } = await mcpStdioRuntime.load();
+```
+
+Use `createMcpStdioClient(params)` for a caller-owned MCP proxy subprocess fronting a stateful driver. OpenClaw owns the subprocess and its descendants, newline framing and JSON-RPC validation, initialization, request admission, deadlines, and shutdown. The client starts connecting when the factory returns. Keep this runtime out of plugin registration and paths that do not open MCP connections.
+
+Supply `command`, optional `args`, and an exact `env`; the child inherits no other environment variables. Set `clientInfo` (`name` and `version`), the required `protocolVersion`, `startupTimeoutMs`, `maxPendingRequests`, and `maxFrameBytes`. The server must return exactly the requested protocol version. OpenClaw retains a fixed 32 KiB stderr tail for unexpected-exit diagnostics. The decoder bounds pending bytes plus each incoming chunk before buffering, preserves fragmented UTF-8, skips empty lines, and requires safe integer response IDs.
+
+The caller supplies `errors.unavailable(message, cause?)` and `errors.protocol(message, cause?)`, each returning an `Error`. The first classifies process, lifecycle, admission, deadline, and cancellation failures. The second classifies malformed frames, non-timeout JSON-RPC errors, and handshake contract violations. Plugin-specific tool-result normalization stays with the caller.
+
+The returned client exposes three methods:
+
+- `isAvailable()` synchronously reports whether initialization completed and the connection remains usable.
+- `request(method, params, { timeoutMs, signal? })` waits for startup and returns the object result. An already-aborted signal or a full pending-request limit rejects only that call. After admission, cancellation or timeout retires the entire connection and rejects pending requests with the retained fatal error. The client suppresses SDK cancellation notifications because it terminates the process instead. A non-timeout JSON-RPC error response rejects only its matching request through `errors.protocol`.
+- `stop()` closes admission, retires pending requests, and awaits startup settlement and owned-process cleanup. It rejects through `errors.unavailable` with `proxy cleanup could not be confirmed` if cleanup is uncertain. It never stops a separately started service reached through the proxy's socket.
+
+Malformed frames, incompatible initialization, write failures, and unexpected process exit also retire the whole connection. The first fatal error is retained; create a new client to reconnect. Timeout classification follows the SDK error code, so a timeout-coded server error also retires the connection.

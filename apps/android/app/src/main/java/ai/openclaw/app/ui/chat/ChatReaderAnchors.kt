@@ -18,6 +18,7 @@ import androidx.compose.ui.layout.LocalPinnableContainer
 import androidx.compose.ui.layout.PinnableContainer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.IntSize
 import kotlin.math.roundToInt
 
 internal class ChatReaderAnchors(
@@ -37,10 +38,11 @@ internal class ChatReaderAnchors(
     val local: Offset,
     var text: String?,
     val character: Int?,
-    var targetY: Float,
-    var viewportHeight: Int,
+    val preferredY: Float,
+    var viewportSize: IntSize,
     var extentHeight: Float,
   ) {
+    var targetY = preferredY
     var awaitingPlacement: Int? = null
     var pins: List<PinnableContainer.PinnedHandle> = emptyList()
   }
@@ -113,11 +115,11 @@ internal class ChatReaderAnchors(
     if (local.isEmpty) return null
     val top = view.localPositionOf(value.coordinates, local.topLeft).y
     val height = view.localPositionOf(value.coordinates, local.bottomRight).y - top
-    // Track both heights: their difference can stay equal during a resize.
-    // Otherwise preserve the real scroll-boundary position recorded by correct().
-    if (value.viewportHeight != view.size.height || value.extentHeight != height) {
-      value.targetY = value.targetY.coerceIn(0f, (view.size.height - height).coerceAtLeast(0f))
-      value.viewportHeight = view.size.height
+    // Width reflow can move scroll boundaries without changing the glyph's height.
+    // Reapply the preferred position on geometry changes, retaining real clamps between them.
+    if (value.viewportSize != view.size || value.extentHeight != height) {
+      value.targetY = value.preferredY.coerceIn(0f, (view.size.height - height).coerceAtLeast(0f))
+      value.viewportSize = view.size
       value.extentHeight = height
     }
     return top
@@ -137,7 +139,7 @@ internal class ChatReaderAnchors(
         val local = coordinates.localPositionOf(view, visible.topLeft)
         if (layout == null) {
           val bottom = view.localPositionOf(coordinates, Offset(coordinates.size.width.toFloat(), coordinates.size.height.toFloat())).y
-          Reading(point, coordinates, local, null, null, visible.top, view.size.height, bottom - visible.top)
+          Reading(point, coordinates, local, null, null, visible.top, view.size, bottom - visible.top)
         } else {
           val firstLine = layout.getLineForVerticalPosition(local.y)
           val bottom = coordinates.localPositionOf(view, visible.bottomRight).y
@@ -149,7 +151,7 @@ internal class ChatReaderAnchors(
             val top = view.localPositionOf(coordinates, glyph.topLeft)
             val end = view.localPositionOf(coordinates, glyph.bottomRight)
             if (glyph.width > 0f && glyph.height > 0f && visible.contains(top) && end.x <= visible.right && end.y <= visible.bottom) {
-              Reading(point, coordinates, glyph.topLeft, text, character, top.y, view.size.height, end.y - top.y)
+              Reading(point, coordinates, glyph.topLeft, text, character, top.y, view.size, end.y - top.y)
             } else {
               null
             }

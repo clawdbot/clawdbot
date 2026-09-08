@@ -35,7 +35,6 @@ import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
 import { formatErrorMessage } from "./errors.js";
-import { repairGatewayAgentMediaMigrationStartupFailures } from "./gateway-boot-lifecycle.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -634,7 +633,6 @@ export async function migrateLegacyMediaPersistence(
       });
       recoverableWarningCount = discovery.recoverableWarningCount;
       const seenPaths = new Set<string>();
-      let databaseMigrationFailed = false;
       const archiveDirectories = new Set<string>();
       for (const entry of discovery.targets) {
         const pathname = entry.path;
@@ -671,20 +669,7 @@ export async function migrateLegacyMediaPersistence(
             );
           }
         } catch (error) {
-          databaseMigrationFailed = true;
           warnings.push(`Skipped agent database migration for ${pathname}: ${String(error)}`);
-        }
-      }
-
-      if (!databaseMigrationFailed && seenPaths.size > 0) {
-        const repairedFailures = repairGatewayAgentMediaMigrationStartupFailures({
-          databasePaths: [...seenPaths],
-          env,
-        });
-        if (repairedFailures > 0) {
-          changes.push(
-            `Repaired ${repairedFailures} gateway startup failure ${repairedFailures === 1 ? "record" : "records"} after media migration.`,
-          );
         }
       }
 

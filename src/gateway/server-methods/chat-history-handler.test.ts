@@ -732,7 +732,7 @@ describe("chat metadata ownership", () => {
         getRuntimeConfig: () => ({}),
         readChatMetadata,
       } as unknown as GatewayRequestContext;
-      for (const params of [{ agentId: "main", sessionKey }, { agentId: "main" }]) {
+      for (const params of [{ agentId: "   ", sessionKey }, { agentId: "main" }]) {
         await handler({
           params,
           context,

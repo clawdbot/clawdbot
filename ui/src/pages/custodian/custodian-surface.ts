@@ -220,8 +220,6 @@ class CustodianSurface extends OpenClawLightDomElement {
           }
           ${renderPanelRefreshStatus({
             status: store.transcript.status,
-            onRetry: () => void store.refreshTranscriptIfIdle(),
-            retryDisabled: !store.canRefreshTranscript(),
             className: "custodian__transcript-status",
           })}
           ${

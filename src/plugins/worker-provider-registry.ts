@@ -17,7 +17,7 @@ export function validateWorkerProviderContract(
   if (missingMethod) {
     return { ok: false, message: `worker provider registration missing method: ${missingMethod}` };
   }
-  for (const method of ["renew", "maintain"] as const) {
+  for (const method of ["renew", "maintain", "prepareProvision"] as const) {
     if (provider[method] !== undefined && typeof provider[method] !== "function") {
       return { ok: false, message: `worker provider registration ${method} must be a function` };
     }

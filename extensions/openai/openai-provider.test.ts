@@ -2526,6 +2526,7 @@ describe("buildOpenAIProvider", () => {
       validateGeminiTurns: false,
       validateAnthropicTurns: false,
       allowSyntheticToolResults: true,
+      appendOnlyRuntimeContext: true,
     });
   });
 

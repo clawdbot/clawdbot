@@ -390,9 +390,13 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         .toContain("anthropic");
       await expect.poll(async () => claudeCard.textContent()).toContain("Max 20x");
       await expect.poll(async () => claudeCard.textContent()).toContain("Credentials configured");
-      await expect.poll(async () => claudeCard.textContent()).not.toContain("Expired");
-      await expect.poll(async () => claudeCard.textContent()).not.toContain("Expiring");
-      await expect.poll(async () => claudeCard.textContent()).not.toContain("Not signed in");
+      const claudeReadiness = claudeCard.locator(".model-providers__head");
+      await expect.poll(async () => claudeReadiness.textContent()).not.toContain("Expired");
+      await expect.poll(async () => claudeReadiness.textContent()).not.toContain("Expiring");
+      await expect.poll(async () => claudeReadiness.textContent()).not.toContain("Not signed in");
+      await expect
+        .poll(async () => claudeCard.locator(".model-providers__profile").textContent())
+        .toContain("Expired");
       await expect.poll(async () => claudeCard.textContent()).toContain("$4.20");
       await claudeCard.locator(".provider-usage-progress").first().waitFor();
       await expect.poll(() => page.getByText("Model auth expired: Claude").count()).toBe(0);

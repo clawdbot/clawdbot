@@ -142,6 +142,14 @@ function hasExplicitSharedSecretAuth(connectAuth?: ConnectAuth | null): boolean 
   );
 }
 
+function resolveConnectSecret(
+  mode: "token" | "password",
+  connectAuth?: ConnectAuth | null,
+): string | undefined {
+  // Either client field may carry the secret; the mode alone selects the configured value.
+  return connectAuth?.[mode] ?? connectAuth?.[mode === "token" ? "password" : "token"];
+}
+
 function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
@@ -558,7 +566,7 @@ async function authorizeGatewayConnectCore(
   if (auth.mode === "token") {
     return await authorizeTokenAuth({
       authToken: auth.token,
-      connectToken: connectAuth?.token,
+      connectToken: resolveConnectSecret(auth.mode, connectAuth),
       limiter,
       ip: subject,
       rateLimitScope,
@@ -570,7 +578,7 @@ async function authorizeGatewayConnectCore(
   if (auth.mode === "password") {
     return await authorizePasswordAuth({
       authPassword: auth.password,
-      connectPassword: connectAuth?.password,
+      connectPassword: resolveConnectSecret(auth.mode, connectAuth),
       limiter,
       ip: subject,
       rateLimitScope,

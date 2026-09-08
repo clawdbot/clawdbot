@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { notifyProviderStreamOpened } from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
@@ -25,6 +26,7 @@ import {
 } from "../../../plugins/hook-runner-global.js";
 import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtures.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
+import { makeZeroUsageSnapshot } from "../../usage.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 
 const tempDirs = createTempDirTracker();
@@ -120,6 +122,46 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
+
+  it.each(["stop", "error"] as const)(
+    "notifies terminal %s once when an explicit result follows iterator exhaustion",
+    async (stopReason) => {
+      const onTerminal = vi.fn();
+      const onSucceeded = vi.fn();
+      const originalStream = createAssistantMessageEventStream();
+      originalStream.end({
+        role: "assistant",
+        content: [{ type: "text", text: "Done." }],
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.4",
+        stopReason,
+        usage: makeZeroUsageSnapshot(),
+        timestamp: 0,
+      });
+      const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(() => originalStream, {
+        runId: "run-explicit-result",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-explicit-result",
+        onTerminal,
+        onSucceeded,
+      });
+      const events = await collectModelCallEvents(async () => {
+        const response = await wrapped({} as never, { messages: [] });
+        await drain(response);
+        expect(onTerminal).not.toHaveBeenCalled();
+        expect(onSucceeded).not.toHaveBeenCalled();
+        await response.result();
+        await response.result();
+        await drain(response);
+      });
+      expect(onTerminal).toHaveBeenCalledOnce();
+      expect(onSucceeded).toHaveBeenCalledTimes(stopReason === "stop" ? 1 : 0);
+      expect(events.filter((event) => event.type === "model.call.completed")).toHaveLength(1);
+    },
+  );
 
   it.each(["stop", "error"])(
     "emits one %s provider timeline event for result and iterator completion",

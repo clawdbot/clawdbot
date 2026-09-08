@@ -774,6 +774,43 @@ describe("runCodexAppServerSideQuestion", () => {
     }
   });
 
+  it("returns billed usage from the side thread without changing its answer", async () => {
+    const client = createFakeClient({ completeTurn: false });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+    const run = runCodexAppServerSideQuestion(sideParams());
+    await vi.waitFor(() =>
+      expect(client.request.mock.calls.some(([method]) => method === "turn/start")).toBe(true),
+    );
+    client.emit({
+      method: "rawResponse/completed",
+      params: {
+        threadId: "side-thread",
+        turnId: "turn-1",
+        responseId: "side-response",
+        usage: {
+          inputTokens: 8,
+          cachedInputTokens: 2,
+          outputTokens: 4,
+          totalTokens: 12,
+          reasoningOutputTokens: 3,
+        },
+      },
+    });
+    client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+    await expect(run).resolves.toEqual({
+      text: "Side answer.",
+      usage: {
+        input: 6,
+        output: 4,
+        cacheRead: 2,
+        cacheWrite: 0,
+        total: 12,
+        reasoningTokens: 3,
+        contextUsage: { state: "available", promptTokens: 8, totalTokens: 12 },
+      },
+    });
+  });
+
   it("forks an ephemeral side thread and returns the completed assistant text", async () => {
     vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-02T00:30:00.000Z"));
     const client = createFakeClient();

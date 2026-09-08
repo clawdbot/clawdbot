@@ -141,7 +141,7 @@ vi.mock("../../sessions/background-session-result.js", () => ({
 }));
 
 vi.mock("../../gateway/server-methods/chat-assistant-content.js", () => ({
-  buildAssistantDisplayContentFromReplyPayloads: vi.fn(),
+  buildAssistantReplyContent: vi.fn(),
   hasAssistantDisplayMediaContent: vi.fn(),
   hasManagedOutgoingAssistantContent: vi.fn(),
 }));

@@ -1,17 +1,18 @@
 // ClickClack tests cover websocket constructor options.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { webSocketCtorCalls } = vi.hoisted(() => ({
-  webSocketCtorCalls: [] as Array<{ url: string; options: unknown }>,
-}));
+const { webSocketCtorCalls, MockWebSocket } = vi.hoisted(() => {
+  const calls: Array<{ url: string; options: unknown }> = [];
+  function StubWebSocket(url: string | URL, options?: unknown) {
+    calls.push({ url: String(url), options });
+  }
+  return { webSocketCtorCalls: calls, MockWebSocket: StubWebSocket };
+});
 
-vi.mock("ws", () => ({
-  WebSocket: function MockWebSocket(url: string | URL, options?: unknown) {
-    webSocketCtorCalls.push({ url: String(url), options });
-  },
-}));
+vi.mock("./ws-runtime.js", () => ({ WebSocket: MockWebSocket }));
 
 import { createClickClackClient } from "./http-client.js";
+import { WebSocket } from "./ws-runtime.js";
 
 describe("createClickClackClient websocket options", () => {
   beforeEach(() => {
@@ -19,6 +20,7 @@ describe("createClickClackClient websocket options", () => {
   });
 
   it("passes a 30-second opening handshake deadline to ws", () => {
+    expect(WebSocket).toBe(MockWebSocket);
     const client = createClickClackClient({
       baseUrl: "https://clickclack.example",
       token: "fake",

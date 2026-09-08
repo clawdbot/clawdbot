@@ -1,4 +1,5 @@
 // Whatsapp tests cover media plugin behavior.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -308,16 +309,17 @@ describe("local media root guard", () => {
     { name: "rejects local media when Windows identity remains unknown", persistent: true },
   ])("$name", async ({ persistent }) => {
     const file = await fs.realpath(tinyPngFile);
-    const actualLstat = fs.lstat;
+    const actualLstatSync = fsSync.lstatSync;
     // Keep the fixture's real root before the Windows platform mock changes temp-path resolution.
     const realTmpRoot = resolvePreferredOpenClawTmpDir();
     let unknownInspections = 0;
 
     await withMockedWindowsPlatform(async () => {
-      const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-        const stat = await actualLstat(...args);
+      const lstatSpy = vi.spyOn(fsSync, "lstatSync").mockImplementation((filePath, options) => {
+        const stat = actualLstatSync(filePath, options);
         if (
-          args[0] === file &&
+          filePath === file &&
+          stat &&
           typeof stat.dev === "bigint" &&
           (persistent || unknownInspections === 0)
         ) {

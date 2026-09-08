@@ -152,7 +152,9 @@ fun ShellScreen(
       features = features,
       modifier = modifier.background(ClawTheme.colors.canvas),
       bookPanesEnabled = !commandOpen && pendingTrust == null,
-    ) { bookPanes ->
+      tabletopEnabled = nav.activeTab == Tab.Chat && !commandOpen && pendingTrust == null,
+    ) { foldBounds ->
+      val bookPanes = foldBounds.book
       val permanentSidebar = bookPanes != null
       // Mode changes discard modal operations and their drag state, not the two content slots.
       val sidebarDrawerState = key(permanentSidebar) { rememberDrawerState(initialValue = DrawerValue.Closed) }
@@ -248,10 +250,12 @@ fun ShellScreen(
         SidebarNavigationShell(
           drawerState = sidebarDrawerState,
           bookPanes = bookPanes,
+          sidebarBand = foldBounds.sidebarBand,
           gesturesEnabled = !sidebarRowDragging,
           drawerContent = {
             OpenClawSidebar(
               viewModel = viewModel,
+              rowHostBand = foldBounds.sidebarBand,
               agents = gatewayAgents,
               selectedAgentId = chatSessionOwnerAgentId ?: gatewayDefaultAgentId,
               sessions = chatSessions,
@@ -311,6 +315,8 @@ fun ShellScreen(
             Tab.Chat -> {
               UnifiedChatShellScreen(
                 viewModel = viewModel,
+                tabletopPanes = foldBounds.tabletop,
+                features = features,
                 showSidebarButton = !permanentSidebar,
                 onOpenSidebar = openSidebar,
                 onOpenDashboard = nav::openSessionDashboard,

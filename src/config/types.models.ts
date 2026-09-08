@@ -1,4 +1,10 @@
 // Defines model selection and provider configuration types.
+import {
+  MODEL_DATA_APIS,
+  MODEL_DATA_THINKING_FORMATS,
+  type ModelDataImageInputConfig,
+  type ModelDataMediaInputConfig,
+} from "../../packages/llm-core/src/model-data.js";
 import type {
   AnthropicMessagesCompat,
   OpenAICompletionsCompat,
@@ -12,18 +18,7 @@ import type { ConfiguredModelProviderRequest } from "./types.provider-request.js
 import type { SecretInput } from "./types.secrets.js";
 
 /** Provider API adapter ids accepted by model/provider config and schema generation. */
-export const MODEL_APIS = [
-  "openai-completions",
-  "openai-responses",
-  "openai-chatgpt-responses",
-  "anthropic-messages",
-  "google-generative-ai",
-  "google-vertex",
-  "github-copilot",
-  "bedrock-converse-stream",
-  "ollama",
-  "azure-openai-responses",
-] as const;
+export const MODEL_APIS = [...MODEL_DATA_APIS] as const;
 
 export type ModelApi = (typeof MODEL_APIS)[number];
 
@@ -70,13 +65,7 @@ export type SupportedThinkingFormat =
 
 /** Thinking/reasoning payload dialects emitted by OpenAI-compatible providers. */
 export const MODEL_THINKING_FORMATS = [
-  "openai",
-  "openrouter",
-  "deepseek",
-  "together",
-  "qwen",
-  "qwen-chat-template",
-  "zai",
+  ...MODEL_DATA_THINKING_FORMATS,
 ] as const satisfies readonly SupportedThinkingFormat[];
 
 /** Runtime guard for config-provided thinking format strings. */
@@ -114,23 +103,9 @@ export type ModelCompatConfig = SupportedOpenAICompatFields &
     requiresOpenAiAnthropicToolPayload?: boolean;
   };
 
-export type ModelImageInputConfig = {
-  /** Provider-documented maximum encoded image payload size. */
-  maxBytes?: number;
-  /** Provider-documented maximum accepted input pixels. */
-  maxPixels?: number;
-  /** Provider-documented maximum accepted width/height in pixels. */
-  maxSidePx?: number;
-  /** Preferred resize side for the default balanced compression policy. */
-  preferredSidePx?: number;
-  /** Token accounting style, used as documentation for provider-owned policy. */
-  tokenMode?: "tile" | "detail" | "provider";
-};
+export type ModelImageInputConfig = ModelDataImageInputConfig;
 
-export type ModelMediaInputConfig = {
-  /** Image input limits and accounting hints for this model. */
-  image?: ModelImageInputConfig;
-};
+export type ModelMediaInputConfig = ModelDataMediaInputConfig;
 
 /** Authentication mode expected by a configured model provider. */
 export type ModelProviderAuthMode = "api-key" | "aws-sdk" | "oauth" | "token";

@@ -33,7 +33,8 @@ describe("secrets tool guidance", () => {
     expect(description).toContain("No secret templates; never override/print that variable");
     expect(description).toContain("Native shell/sandbox/node: no protected injection");
     expect(description).toContain("late saves need next turn");
-    expect(description).toContain("no_answer: report blocker or use best judgment");
+    expect(description).toContain("Operator-set env entries are readable and managed separately");
+    expect(description).toContain("no_answer means no credential was supplied");
   });
 });
 

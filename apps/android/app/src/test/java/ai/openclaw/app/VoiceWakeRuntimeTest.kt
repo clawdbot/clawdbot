@@ -58,7 +58,7 @@ class VoiceWakeRuntimeTest {
 
       runtime.setVoiceWakeWords(listOf("local draft"))
       withTimeout(5_000) {
-        while (runtime.voiceWakeWordsSaving.value) delay(10)
+        while (runtime.voiceWakeWordsSaving.value || runtime.voiceWakeWordsNoticeText.value == null) delay(10)
       }
 
       assertEquals(listOf("gateway claw"), runtime.voiceWakeWords.value)
@@ -74,7 +74,7 @@ class VoiceWakeRuntimeTest {
 
       runtime.setVoiceWakeWords(listOf("local draft"))
       withTimeout(5_000) {
-        while (runtime.voiceWakeWordsSaving.value) delay(10)
+        while (runtime.voiceWakeWordsSaving.value || runtime.voiceWakeWordsNoticeText.value == null) delay(10)
       }
 
       assertEquals(listOf("openclaw", "claude", "computer"), runtime.voiceWakeWords.value)

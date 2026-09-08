@@ -4,6 +4,7 @@ import {
   type SqliteSchemaIssue,
 } from "../infra/sqlite-schema-contract.js";
 import {
+  ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS,
   CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS,
   CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS,
   CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
@@ -28,11 +29,14 @@ const CLAW_FIRST_USE_ADDITIVE_STATE_COLUMNS = CLAW_FIRST_USE_ADDITIVE_STATE_COLU
 const CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_SET = new Set<string>(
   CLAW_FIRST_USE_ADDITIVE_STATE_COLUMNS,
 );
-const CLAW_STARTUP_ADDITIVE_STATE_COLUMN_SET = new Set<string>(
-  CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
+const CLAW_STARTUP_ADDITIVE_STATE_COLUMN_SET = new Set<string>([
+  ...CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
     ({ columnName, tableName }) => `${tableName}.${columnName}`,
   ),
-);
+  ...Object.values(ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS)
+    .flat()
+    .map(([tableName, definition]) => `${tableName}.${definition.split(" ", 1)[0]}`),
+]);
 const CLAW_STARTUP_ADDITIVE_STATE_TABLES = [
   "worker_session_tool_operations",
   "worker_turn_tool_authorities",

@@ -303,9 +303,25 @@ export function splitExtensionTestJobTargets(config: string, targets: string[]) 
 
 /** Whether a Vitest invocation can safely be split into independent one-shot processes. */
 export function shouldSplitExtensionTestProcesses(config: string, vitestArgs: string[] = []) {
-  // Passthrough options can carry suite-wide semantics such as bail thresholds,
-  // filtering, watch state, or shared artifacts. Only plain one-shot runs are splittable.
-  return EXTENSION_TEST_PROCESS_FILE_LIMITS.has(config) && vitestArgs.length === 0;
+  if (!EXTENSION_TEST_PROCESS_FILE_LIMITS.has(config)) {
+    return false;
+  }
+  // Per-test retries and exact file exclusions preserve independent process scopes.
+  // Other options may own suite-wide bail, watch, sharding, or report state.
+  for (let index = 0; index < vitestArgs.length; index++) {
+    const option = /^(--retry|--exclude)(?:=(.+))?$/u.exec(vitestArgs[index]!);
+    if (!option) {
+      return false;
+    }
+    const value = option[2] ?? vitestArgs[++index];
+    if (!value || value.startsWith("-")) {
+      return false;
+    }
+    if (option[1] === "--retry" ? !/^\d+$/u.test(value) : /[*!?[\]{}()]/u.test(value)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /** Resolve process targets for an extension config, expanding roots only when it is bounded. */

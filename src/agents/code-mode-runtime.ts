@@ -9,11 +9,12 @@ import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import type { CodeModeOutputSource } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
-import type {
-  CodeModeConfig as CodeModeWorkerConfig,
-  CodeModeFailurePhase,
-  CodeModeLanguage,
-  CodeModeWorkerThreadResult,
+import {
+  MAX_CODE_MODE_PENDING_TOOL_CALLS,
+  type CodeModeConfig as CodeModeWorkerConfig,
+  type CodeModeFailurePhase,
+  type CodeModeLanguage,
+  type CodeModeWorkerThreadResult,
 } from "./code-mode-worker-types.js";
 import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
@@ -26,7 +27,7 @@ const DEFAULT_MAX_PENDING_TOOL_CALLS = 16;
 const DEFAULT_SNAPSHOT_TTL_SECONDS = 900;
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 50;
-export const CODE_MODE_WORKER_WATCHDOG_GRACE_MS = 2_000;
+export { CODE_MODE_WORKER_WATCHDOG_GRACE_MS } from "./code-mode-worker-types.js";
 export const DEFAULT_HEADLESS_WALL_CLOCK_MS = 30_000;
 // Cron script payloads persist caps of 900 seconds and 200 tool calls.
 // The shared executor must not silently lower those accepted job limits.
@@ -183,7 +184,7 @@ export function resolveCodeModeConfig(
     maxPendingToolCalls: clampNumber(
       readPositiveInteger(raw.maxPendingToolCalls, DEFAULT_MAX_PENDING_TOOL_CALLS),
       1,
-      128,
+      MAX_CODE_MODE_PENDING_TOOL_CALLS,
     ),
     snapshotTtlSeconds: clampNumber(
       readPositiveInteger(raw.snapshotTtlSeconds, DEFAULT_SNAPSHOT_TTL_SECONDS),
@@ -273,6 +274,7 @@ export function readCode(args: unknown): {
   code: string;
   language?: CodeModeLanguage;
   restartSafe: boolean;
+  typecheck: boolean;
 } {
   const params = asToolParamsRecord(args);
   // Full-schema tool calls can materialize an unused alias as blank.
@@ -294,7 +296,18 @@ export function readCode(args: unknown): {
   if (restartSafe !== undefined && typeof restartSafe !== "boolean") {
     throw new ToolInputError("restartSafe must be a boolean.");
   }
-  return { code, language, restartSafe: restartSafe === true };
+  if (params.typecheck !== undefined && typeof params.typecheck !== "boolean") {
+    throw new ToolInputError("typecheck must be a boolean.");
+  }
+  if (params.typecheck === true && language !== "typescript") {
+    throw new ToolInputError("typecheck requires language: typescript.");
+  }
+  return {
+    code,
+    language,
+    restartSafe: restartSafe === true,
+    typecheck: params.typecheck === true,
+  };
 }
 
 export function readRunId(args: unknown): string {

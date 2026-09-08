@@ -2,11 +2,14 @@
 import { ApplicationCommandType, ChannelType, InteractionContextType } from "discord-api-types/v10";
 import type { ChatCommandDefinition } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDiscordLivePolicyReader } from "./live-policy.js";
+import type { DiscordLivePolicy, DiscordLivePolicyReader } from "./live-policy.js";
 
 const { loadModelCatalogMock, logVerboseMock } = vi.hoisted(() => ({
   loadModelCatalogMock: vi.fn(),
@@ -50,6 +53,7 @@ let createNoopThreadBindingManager: typeof import("./thread-bindings.js").create
 function createNativeCommand(
   name: string,
   opts?: {
+    readPolicy?: DiscordLivePolicyReader;
     cfg?: OpenClawConfig;
     discordConfig?: NonNullable<OpenClawConfig["channels"]>["discord"];
   },
@@ -74,6 +78,7 @@ function createNativeCommand(
           },
         };
   return createDiscordNativeCommand({
+    readPolicy: opts?.readPolicy,
     command,
     cfg,
     discordConfig,
@@ -365,6 +370,119 @@ describe("createDiscordNativeCommand option wiring", () => {
       { name: "set", value: "set" },
       { name: "unset", value: "unset" },
     ]);
+  });
+
+  it.each(["resolve", "reject"] as const)(
+    "returns empty autocomplete before its deadline when policy later $0s",
+    async (outcome) => {
+      vi.useFakeTimers();
+      try {
+        let resolvePolicy!: (value: DiscordLivePolicy) => void;
+        let rejectPolicy!: (error: Error) => void;
+        const pendingPolicy = new Promise<DiscordLivePolicy>((resolve, reject) => {
+          resolvePolicy = resolve;
+          rejectPolicy = reject;
+        });
+        const command = createNativeCommand("think", { readPolicy: () => pendingPolicy });
+        const autocomplete = requireAutocomplete(
+          requireOption(command, "level"),
+          "think level option did not wire autocomplete",
+        );
+        const respond = vi.fn(async () => undefined);
+        const run = autocomplete({
+          user: { id: "123456789", username: "AgentUser" },
+          channel: { type: ChannelType.DM, id: "dm-channel", name: "dm-channel" },
+          rawData: { member: { roles: [] } },
+          options: { getFocused: () => ({ value: "" }) },
+          respond,
+          client: {},
+        });
+
+        await vi.advanceTimersByTimeAsync(1_001);
+
+        expect(respond).toHaveBeenCalledExactlyOnceWith([]);
+        await run;
+        if (outcome === "resolve") {
+          resolvePolicy({
+            isCurrent: () => true,
+            accountId: "default",
+            cfg: {},
+            discordConfig: { dmPolicy: "open", allowFrom: ["*"] },
+            guildEntries: undefined,
+            allowFrom: ["*"],
+            dmPolicy: "open",
+            groupPolicy: "allowlist",
+            dmEnabled: true,
+            groupDmEnabled: false,
+            groupDmChannels: [],
+            allowNameMatching: false,
+          });
+        } else {
+          rejectPolicy(new Error("late autocomplete policy failure"));
+        }
+        await vi.advanceTimersByTimeAsync(0);
+        expect(respond).toHaveBeenCalledExactlyOnceWith([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("returns empty autocomplete when access is revoked during the pairing-store read", async () => {
+    const dmAuth = await import("./dm-command-auth.js");
+    const resolveDmAccess = dmAuth.resolveDiscordDmCommandAccess;
+    const stored = createDeferred<string[]>();
+    const readStarted = createDeferred<void>();
+    const authSpy = vi.spyOn(dmAuth, "resolveDiscordDmCommandAccess").mockImplementation((params) =>
+      resolveDmAccess({
+        ...params,
+        readStoreAllowFrom: async () => {
+          readStarted.resolve();
+          return await stored.promise;
+        },
+      }),
+    );
+    const cfg: OpenClawConfig = {
+      channels: { discord: { dmPolicy: "pairing", allowFrom: [] } },
+    };
+    setRuntimeConfigSnapshot(cfg, cfg);
+    const command = createNativeCommand("think", {
+      cfg,
+      readPolicy: createDiscordLivePolicyReader({
+        cfg,
+        accountId: "default",
+        token: "synthetic-token",
+        resolvedAllowlist: { guildEntries: undefined, allowFrom: [] },
+      }),
+    });
+    const autocomplete = requireAutocomplete(
+      requireOption(command, "level"),
+      "think level option did not wire autocomplete",
+    );
+    try {
+      const run = runAutocomplete(autocomplete, {
+        userId: "123456789",
+        channelType: ChannelType.DM,
+        channelId: "dm-channel",
+        channelName: "dm-channel",
+        focusedValue: "",
+      });
+      await readStarted.promise;
+      loadModelCatalogMock.mockClear();
+      const revoked: OpenClawConfig = {
+        channels: { discord: { dmPolicy: "disabled", allowFrom: [] } },
+      };
+      setRuntimeConfigSnapshot(revoked, revoked);
+      stored.resolve(["123456789"]);
+      const respond = await run;
+
+      expect(respond).toHaveBeenCalledExactlyOnceWith([]);
+      expect(loadModelCatalogMock).not.toHaveBeenCalled();
+    } finally {
+      stored.resolve([]);
+      authSpy.mockRestore();
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it("returns no autocomplete choices for unauthorized users", async () => {

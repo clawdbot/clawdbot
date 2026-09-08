@@ -35,7 +35,7 @@ openclaw devices list --json
 
 For a pending request on an already-paired device, the output shows requested access next to the device's current approved access, so scope/role upgrades are visible instead of looking like a lost pairing.
 
-Paired device display names use this precedence: operator label (`operatorLabel` from `devices rename`), then client `displayName`, then `clientId`, then `deviceId`.
+Paired device display names use this precedence: operator label (`operatorLabel` from `devices rename`), then client `displayName`, then `clientId`, then `deviceId`. Node approval notices printed by `devices` commands use the operator label when one is set.
 
 ### `openclaw devices approve [requestId] [--latest]`
 
@@ -66,6 +66,15 @@ Reject a pending device pairing request.
 
 ```bash
 openclaw devices reject <requestId>
+```
+
+### `openclaw devices join-code`
+
+Mint a single-use node onboarding URL.
+
+```bash
+openclaw devices join-code
+openclaw devices join-code --json
 ```
 
 ### `openclaw devices remove <deviceId>`

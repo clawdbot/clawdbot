@@ -73,7 +73,7 @@ function managedDeps(version = CODEX_APP_SERVER_VERSION) {
   };
 }
 
-function createCheck(deps: ReturnType<typeof managedDeps>) {
+function createCheck(deps: Parameters<typeof registerCodexManagedAppServerDoctorChecks>[1]) {
   let check: HealthCheck | undefined;
   registerCodexManagedAppServerDoctorChecks(
     {
@@ -165,20 +165,43 @@ describe("managed Codex doctor check", () => {
     expect(deps.runVersionCommand).not.toHaveBeenCalled();
   });
 
-  it("reports a bounded version command failure", async () => {
-    const deps = managedDeps();
-    deps.runVersionCommand.mockRejectedValueOnce(new Error("timed out after 5000 ms"));
-    const check = createCheck(deps);
+  it.skipIf(process.platform === "win32")(
+    "bounds a native version probe that ignores SIGTERM",
+    async () => {
+      const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-version-"));
+      try {
+        const command = path.join(directory, "codex");
+        await fs.writeFile(
+          command,
+          `#!${process.execPath}
+process.on("SIGTERM", () => {});
+setTimeout(() => process.exit(0), 10_000);
+`,
+          { mode: 0o755 },
+        );
+        const check = createCheck({
+          ...managedDeps(),
+          resolveNativeCommand: () => command,
+          runVersionCommand: undefined,
+        });
+        const startedAt = performance.now();
+        const findings = await check.detect(context(config()));
 
-    await expect(check.detect(context(config()))).resolves.toEqual([
-      expect.objectContaining({
-        checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
-        path: "/candidate/plugin/codex-native",
-        message: "Managed Codex app-server version check failed: timed out after 5000 ms",
-        requirement: `Codex ${CODEX_APP_SERVER_VERSION} must report its version within 5000 ms`,
-      }),
-    ]);
-  });
+        expect(performance.now() - startedAt).toBeLessThan(7_000);
+        expect(findings).toEqual([
+          expect.objectContaining({
+            checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
+            path: command,
+            message: expect.stringContaining("Managed Codex app-server version check failed:"),
+            requirement: `Codex ${CODEX_APP_SERVER_VERSION} must report its version within 5000 ms`,
+          }),
+        ]);
+      } finally {
+        await fs.rm(directory, { recursive: true, force: true });
+      }
+    },
+    15_000,
+  );
 
   it.each([
     ["custom command", { command: "/operator/codex" }],

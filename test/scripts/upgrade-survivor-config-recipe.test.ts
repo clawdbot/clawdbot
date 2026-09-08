@@ -421,7 +421,7 @@ process.exit(0);
           cwd = root;
           args = [
             "-c",
-            `set -euo pipefail\nsource "$1"\n${launcher}\nCONFIG_COVERAGE_JSON="$2"\nbaseline_version=2026.4.21\napply_baseline_config_recipe`,
+            `set -euo pipefail\nsource "$1"\n${launcher}\nSCENARIO="$OPENCLAW_UPGRADE_SURVIVOR_SCENARIO"\nCONFIG_COVERAGE_JSON="$2"\nbaseline_version=2026.4.21\napply_baseline_config_recipe`,
             "survivor-recipe",
             join(process.cwd(), "scripts/lib/openclaw-e2e-instance.sh"),
             summaryPath,

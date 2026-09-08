@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import type { WorkerProvider } from "../../plugins/types.js";
+import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
 import {
   StaleWorkerBuildError,
   verifyWorkerAdmissionHandshake,
@@ -227,6 +228,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
   const observeDesktop = async (request: {
     environmentId: string;
     control: boolean;
+    requester?: DesktopObserveRequester;
   }): Promise<WorkerDesktopObserveResult> => {
     const stopping = options.isStopping();
     if (options.getConfig().cloudWorkers?.desktop !== true) {
@@ -265,6 +267,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
         nodeStartup = nodeDesktop.observe({
           record,
           control: request.control,
+          requester: request.requester,
         });
         return;
       }
@@ -283,6 +286,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       sourceKey: request.environmentId,
       ownerEpoch,
       control: request.control,
+      requester: request.requester,
       attachment: acquired.attachment,
       nowMs: now(),
     });

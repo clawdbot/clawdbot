@@ -12,6 +12,7 @@ import { BROWSER_PANEL_TOGGLE_EVENT } from "../../../components/panel-toggle-con
 import { t } from "../../../i18n/index.ts";
 import { loadBrowserTabThumbnail } from "../../../lib/chat/browser-tab-preview.ts";
 import type { ToolPreview } from "../../../lib/chat/tool-cards.ts";
+import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../../lit/subscriptions-controller.ts";
@@ -209,9 +210,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
       return;
     }
     if (event.detail.item.value === "copy-url") {
-      navigator.clipboard.writeText(url).catch(() => {
-        // Clipboard access can be denied; the URL stays visible on the card.
-      });
+      void copyToClipboard(url, () => this.isConnected && this.preview?.url === url);
     } else if (event.detail.item.value === "open-new-tab") {
       openExternalUrlSafe(url);
     }

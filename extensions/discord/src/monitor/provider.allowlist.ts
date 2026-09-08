@@ -143,14 +143,19 @@ function collectChannelResolutionInputs(guildEntries: GuildEntries): ChannelReso
     if (guildKey === "*") {
       continue;
     }
+    const numericGuild = /^\d+$/.test(guildKey);
     const channels = guildCfg?.channels ?? {};
     const channelKeys = Object.keys(channels).filter((key) => key !== "*");
     if (channelKeys.length === 0) {
-      const input = /^\d+$/.test(guildKey) ? `guild:${guildKey}` : guildKey;
-      entries.push({ input, guildKey });
+      if (!numericGuild) {
+        entries.push({ input: guildKey, guildKey });
+      }
       continue;
     }
     for (const channelKey of channelKeys) {
+      if (numericGuild && /^\d+$/.test(channelKey)) {
+        continue;
+      }
       entries.push({
         input: `${guildKey}/${channelKey}`,
         guildKey,

@@ -1,4 +1,4 @@
-import { parentPort, workerData } from "node:worker_threads";
+import { once } from "node:events";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
@@ -15,8 +15,14 @@ function nativeErrorDetails(error: Error) {
   return { message: error.message, code: nativeError.code, errcode: nativeError.errcode };
 }
 
-// SAFETY: The private Worker is constructed only by assertSqliteIntegrityInWorker.
-const input = workerData as SqliteIntegrityWorkerInput;
+if (!process.send || !process.disconnect) {
+  throw new Error("SQLite integrity child requires parent IPC.");
+}
+const sendResult = process.send.bind(process);
+const disconnect = process.disconnect.bind(process);
+
+// SAFETY: Only assertSqliteIntegrityInWorker sends this private IPC input.
+const [input] = (await once(process, "message")) as [SqliteIntegrityWorkerInput];
 let database: import("node:sqlite").DatabaseSync | undefined;
 let failure: Error | undefined;
 try {
@@ -45,5 +51,4 @@ if (failure) {
     },
   };
 }
-// Node Worker ports take a transfer list, not a browser target origin.
-parentPort?.postMessage(result, []);
+sendResult(result, disconnect);

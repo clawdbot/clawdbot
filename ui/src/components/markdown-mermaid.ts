@@ -255,8 +255,9 @@ class OpenClawMermaid extends OpenClawLitElement {
 
   private async copySource() {
     const attempt = ++this.copyAttempt;
-    const copied = await copyToClipboard(this.source);
-    if (this.isConnected && attempt === this.copyAttempt) {
+    const isCurrent = () => this.isConnected && attempt === this.copyAttempt;
+    const copied = await copyToClipboard(this.source, isCurrent);
+    if (isCurrent()) {
       this.copyResult = copied;
     }
   }

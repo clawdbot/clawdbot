@@ -406,6 +406,8 @@ function resolveTelegramApiContext(opts: {
   accountId?: string;
   api?: TelegramApiOverride;
   cfg: OpenClawConfig;
+  signal?: AbortSignal;
+  assertPlatformSendAuthorized?: () => void;
 }): TelegramApiContext {
   const cfg = requireRuntimeConfig(opts.cfg, "Telegram API context");
   const account = resolveTelegramAccount({
@@ -423,6 +425,15 @@ function resolveTelegramApiContext(opts: {
     // and retries) so eviction cannot close the transport mid-operation.
     clientOptionsLease = client.lease();
     const bot = new Bot(token, client.clientOptions ? { client: client.clientOptions } : undefined);
+    if (opts.signal || opts.assertPlatformSendAuthorized) {
+      // grammY wraps later transformers around earlier ones. Check authority
+      // after the account queue drains, immediately before its HTTP client runs.
+      bot.api.config.use((prev, method, payload, signal) => {
+        opts.signal?.throwIfAborted();
+        opts.assertPlatformSendAuthorized?.();
+        return prev(method, payload, signal);
+      });
+    }
     bot.api.config.use(getOrCreateAccountThrottler(token).transformer);
     api = bot.api;
   }

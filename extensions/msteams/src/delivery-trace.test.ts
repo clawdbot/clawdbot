@@ -215,11 +215,9 @@ const MSTEAMS_TRACE_CASES: readonly MSTeamsTraceCase[] = [
     streamWriteFault: { atWrite: 2, kind: "cancelled" },
   },
   {
-    // Mid-stream non-cancel write failure latches streamFailed: the streamed
-    // prefix stays visible AND the full reply re-delivers as blocks. A later
-    // segment rewrites the stale stream buffer, then finalize attempts the
-    // closing metadata write after fallback delivery. The duplication is the
-    // contract (truncation is the worse outcome).
+    // This fixture has no provider acknowledgement, so the full first reply
+    // falls back before later blocks. A later partial cannot reopen the failed
+    // native segment or trigger another write to its retired stream.
     golden: "stream-failure-redeliver-full",
     scenario: "streaming-happy",
     conversationType: "personal",

@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig, TransformConfigFileParams } from "../../config/config.js";
 import { stampConfigWriteMetadata } from "../../config/io.meta.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
@@ -18,7 +18,21 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: (...args: unknown[]) => mocks.readConfigFileSnapshot(...args),
-  replaceConfigFile: (...args: unknown[]) => mocks.replaceConfigFile(...args),
+  transformConfigFile: async ({ transform }: TransformConfigFileParams<unknown>) => {
+    const loaded = await mocks.readConfigFileSnapshot();
+    const writeSnapshot = {
+      path: "/tmp/openclaw.json",
+      runtimeConfig: loaded.config,
+      ...loaded,
+    };
+    const { nextConfig, result } = await transform(
+      writeSnapshot.sourceConfig ?? writeSnapshot.config,
+      { snapshot: writeSnapshot, previousHash: writeSnapshot.hash ?? null, attempt: 0 },
+      {},
+    );
+    await mocks.replaceConfigFile({ sourceConfig: nextConfig, baseHash: writeSnapshot.hash });
+    return { nextConfig, result };
+  },
 }));
 
 vi.mock("./load-config.js", () => ({
@@ -161,7 +175,7 @@ describe("modelsAliasesRemoveCommand", () => {
 
     expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
     const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    const written = replaceParams?.nextConfig as OpenClawConfig;
+    const written = replaceParams?.sourceConfig as OpenClawConfig;
     expect(written.agents?.defaults?.models?.["openai/gpt-5.4-mini"]?.alias).toBeUndefined();
   });
 
@@ -175,7 +189,7 @@ describe("modelsAliasesRemoveCommand", () => {
     await modelsAliasesRemoveCommand("MY-FAV", makeRuntime());
 
     const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    const written = replaceParams?.nextConfig as OpenClawConfig;
+    const written = replaceParams?.sourceConfig as OpenClawConfig;
     expect(written.agents?.defaults?.models?.["openai/gpt-5.4-mini"]?.alias).toBeUndefined();
   });
 
@@ -198,7 +212,7 @@ describe("modelsAliasesRemoveCommand", () => {
 
     expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
     const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    const written = replaceParams?.nextConfig as OpenClawConfig;
+    const written = replaceParams?.sourceConfig as OpenClawConfig;
     expect(written.agents?.defaults?.models?.["openai/gpt-5.4-mini"]?.alias).toBeUndefined();
     expect(written.agents?.defaults?.models?.["openai/gpt-5.6-sol"]?.alias).toBeUndefined();
     expect(written.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]?.alias).toBe("steady");
@@ -318,7 +332,7 @@ describe("modelsAliasesRemoveCommand", () => {
 
     expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
     const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    const written = replaceParams?.nextConfig as OpenClawConfig;
+    const written = replaceParams?.sourceConfig as OpenClawConfig;
     expect(written.agents?.defaults?.models?.["openai/gpt-5.4-nano"]?.alias).toBeUndefined();
   });
 });
@@ -339,7 +353,7 @@ describe("modelsAliasesAddCommand", () => {
     await modelsAliasesAddCommand("zippy", "clawrouter/deepseek/deepseek-v4-flash", makeRuntime());
 
     const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    const written = replaceParams?.nextConfig as OpenClawConfig;
+    const written = replaceParams?.sourceConfig as OpenClawConfig;
     const persisted = stampConfigWriteMetadata(written, "2026-07-18T00:00:00.000Z", "test", cfg);
     const policy = createModelVisibilityPolicy({
       cfg: persisted,
@@ -376,7 +390,7 @@ describe("modelsAliasesAddCommand", () => {
     await modelsAliasesAddCommand("fast", "openai/gpt-5.4-mini", makeRuntime());
 
     const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    const written = replaceParams?.nextConfig as OpenClawConfig;
+    const written = replaceParams?.sourceConfig as OpenClawConfig;
     expect(written.agents?.defaults?.models?.["openai/gpt-5.4-mini"]?.alias).toBe("fast");
   });
 
@@ -406,7 +420,7 @@ describe("modelsAliasesAddCommand", () => {
 
     const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
     expect(replaceParams?.baseHash).toBe("current-hash");
-    expect(replaceParams?.nextConfig.agents?.defaults?.models).toEqual({
+    expect(replaceParams?.sourceConfig.agents?.defaults?.models).toEqual({
       "openai/gpt-5.6-sol": { params: { temperature: 0.2 } },
       "anthropic/claude-opus-5": { alias: "new-alias" },
     });
@@ -429,7 +443,7 @@ describe("modelsAliasesAddCommand", () => {
     await modelsAliasesAddCommand("fast", "sonnet", makeRuntime());
 
     const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    expect(replaceParams?.nextConfig.agents?.defaults?.models).toEqual({
+    expect(replaceParams?.sourceConfig.agents?.defaults?.models).toEqual({
       "anthropic/claude-sonnet-4-6": { alias: "fast" },
     });
   });

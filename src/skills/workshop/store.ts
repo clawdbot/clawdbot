@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { FsSafeError, root, type ReadResult, type Root } from "../../infra/fs-safe.js";
+import { FsSafeError, root, type Root } from "../../infra/fs-safe.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -174,7 +174,10 @@ export class SkillProposalDraftMissingError extends Error {
     readonly proposalId: string,
     options?: ErrorOptions,
   ) {
-    super(`Skill proposal draft is missing: ${proposalId}. Reject and re-propose it.`, options);
+    super(
+      `Skill proposal draft is missing: ${proposalId}. Run openclaw doctor --fix for recovery.`,
+      options,
+    );
   }
 }
 
@@ -387,6 +390,23 @@ export async function updateSkillProposalRecord(params: {
       if (!current || !parseSkillProposalRow(current)) {
         throw new Error(`Skill proposal not found: ${params.record.id}`);
       }
+      // Recovery only visits pending proposals. A dismissal must not strand
+      // a partial install, including when its rollback metadata is damaged.
+      if (
+        current.status === "pending" &&
+        (params.record.status === "rejected" || params.record.status === "quarantined") &&
+        executeSqliteQueryTakeFirstSync(
+          db,
+          kysely
+            .selectFrom("skill_workshop_proposal_rollbacks")
+            .select("proposal_id")
+            .where("proposal_id", "=", params.record.id),
+        )
+      ) {
+        throw new Error(
+          "Skill proposal has unfinished apply recovery. Run openclaw doctor --fix and restore the files it identifies before retrying.",
+        );
+      }
       if (params.invalidateRollback) {
         executeSqliteQuerySync(
           db,
@@ -467,12 +487,7 @@ async function reconcileInterruptedApply(
   }
   let draftContent: string;
   try {
-    const stateRoot = await root(resolveSkillWorkshopStateDir(options));
-    const draft = await stateRoot.read(
-      proposalBundleRelativePath(stored.record, PROPOSAL_DRAFT_FILE),
-      { hardlinks: "reject", maxBytes: MAX_PROPOSAL_BYTES, symlinks: "reject" },
-    );
-    draftContent = draft.buffer.toString("utf8");
+    draftContent = await readSkillProposalDraft(stored.record, options);
   } catch {
     return false;
   }
@@ -509,29 +524,39 @@ async function readProposalSupportFiles(
   return out;
 }
 
-export async function readSkillProposalBundle(
+export async function readSkillProposalDraft(
   record: SkillProposalRecord,
   options: SkillWorkshopStoreOptions,
-): Promise<SkillProposalReadResult> {
+): Promise<string> {
   const stateRoot = await root(resolveSkillWorkshopStateDir(options));
-  let draft: ReadResult;
   try {
-    draft = await stateRoot.read(proposalBundleRelativePath(record, PROPOSAL_DRAFT_FILE), {
+    const draft = await stateRoot.read(proposalBundleRelativePath(record, PROPOSAL_DRAFT_FILE), {
       hardlinks: "reject",
       maxBytes: MAX_PROPOSAL_BYTES,
       symlinks: "reject",
     });
+    return draft.buffer.toString("utf8");
   } catch (error) {
     if (error instanceof FsSafeError && error.code === "not-found") {
       throw new SkillProposalDraftMissingError(record.id, { cause: error });
     }
     throw error;
   }
-  const supportFiles = await readProposalSupportFiles(record, stateRoot);
+}
+
+export async function readSkillProposalBundle(
+  record: SkillProposalRecord,
+  options: SkillWorkshopStoreOptions,
+): Promise<SkillProposalReadResult> {
+  const content = await readSkillProposalDraft(record, options);
+  const supportFiles = await readProposalSupportFiles(
+    record,
+    await root(resolveSkillWorkshopStateDir(options)),
+  );
   return {
     record,
     revisionHash: hashSkillProposalRevision(record),
-    content: draft.buffer.toString("utf8"),
+    content,
     ...(supportFiles.length > 0 ? { supportFiles } : {}),
   };
 }
@@ -607,5 +632,6 @@ function manifestEntryFromRecord(record: SkillProposalRecord): SkillProposalMani
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     scanState: record.scan.state,
+    revisionHash: hashSkillProposalRevision(record),
   };
 }

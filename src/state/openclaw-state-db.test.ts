@@ -27,6 +27,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
@@ -43,10 +44,7 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "./openclaw-state-db-contract.js";
 import { ensureGitHubPublicationSchema } from "./openclaw-state-db-schema-additive.js";
-import {
-  findOpenClawStateDatabaseSchemaMigrationRequiredError,
-  OpenClawStateDatabaseSchemaMigrationRequiredError,
-} from "./openclaw-state-db-schema-migration-required.js";
+import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
@@ -188,7 +186,7 @@ function expectStateSchemaMigrationRequired(
     caught = error;
   }
   expect(caught).toBeInstanceOf(OpenClawStateDatabaseSchemaMigrationRequiredError);
-  expect(findOpenClawStateDatabaseSchemaMigrationRequiredError(caught)).toMatchObject(expected);
+  expect(caught).toMatchObject(expected);
 }
 
 function replaceManagedImageRecordsWithLegacyTable(
@@ -5303,7 +5301,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     } catch (error) {
       caught = error;
     }
-    expect(findOpenClawStateDatabaseSchemaMigrationRequiredError(caught)).toBeUndefined();
+    expect(caught).not.toBeInstanceOf(OpenClawStateDatabaseSchemaMigrationRequiredError);
     expect(caught).toBeInstanceOf(Error);
     expect((caught as Error).message).toContain(
       "noncanonical agent database registry schema that cannot be repaired automatically",
@@ -5892,8 +5890,11 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     let failRemoval = true;
     vi.spyOn(fs, "rmSync").mockImplementation(((pathname, options) => {
       if (
-        fs.realpathSync.native(String(pathname)) === fs.realpathSync.native(privateDirectory) &&
-        failRemoval
+        failRemoval &&
+        isPathInside(
+          fs.realpathSync.native(String(pathname)),
+          fs.realpathSync.native(privateDirectory),
+        )
       ) {
         failRemoval = false;
         const error = new Error("busy");

@@ -33,11 +33,11 @@ Manage Gateway plugins, hook packs, and compatible bundles.
 ```bash
 openclaw plugins list [--enabled] [--verbose] [--json]
 openclaw plugins search <query> [--limit <n>] [--json]
-openclaw plugins install <path-or-spec> [--link] [--force] [--pin] [--marketplace <source>]
+openclaw plugins install <path-or-spec> [--link] [--force] [--pin] [--accept-capabilities] [--acknowledge-install-policy-warning] [--marketplace <source>]
 openclaw plugins inspect <id> [--runtime] [--json]
 openclaw plugins inspect --all [--runtime] [--json]
 openclaw plugins info <id>                    # alias for inspect
-openclaw plugins enable <id>
+openclaw plugins enable <id> [--accept-capabilities]
 openclaw plugins disable <id>
 openclaw plugins uninstall <id> [--dry-run] [--keep-files] [--force]
 openclaw plugins update <id-or-npm-spec> | --all [--dry-run]
@@ -550,6 +550,11 @@ openclaw plugins inspect --all
 ```
 
 Inspect shows identity, load status, source, manifest capabilities, policy flags, diagnostics, install metadata, bundle capabilities, and any detected MCP or LSP server support without importing plugin runtime by default. JSON output includes the plugin manifest contracts, such as `contracts.agentToolResultMiddleware` and `contracts.trustedToolPolicies`, so operators can audit trusted-surface declarations before enabling or restarting a plugin. Add `--runtime` to load the plugin module and include registered hooks, tools, commands, services, gateway methods, and HTTP routes. Runtime inspection reports missing plugin dependencies directly; installs and repairs stay in `openclaw plugins install`, `openclaw plugins update`, and `openclaw doctor --fix`.
+
+Default human inspection uses `enabled`, `disabled`, or `error` status labels,
+matching `plugins list`. It describes the metadata snapshot; it does not claim
+that a plugin module was imported. With `--runtime`, successful runtime inspection
+uses `loaded`. JSON retains the underlying registry status and separate `imported` field.
 
 For multi-entry packages, inspecting any child shows the shared package install metadata. `inspect --all --json` includes that same record for each child. If package ownership is missing or ambiguous, inspection omits install metadata rather than attributing an unrelated install record.
 

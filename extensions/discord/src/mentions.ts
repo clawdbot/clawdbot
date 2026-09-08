@@ -119,16 +119,13 @@ function countBacktickRun(text: string, index: number): number {
   return cursor - index;
 }
 
-function findSameLineBacktickRun(
-  text: string,
-  startIndex: number,
-  runLength: number,
-): number | null {
-  const delimiter = "`".repeat(runLength);
-  const newlineIndex = text.indexOf("\n", startIndex);
+function findInlineBacktickRun(text: string, startIndex: number, runLength: number): number | null {
+  // Inline spans can cross soft line breaks; fence-sized runs use the block scanner below.
+  const newlineIndex = runLength >= 3 ? text.indexOf("\n", startIndex) : -1;
   const lineEnd = newlineIndex === -1 ? text.length : newlineIndex;
-  const closeIndex = text.indexOf(delimiter, startIndex);
-  return closeIndex !== -1 && closeIndex < lineEnd ? closeIndex + runLength : null;
+  // A longer backtick run is literal code, not a matching inline delimiter.
+  const close = new RegExp("(?<!`)`{" + runLength + "}(?!`)").exec(text.slice(startIndex, lineEnd));
+  return close ? startIndex + close.index + runLength : null;
 }
 
 function findFenceEnd(text: string, startIndex: number, runLength: number): number {
@@ -164,7 +161,7 @@ function findNextMarkdownCodeSegment(
   return {
     startIndex: segmentStart,
     endIndex:
-      findSameLineBacktickRun(text, segmentStart + runLength, runLength) ??
+      findInlineBacktickRun(text, segmentStart + runLength, runLength) ??
       (runLength >= 3 ? findFenceEnd(text, segmentStart, runLength) : text.length),
   };
 }

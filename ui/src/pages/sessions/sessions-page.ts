@@ -55,6 +55,7 @@ import {
   buildAgentMainSessionKey,
   canArchiveSessionRow,
   canDeleteSessionRows,
+  isPinnableUiSessionRow,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   scopedSessionArtifactKey,
@@ -1460,12 +1461,14 @@ class SessionsPage extends OpenClawLightDomElement {
       (cloudWorkerStopAction.method !== "sessions.reclaim" || row.hasActiveRun !== true) &&
       isGatewayMethodAdvertised(gateway, cloudWorkerStopAction.method) === true,
     );
+    const pinnable = isPinnableUiSessionRow(row);
     return html`
       <openclaw-session-menu
         .session=${{
           label: normalizeOptionalString(row.label) ?? row.key,
           sessionId: normalizeOptionalString(row.sessionId) ?? null,
           pinned: row.pinned === true,
+          pinnable,
           unread: row.unread === true,
           archived: row.archived === true,
           category: normalizeOptionalString(row.category) ?? null,
@@ -1481,7 +1484,7 @@ class SessionsPage extends OpenClawLightDomElement {
         .splitAllowed=${false}
         .actionDisabledReasons=${sessionMenuReasons({
           snapshot: gateway,
-          session: row,
+          session: { ...row, pinnable },
           cloudWorkerStopAction,
         })}
         .forkDisabled=${row.modelSelectionLocked === true}

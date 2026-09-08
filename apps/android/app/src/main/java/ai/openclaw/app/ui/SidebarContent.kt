@@ -63,6 +63,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -76,6 +77,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
@@ -84,7 +87,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.round
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -373,6 +378,28 @@ internal data class SidebarPalette(
   val hairline: Color,
 )
 
+internal class SidebarRowHost {
+  private data class Placement(
+    val band: IntRect?,
+    val viewport: IntRect,
+  )
+
+  private var placement: Placement? = null
+  var generation by mutableLongStateOf(0L)
+    private set
+
+  fun recordPlacement(
+    band: IntRect?,
+    viewport: IntRect,
+  ) {
+    val next = Placement(band, viewport)
+    if (next != placement) {
+      placement = next
+      generation++
+    }
+  }
+}
+
 internal fun sidebarPalette(colors: ClawColors): SidebarPalette =
   SidebarPalette(
     background = colors.canvas,
@@ -405,11 +432,13 @@ internal fun OpenClawSidebar(
   onSelectCatalogSession: (SessionCatalogEntry) -> Unit,
   onCreateCatalogSession: (String) -> Unit,
   onSelectDestination: (SidebarDestination) -> Unit,
+  rowHostBand: IntRect? = null,
 ) {
   val palette = sidebarPalette()
   val scope = rememberCoroutineScope()
   val lifecycle = LocalLifecycleOwner.current.lifecycle
   val scrollState = rememberScrollState()
+  val rowHost = remember { SidebarRowHost() }
   val agentPicker = agentPickerState(agents, selectedAgentId)
   val storedGroups by viewModel.sessionCustomGroups.collectAsState()
   val catalogState by viewModel.sessionCatalogState.collectAsState()
@@ -604,7 +633,10 @@ internal fun OpenClawSidebar(
           Modifier
             .weight(1f)
             .fillMaxWidth()
-            .verticalScroll(scrollState),
+            .onPlaced {
+              // Observe the viewport, never row reorder/drag offsets or the scrolling content.
+              rowHost.recordPlacement(rowHostBand, IntRect(it.positionInParent().round(), it.size))
+            }.verticalScroll(scrollState),
       ) {
         if (searchState.query.isNotEmpty()) {
           SidebarSectionTitle(nativeString("Threads"), palette)
@@ -631,6 +663,7 @@ internal fun OpenClawSidebar(
                   searchResults.forEach { session ->
                     SidebarSessionRow(
                       session = session,
+                      rowHost = rowHost,
                       selected = session.key == activeSessionKey,
                       palette = palette,
                       onClick = { onSelectSession(session) },
@@ -642,6 +675,7 @@ internal fun OpenClawSidebar(
           }
         } else {
           SidebarPagesHeader(
+            rowHost = rowHost,
             expanded = pagesExpanded,
             menuMode = pagesMenuMode,
             destinations = orderedPages,
@@ -680,6 +714,7 @@ internal fun OpenClawSidebar(
               key(destination.stableId) {
                 SidebarNavigationRow(
                   destination = destination,
+                  rowHost = rowHost,
                   selected = destination == activeDestination,
                   palette = palette,
                   onClick = { onSelectDestination(destination) },
@@ -718,6 +753,7 @@ internal fun OpenClawSidebar(
                 pinnedSessions.forEach { session ->
                   SidebarSessionRow(
                     session = session,
+                    rowHost = rowHost,
                     selected = session.key == activeSessionKey,
                     palette = palette,
                     onClick = { onSelectSession(session) },
@@ -794,6 +830,7 @@ internal fun OpenClawSidebar(
                     )
                     if (section.expanded) {
                       SidebarSessionCatalog(
+                        rowHost = rowHost,
                         state = catalogState,
                         catalog = catalog,
                         activeSessionKey = activeSessionKey,
@@ -852,6 +889,7 @@ internal fun OpenClawSidebar(
                   section.entries.forEach { session ->
                     SidebarSessionRow(
                       session = session,
+                      rowHost = rowHost,
                       selected = session.key == activeSessionKey,
                       palette = palette,
                       onClick = { onSelectSession(session) },
@@ -920,6 +958,7 @@ internal fun OpenClawSidebar(
 
 @Composable
 private fun SidebarPagesHeader(
+  rowHost: SidebarRowHost,
   expanded: Boolean,
   menuMode: SidebarPagesMenuMode,
   destinations: List<SidebarDestination>,
@@ -1049,6 +1088,7 @@ private fun SidebarPagesHeader(
                 val visible = destination.stableId in visiblePageIds
                 SidebarNavigationRow(
                   destination = destination,
+                  rowHost = rowHost,
                   selected = false,
                   pinned = visible,
                   palette = palette,
@@ -1080,6 +1120,7 @@ private fun SidebarPagesHeader(
 
 @Composable
 private fun SidebarSessionCatalog(
+  rowHost: SidebarRowHost,
   state: SessionCatalogState,
   catalog: SessionCatalog,
   activeSessionKey: String,
@@ -1229,6 +1270,7 @@ private fun SidebarSessionCatalog(
               workspace.sessions.forEach { session ->
                 SidebarCatalogSessionRow(
                   session = session,
+                  rowHost = rowHost,
                   liveSession = session.sessionKey?.let(liveSessionsByKey::get),
                   selected = session.sessionKey == activeSessionKey,
                   continuing = state.continuingEntryId == session.locatorId,
@@ -1272,6 +1314,7 @@ internal fun sidebarCatalogSessionSelectionEnabled(
 @Composable
 private fun SidebarCatalogSessionRow(
   session: SessionCatalogEntry,
+  rowHost: SidebarRowHost,
   liveSession: ChatSessionEntry?,
   selected: Boolean,
   continuing: Boolean,
@@ -1295,6 +1338,7 @@ private fun SidebarCatalogSessionRow(
     )
   SidebarRowSurface(
     selected = selected,
+    rowHost = rowHost,
     palette = palette,
     enabled = enabled && selectionEnabled,
     onClick = onClick,

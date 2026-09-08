@@ -10,6 +10,7 @@ import { runWithToolExecutionValidation } from "./agent-tools.execution-validati
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { bindJoinedCollectorInvocation } from "./subagents/swarm/swarm-collector-capability.js";
+import { markToolContractFailure } from "./tool-contract-error.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import {
   isToolResultError,
@@ -37,6 +38,7 @@ import {
   type ToolLookupErrorOptions,
 } from "./tool-search-recovery.js";
 import { readToolSearchLimit } from "./tool-search-request.js";
+import { runScheduledToolSearchCall } from "./tool-search-scheduling.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import type {
   CatalogVisibilityOptions,
@@ -283,7 +285,10 @@ async function validateCatalogSchemaValue(
       value,
     });
   } catch (error) {
-    throw new Error(`Tool "${entry.id}" has an invalid ${schemaName}.`, { cause: error });
+    throw markToolContractFailure(
+      new Error(`Tool "${entry.id}" has an invalid ${schemaName}.`, { cause: error }),
+      "invalid_contract",
+    );
   }
 }
 
@@ -293,7 +298,10 @@ async function assertCatalogInputMatchesSchema(
 ): Promise<void> {
   const validation = await validateCatalogSchemaValue(entry, "inputSchema", value);
   if (validation && !validation.ok) {
-    throw new ToolInputError(formatCatalogInputError(entry, validation.errors, value));
+    throw markToolContractFailure(
+      new ToolInputError(formatCatalogInputError(entry, validation.errors, value)),
+      "input_contract",
+    );
   }
 }
 
@@ -325,8 +333,9 @@ async function assertCatalogOutputMatchesSchema(
   if (!validation || validation.ok) {
     return;
   }
-  throw new Error(
-    `Tool "${entry.id}" returned details that do not match its declared outputSchema.`,
+  throw markToolContractFailure(
+    new Error(`Tool "${entry.id}" returned details that do not match its declared outputSchema.`),
+    "output_contract",
   );
 }
 
@@ -436,7 +445,6 @@ export class ToolSearchRuntime {
   call = async (id: string, input?: unknown, options?: ToolSearchCallOptions) => {
     const catalog = resolveCatalog(this.ctx);
     return await this.callEntry(
-      catalog,
       findEntry(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }),
       input,
       options,
@@ -455,7 +463,6 @@ export class ToolSearchRuntime {
   ) => {
     const catalog = resolveCatalog(this.ctx);
     return await this.callEntry(
-      catalog,
       findEntryByExactId(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }),
       input,
       options,
@@ -503,7 +510,20 @@ export class ToolSearchRuntime {
     return isAgentToolReplaySafe(entry.tool);
   };
 
-  private readonly callEntry = async (
+  private readonly callEntry = (
+    entry: ToolSearchCatalogEntry,
+    input?: unknown,
+    options?: ToolSearchCallOptions,
+  ) =>
+    runScheduledToolSearchCall({
+      ctx: this.ctx,
+      entry,
+      signal: options?.signal,
+      execute: (currentEntry, signal) =>
+        this.executeEntry(resolveCatalog(this.ctx), currentEntry, input, { ...options, signal }),
+    });
+
+  private readonly executeEntry = async (
     catalog: ToolSearchCatalogSession,
     entry: ToolSearchCatalogEntry,
     input?: unknown,

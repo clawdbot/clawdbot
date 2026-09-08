@@ -214,11 +214,17 @@ class ChatReaderScrollOwnershipLayoutTest {
   @GraphicsMode(GraphicsMode.Mode.NATIVE)
   fun pausedReadingRetainsItsLogicalGlyphAcrossHeightReduction() = assertPausedReadingSurvivesViewportResize(360.dp, 300.dp)
 
+  @Test
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun widthRoundTripRestoresPreferredGlyphAfterARealScrollClamp() = assertPausedReadingSurvivesViewportResize(360.dp, 480.dp, initialWidth = 180.dp, roundTripAfterClamp = true)
+
   private fun assertPausedReadingSurvivesViewportResize(
     width: Dp,
     height: Dp,
+    initialWidth: Dp = 360.dp,
+    roundTripAfterClamp: Boolean = false,
   ) {
-    var viewportWidth by mutableStateOf(360.dp)
+    var viewportWidth by mutableStateOf(initialWidth)
     var viewportHeight by mutableStateOf(480.dp)
     showReader(initialStreamingLines = 24, viewportWidth = { viewportWidth }, viewportHeight = { viewportHeight })
     composeRule.waitForIdle()
@@ -262,10 +268,45 @@ class ChatReaderScrollOwnershipLayoutTest {
     assertEquals(oldLayout.totalItemsCount, reader.listState.layoutInfo.totalItemsCount)
     assertFalse(viewport().scrolling)
     assertFalse(reader.navigation.isNavigating)
-    if (width < 360.dp) {
+    if (width < initialWidth) {
       assertTrue("Narrower width must produce genuine text reflow: $diagnostic", after.second.lineCount > before.second.lineCount)
+    } else if (width > initialWidth) {
+      assertTrue("Widening must shorten the same real paragraph: $diagnostic", after.second.lineCount < before.second.lineCount && after.second.size.height < before.second.size.height)
     } else {
       assertEquals("Height-only resize must not reflow the paragraph", before.second.size, after.second.size)
+    }
+    if (roundTripAfterClamp) {
+      assertTrue("This is a width-only widening within the existing host", width > initialWidth && width <= 360.dp)
+      assertEquals("Width alone changes the viewport", beforeClip.height, afterClip.height, 0f)
+      assertEquals("The selected glyph height does not trigger the existing geometry reset", reading.height, glyph.height, 0f)
+      assertEquals("Reflow retains the same rendered text node", before.first.id, after.first.id)
+      assertFalse("Correction reaches the actual latest scroll boundary: $diagnostic", reader.listState.canScrollBackward)
+      assertTrue("Older history still overflows, so this is not a full-fit resume: $diagnostic", reader.listState.canScrollForward)
+      assertEquals("The boundary is the actual latest item", 0, reader.listState.firstVisibleItemIndex)
+      assertEquals("There is no remaining scroll toward latest", 0, reader.listState.firstVisibleItemScrollOffset)
+      assertTrue("The preferred target must really be excluded by the scroll boundary: $diagnostic", glyph.top > afterClip.top + relativeY + 1f)
+      assertTrue("The same glyph remains visible at the achievable target: $diagnostic", inside(afterClip, glyph))
+      assertTrue("Widening reveals the actual ending at that boundary", inside(afterClip, endingBounds(after)))
+
+      composeRule.runOnIdle { viewportWidth = initialWidth }
+      composeRule.waitForIdle()
+      val restoredClip = transcript.fetchSemanticsNode().boundsInRoot
+      val restored = renderedReaderText("S001 Synthetic", requireVisible = false)
+      val restoredGlyph = restored.second.getBoundingBox(character).translate(restored.first.positionInRoot)
+      val roundTrip = "$diagnostic restoredViewport=$restoredClip restoredGlyph=$restoredGlyph"
+      println("READER_WIDTH_ROUND_TRIP $roundTrip")
+      assertEquals("The original viewport is restored", beforeClip, restoredClip)
+      assertEquals("Width restoration retains identical content", text, restored.second.layoutInput.text.text)
+      assertEquals("The original paragraph wrapping returns", before.second.size, restored.second.size)
+      assertEquals("The same text node survives the round trip", before.first.id, restored.first.id)
+      assertEquals("The glyph height remains unchanged throughout", reading.height, restoredGlyph.height, 0f)
+      assertEquals("No timeline membership change explains the result", oldLayout.totalItemsCount, reader.listState.layoutInfo.totalItemsCount)
+      assertTrue("The original preferred position has scroll room in both directions: $roundTrip", reader.listState.canScrollBackward && reader.listState.canScrollForward)
+      assertFalse(viewport().scrolling)
+      assertFalse(reader.navigation.isNavigating)
+      assertTrue("The original glyph remains in the viewport: $roundTrip", inside(restoredClip, restoredGlyph))
+      assertEquals("Restoring width restores the original preferred reading position: $roundTrip", reading.top, restoredGlyph.top, 1f)
+      return
     }
     assertEquals("Resize must preserve the same logical reading point: $diagnostic", afterClip.top + relativeY, glyph.top, 1f)
     assertTrue("The retained reading glyph must remain visible: $diagnostic", inside(afterClip, glyph))
@@ -768,6 +809,19 @@ class ChatReaderScrollOwnershipLayoutTest {
       assertTrue("The list must have scroll space in both directions: $diagnostic", reader.listState.canScrollBackward && reader.listState.canScrollForward)
       assertTrue("The same reading glyph must fit inside the new viewport: $diagnostic", inside(afterClip, glyph))
       assertEquals("An excluded lower target should move to the nearest fully visible position: $diagnostic", afterClip.bottom - glyph.height, glyph.top, 1f)
+      composeRule.runOnIdle { viewportHeight = 480.dp }
+      composeRule.waitForIdle()
+      val restoredClip = transcript.fetchSemanticsNode().boundsInRoot
+      val restored = renderedReaderText(textMarker)
+      val restoredGlyph = markerBounds(restored, marker)
+      val roundTrip = "$diagnostic restoredViewport=$restoredClip restoredGlyph=$restoredGlyph"
+      println("READER_VIEWPORT_ROUND_TRIP $roundTrip")
+      assertEquals("The viewport returns to its original dimensions", clip, restoredClip)
+      assertEquals("The round trip preserves the same rendered content", before.second.layoutInput.text.text, restored.second.layoutInput.text.text)
+      assertEquals(0, olderReadingDisposals)
+      assertTrue("The original reading position remains reachable: $roundTrip", reader.listState.canScrollBackward && reader.listState.canScrollForward)
+      assertTrue("The same reading glyph remains visible: $roundTrip", inside(restoredClip, restoredGlyph))
+      assertEquals("Restoring available space restores the preferred reading position: $roundTrip", reading.top, restoredGlyph.top, 1f)
       return
     }
 

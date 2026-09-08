@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Proves an affected packaged updater can install the bridge release and then advance again.
+# Proves the selected first-hop method and a fresh updater without legacy chunks.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

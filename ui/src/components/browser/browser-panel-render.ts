@@ -1,6 +1,5 @@
 import { html, nothing, svg, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
-import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { renderDockDestinations } from "../dock-destination-controls.ts";
 import { icons } from "../icons.ts";
 import { renderPanelEmptyState } from "../panel-empty-state.ts";
@@ -34,7 +33,11 @@ function renderHeaderActions(
   onDockChange: (dock: BrowserPanelDock) => void,
   onClose: () => void,
 ) {
-  const activeUrl = controller.view?.metrics?.url || controller.view?.url || controller.urlDraft;
+  const activeUrl =
+    controller.native.activeTab?.url ||
+    controller.view?.metrics?.url ||
+    controller.view?.url ||
+    controller.urlDraft;
   return html`
     <div class="rail-header__actions bp-actions">
       ${renderDockDestinations({
@@ -64,11 +67,7 @@ function renderHeaderActions(
         title=${t("browser.openExternal")}
         aria-label=${t("browser.openExternal")}
         ?disabled=${!activeUrl}
-        @click=${() => {
-          if (activeUrl) {
-            openExternalUrlSafe(activeUrl);
-          }
-        }}
+        @click=${() => controller.openExternal()}
       >
         ${icons.externalLink}
       </button>
@@ -86,11 +85,12 @@ function renderHeaderActions(
 }
 
 function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
-  const hasView = Boolean(controller.view);
+  const nativeTab = controller.native.activeTab;
+  const hasView = Boolean(nativeTab || controller.view);
   return html`
     <div class="bp-toolbar">
       ${
-        controller.operations.route
+        !nativeTab && controller.operations.route
           ? html`<span
               class="bp-profile"
               title=${t("browser.profile", { profile: controller.operations.route.profile })}
@@ -117,7 +117,7 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
         type="button"
         title=${t("browser.back")}
         aria-label=${t("browser.back")}
-        ?disabled=${!hasView || controller.evaluateUnavailable}
+        ?disabled=${nativeTab ? !nativeTab.canGoBack : !hasView || controller.evaluateUnavailable}
         @click=${() => controller.goHistory(-1)}
       >
         ${BACK_GLYPH}
@@ -127,7 +127,7 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
         type="button"
         title=${t("browser.forward")}
         aria-label=${t("browser.forward")}
-        ?disabled=${!hasView || controller.evaluateUnavailable}
+        ?disabled=${nativeTab ? !nativeTab.canGoForward : !hasView || controller.evaluateUnavailable}
         @click=${() => controller.goHistory(1)}
       >
         ${FORWARD_GLYPH}
@@ -135,12 +135,12 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
       <button
         class="bp-icon"
         type="button"
-        title=${t("browser.reload")}
-        aria-label=${t("browser.reload")}
+        title=${t(nativeTab?.loading ? "browser.stop" : "browser.reload")}
+        aria-label=${t(nativeTab?.loading ? "browser.stop" : "browser.reload")}
         ?disabled=${!controller.activeTargetId}
         @click=${() => controller.reloadPage()}
       >
-        ${RELOAD_GLYPH}
+        ${nativeTab?.loading ? CLOSE_GLYPH : RELOAD_GLYPH}
       </button>
       <input
         class="bp-url"
@@ -167,6 +167,21 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
           }
         }}
       />
+      ${
+        embedded
+          ? html`<button
+              class="bp-icon"
+              type="button"
+              data-new-tab-action
+              title=${t("browser.openExternal")}
+              aria-label=${t("browser.openExternal")}
+              ?disabled=${!hasView}
+              @click=${() => controller.openExternal()}
+            >
+              ${icons.externalLink}
+            </button>`
+          : nothing
+      }
       <button
         class="bp-icon ${controller.mode === "annotate" ? "is-active" : ""}"
         type="button"
@@ -181,10 +196,12 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
         class="bp-icon ${controller.mode === "inspect" ? "is-active" : ""}"
         type="button"
         title=${
-          controller.evaluateUnavailable ? t("browser.inspectUnavailable") : t("browser.inspect")
+          !nativeTab && controller.evaluateUnavailable
+            ? t("browser.inspectUnavailable")
+            : t("browser.inspect")
         }
         aria-label=${t("browser.inspect")}
-        ?disabled=${!hasView || controller.evaluateUnavailable}
+        ?disabled=${!hasView || (!nativeTab && controller.evaluateUnavailable)}
         @click=${() => controller.setMode("inspect")}
       >
         ${INSPECT_GLYPH}
@@ -277,7 +294,15 @@ function renderInspectTooltip(controller: BrowserPanelController) {
 }
 
 function renderViewportContent(controller: BrowserPanelController) {
-  if (controller.running === false) {
+  if (controller.native.activeTab && controller.mode === "interact") {
+    return html`<div
+      class="bp-stage bp-stage--native"
+      aria-busy=${controller.native.activeTab.loading}
+    >
+      ${controller.native.activeTab.loading ? html`<span class="bp-native-loading" role="status">${t("browser.loading")}</span>` : nothing}
+    </div>`;
+  }
+  if (!controller.native.activeTab && controller.running === false) {
     return renderPanelEmptyState({
       icon: icons.globe,
       heading: t("chat.sidePanel.browser"),
@@ -345,7 +370,7 @@ function renderViewport(controller: BrowserPanelController) {
     >
       ${renderViewportContent(controller)}
       ${
-        controller.loading && controller.view
+        !controller.native.activeTab && controller.loading && controller.view
           ? renderPanelLoadingSkeleton("browser", t("browser.loading"), false, true)
           : nothing
       }

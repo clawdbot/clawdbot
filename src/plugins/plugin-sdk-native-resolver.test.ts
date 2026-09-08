@@ -642,6 +642,11 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
       "ai",
       path.join("internal", "openai-responses-payload-policy.ts"),
     );
+    const aiGoogleModelFamilySource = writeInternalCorePackageSource(
+      root,
+      "ai",
+      path.join("internal", "google-model-family.ts"),
+    );
     const aiRetryAfterSource = writeInternalCorePackageSource(
       root,
       "ai",
@@ -699,6 +704,9 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
       ),
     ).toBe(fs.realpathSync(aiResponsesPayloadPolicySource));
     expect(
+      fs.realpathSync(requireFromCoreSource.resolve("@openclaw/ai/internal/google-model-family")),
+    ).toBe(fs.realpathSync(aiGoogleModelFamilySource));
+    expect(
       fs.realpathSync(requireFromCoreSource.resolve("@openclaw/ai/internal/retry-after")),
     ).toBe(fs.realpathSync(aiRetryAfterSource));
     expect(fs.realpathSync(requireFromCoreSource.resolve("@openclaw/ai/internal/runtime"))).toBe(
@@ -725,6 +733,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     expect(() =>
       requireFromPlugin.resolve("@openclaw/ai/internal/openai-responses-payload-policy"),
     ).toThrow();
+    expect(() => requireFromPlugin.resolve("@openclaw/ai/internal/google-model-family")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/ai/internal/retry-after")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/ai/internal/runtime")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/ai/internal/tool-schema")).toThrow();

@@ -80,51 +80,22 @@ export function createWorkerDesktopTunnels(deps: {
   const sessions = deps.registry ?? createDesktopSessionRegistry({ lingerMs: deps.lingerMs });
   const appLaunches = new Map<string, DesktopAppLaunchEntry>();
 
-  const appLaunchKey = (environmentId: string, appId: WorkerDesktopApp["id"]) =>
-    `${environmentId}\0${appId}`;
-
-  const stopAppLaunches = async (environmentId: string, ownerEpoch?: number): Promise<void> => {
-    const matching = [...appLaunches.values()].filter(
-      (entry) =>
-        entry.environmentId === environmentId &&
-        (ownerEpoch === undefined || entry.ownerEpoch === ownerEpoch),
-    );
+  const stopAppLaunches = async (
+    matches: (entry: DesktopAppLaunchEntry) => boolean,
+    reason: "stopped" | "replaced",
+  ): Promise<void> => {
+    const matching = [...appLaunches.values()].filter(matches);
     for (const entry of matching) {
-      entry.abortController.abort(new Error("Worker desktop app launch owner stopped"));
+      entry.abortController.abort(new Error(`Worker desktop app launch owner ${reason}`));
     }
     await Promise.allSettled(matching.map((entry) => entry.operation));
   };
 
-  const claimOwnerEpoch = (environmentId: string, ownerEpoch: number): boolean => {
-    try {
-      return sessions.claimOwnerEpoch(environmentId, ownerEpoch);
-    } catch (error) {
-      if (error instanceof DesktopSessionStaleOwnerError) {
-        throw new Error("Worker desktop owner epoch is stale", { cause: error });
-      }
-      throw error;
-    }
-  };
-
-  const stopReplacedAppLaunches = async (
-    environmentId: string,
-    ownerEpoch: number,
-  ): Promise<void> => {
-    const staleLaunches = [...appLaunches.values()].filter(
+  const stopReplacedAppLaunches = (environmentId: string, ownerEpoch: number) =>
+    stopAppLaunches(
       (entry) => entry.environmentId === environmentId && entry.ownerEpoch < ownerEpoch,
+      "replaced",
     );
-    for (const entry of staleLaunches) {
-      entry.abortController.abort(new Error("Worker desktop app launch owner replaced"));
-    }
-    await Promise.allSettled(staleLaunches.map((entry) => entry.operation));
-  };
-
-  const fenceReplacedOwners = async (environmentId: string, ownerEpoch: number): Promise<void> => {
-    await joinWorkerTunnelStops([
-      sessions.stopSuperseded(environmentId, ownerEpoch),
-      stopReplacedAppLaunches(environmentId, ownerEpoch),
-    ]);
-  };
 
   const createSessionHooks = (request: DesktopAcquireRequest) => {
     let prepared: PreparedWorkerSsh | undefined;
@@ -174,11 +145,10 @@ export function createWorkerDesktopTunnels(deps: {
           timeoutMs: Number.MAX_SAFE_INTEGER,
         }),
       );
-      const startedChild = child;
-      void startedChild.exited.then(() => {
+      void child.exited.then(() => {
         void stopOwner();
       });
-      await startedChild.ready;
+      await child.ready;
       if (!isCurrent()) {
         throw new Error("Worker desktop tunnel stopped before connecting");
       }
@@ -231,7 +201,7 @@ export function createWorkerDesktopTunnels(deps: {
     }
     const hooks = createSessionHooks(request);
     try {
-      claimOwnerEpoch(request.environmentId, request.ownerEpoch);
+      sessions.claimOwnerEpoch(request.environmentId, request.ownerEpoch);
       // Register before abort callbacks can reenter Stop; the registry defers source startup.
       const acquiring = sessions.acquire({
         sourceKey: request.environmentId,
@@ -268,15 +238,18 @@ export function createWorkerDesktopTunnels(deps: {
     }
     let ownerAdvanced: boolean;
     try {
-      ownerAdvanced = claimOwnerEpoch(request.environmentId, request.ownerEpoch);
+      ownerAdvanced = sessions.claimOwnerEpoch(request.environmentId, request.ownerEpoch);
     } catch (error) {
+      if (error instanceof DesktopSessionStaleOwnerError) {
+        return Promise.reject(new Error("Worker desktop owner epoch is stale", { cause: error }));
+      }
       return Promise.reject(
         error instanceof Error
           ? error
           : new Error("Worker desktop owner epoch is invalid", { cause: error }),
       );
     }
-    const key = appLaunchKey(request.environmentId, request.app.id);
+    const key = `${request.environmentId}\0${request.app.id}`;
     const current = appLaunches.get(key);
     if (current?.ownerEpoch === request.ownerEpoch) {
       return current.operation;
@@ -298,7 +271,10 @@ export function createWorkerDesktopTunnels(deps: {
         await current.operation.catch(() => undefined);
       }
       if (ownerAdvanced) {
-        await fenceReplacedOwners(request.environmentId, request.ownerEpoch);
+        await joinWorkerTunnelStops([
+          sessions.stopSuperseded(request.environmentId, request.ownerEpoch),
+          stopReplacedAppLaunches(request.environmentId, request.ownerEpoch),
+        ]);
       }
       abortController.signal.throwIfAborted();
       const prepared = await prepareWorkerSsh({
@@ -369,7 +345,12 @@ export function createWorkerDesktopTunnels(deps: {
   async function stop(environmentId: string, ownerEpoch?: number): Promise<void> {
     await joinWorkerTunnelStops([
       sessions.stop(environmentId, ownerEpoch),
-      stopAppLaunches(environmentId, ownerEpoch),
+      stopAppLaunches(
+        (entry) =>
+          entry.environmentId === environmentId &&
+          (ownerEpoch === undefined || entry.ownerEpoch === ownerEpoch),
+        "stopped",
+      ),
     ]);
   }
 

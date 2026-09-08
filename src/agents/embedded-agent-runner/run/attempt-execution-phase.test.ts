@@ -1,10 +1,15 @@
+import { createAssistantMessageEventStream, type Message } from "openclaw/plugin-sdk/llm";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
+import { runAgentLoop } from "../../../plugin-sdk/agent-core.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import {
   applyAgentAutoCompactionGuard,
   applyAgentCompactionSettingsFromConfig,
 } from "../../agent-settings.js";
+import { createEmbeddedModelState } from "../../embedded-agent-subscribe.model-state.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
   createAssistant,
@@ -17,6 +22,7 @@ import {
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import type { AgentSessionEvent } from "../../sessions/agent-session-types.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { makeZeroUsageSnapshot } from "../../usage.js";
 import { resolveEmbeddedAgentStream } from "../stream-resolution.js";
 
 const mocks = vi.hoisted(() => ({
@@ -219,8 +225,9 @@ async function createFixture(
   mocks.installStreamGuards.mockImplementation(() => {
     order.push("guards");
     return {
-      cacheObservabilityEnabled: true,
-      promptCacheTools: [{ name: "read" }],
+      onModelRequest: vi.fn(),
+      onModelUsage: vi.fn(),
+      getPromptCacheObservation: vi.fn(),
     };
   });
   mocks.prepareHistory.mockImplementation(async () => {
@@ -289,6 +296,152 @@ beforeEach(() => {
 });
 
 describe("runEmbeddedAttemptExecutionPhase", () => {
+  it.each([
+    { stopReason: "stop", cacheRead: 10_000, completion: "event" },
+    { stopReason: "stop", cacheRead: 0, completion: "event" },
+    { stopReason: "toolUse", cacheRead: 10_000, completion: "event" },
+    { stopReason: "error", cacheRead: 10_000, completion: "event" },
+    { stopReason: "aborted", cacheRead: 10_000, completion: "event" },
+    { stopReason: "stop", cacheRead: 10_000, completion: "result" },
+    { stopReason: "stop", cacheRead: 0, completion: "result" },
+    { stopReason: "error", cacheRead: 10_000, completion: "result" },
+  ] as const)(
+    "observes terminal $stopReason usage once across async-tool fragments (cacheRead=$cacheRead, completion=$completion)",
+    async ({ stopReason, cacheRead, completion }) => {
+      const fixture = await createFixture();
+      const recordStage = vi.fn();
+      const runtime = fixture.input.prepared.sessionRuntime;
+      Object.assign(fixture.input.attempt, {
+        model: testModel,
+        modelId: testModel.id,
+        provider: testModel.provider,
+        sessionId: `async-fragment-${stopReason}-${cacheRead}-${completion}`,
+      });
+      Object.assign(runtime, {
+        anthropicPayloadLogger: undefined,
+        isOpenAIResponsesApi: false,
+        cacheTrace: { recordStage, wrapStreamFn: (streamFn: unknown) => streamFn },
+      });
+      const toolCall = {
+        type: "toolCall",
+        name: "read",
+        id: "read-1",
+        arguments: {},
+        async: true,
+      } as const;
+      const message = createAssistant(
+        testModel,
+        [toolCall, { type: "text", text: "Done." }],
+        stopReason,
+      );
+      message.usage = {
+        ...makeZeroUsageSnapshot(),
+        input: 100,
+        output: 5,
+        cacheRead,
+        totalTokens: cacheRead + 105,
+      };
+      const response = createAssistantMessageEventStream();
+      response.push({
+        type: "start",
+        partial: { ...message, content: [], usage: makeZeroUsageSnapshot() },
+      });
+      response.push({
+        type: "toolcall_end",
+        contentIndex: 0,
+        toolCall,
+        partial: { ...message, content: [toolCall], usage: makeZeroUsageSnapshot() },
+      });
+      if (completion === "result") {
+        response.end(message);
+      } else if (stopReason === "error" || stopReason === "aborted") {
+        response.push({ type: "error", reason: stopReason, error: message });
+      } else {
+        response.push({ type: "done", reason: stopReason, message });
+      }
+      response.end();
+      const providerStream = vi.fn(() => response);
+      runtime.agentSession.activeSession.agent.streamFn = providerStream;
+      const { installEmbeddedAttemptStreamGuards } =
+        await vi.importActual<typeof import("./attempt-stream.js")>("./attempt-stream.js");
+      const guards = installEmbeddedAttemptStreamGuards(fixture.input, {
+        onRejectedProviderReplayRepaired: vi.fn(),
+        onIdleTimeout: vi.fn(),
+        diagnosticOwner: createDiagnosticEmbeddedRunOwner({
+          runId: "async-fragment",
+          sessionId: fixture.input.attempt.sessionId,
+        }),
+      });
+      const modelState = createEmbeddedModelState(
+        {
+          session: runtime.agentSession.activeSession,
+          runId: "async-fragment",
+          onModelUsage: guards.onModelUsage,
+        },
+        { warn: vi.fn() },
+      );
+      const fragments: number[] = [];
+      const observed = () => recordStage.mock.calls.filter(([stage]) => stage === "cache:result");
+      const context = {
+        systemPrompt: "stable prefix",
+        messages: [],
+        tools: [
+          {
+            name: "read",
+            label: "Read",
+            description: "Read",
+            parameters: Type.Object({}),
+            execute: async () => ({ content: [], details: {}, terminate: true }),
+          },
+        ],
+      };
+      guards.onModelRequest?.(testModel, context);
+      await runAgentLoop(
+        [{ role: "user", content: "Read once", timestamp: 0 }],
+        context,
+        { model: testModel, convertToLlm: (messages) => messages as Message[] },
+        (event) => {
+          if (
+            event.type === "message_start" ||
+            event.type === "message_update" ||
+            event.type === "message_end"
+          ) {
+            modelState.captureModelEvent(event);
+          }
+          if (event.type === "message_end" && event.message.role === "assistant") {
+            fragments.push(event.message.usage.cacheRead);
+            if (fragments.length === 1) {
+              expect(observed()).toEqual([]);
+            }
+          }
+        },
+        undefined,
+        runtime.agentSession.activeSession.agent.streamFn,
+      );
+      expect(providerStream).toHaveBeenCalledOnce();
+      expect(fragments).toEqual([0, cacheRead]);
+      expect(observed()).toEqual([
+        [
+          "cache:result",
+          {
+            options: {
+              requestIndex: 1,
+              broke: false,
+              previousCacheRead: undefined,
+              input: 100,
+              cacheRead,
+              cacheWrite: 0,
+              changes: null,
+            },
+          },
+        ],
+      ]);
+      expect(runtime.contextGuards.recordCacheTouch).toHaveBeenCalledTimes(
+        stopReason === "error" || stopReason === "aborted" ? 0 : 1,
+      );
+    },
+  );
+
   it.each([
     { owner: "active", phase: "during summarization" },
     { owner: "replaced", phase: "during summarization" },
@@ -501,8 +654,8 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       expect.objectContaining({
         preparedStreamRuntime: expect.objectContaining({
           cache: {
-            observabilityEnabled: true,
-            promptTools: [{ name: "read" }],
+            onModelRequest: expect.any(Function),
+            getObservation: expect.any(Function),
           },
           history: expect.objectContaining({ contextEngineAssemblySucceeded: true }),
           isProbeSession: false,
@@ -518,6 +671,9 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     expect(abortInput.abortActiveSession).toBe(fixture.abortActiveSession);
     const streamInput = mocks.prepareStream.mock.calls[0]?.[0];
     expect(streamInput.activeSession).toBe(fixture.activeSession);
+    expect(streamInput.onModelUsage).toBe(
+      mocks.installStreamGuards.mock.results[0]?.value.onModelUsage,
+    );
     expect(streamInput.getRunState()).toEqual({
       aborted: true,
       promptError: null,

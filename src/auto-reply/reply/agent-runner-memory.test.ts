@@ -609,6 +609,27 @@ describe("runMemoryFlushIfNeeded", () => {
         : undefined,
     });
     const overrides = {
+      cfg: {
+        agents: { defaults: { compaction: { memoryFlush: {} } } },
+        models: {
+          providers: {
+            [provider]: {
+              baseUrl: "https://catalog-fixture.invalid/v1",
+              // Keep input preparation local while each case owns its catalog budget facts.
+              models: [
+                {
+                  id: model,
+                  name: model,
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  maxTokens: 4_096,
+                },
+              ],
+            },
+          },
+        },
+      } satisfies MemoryFlushTestParams["cfg"],
       followupRun,
       storePath,
       modelContextTokens: testCase.cap,
