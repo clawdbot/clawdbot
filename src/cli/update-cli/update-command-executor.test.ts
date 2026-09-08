@@ -17,6 +17,7 @@ import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { waitForPidToExit } from "../../test-utils/process-tree.js";
 import {
+  releaseUpdateCommandPreflightForHandoff,
   withUpdateCommandExecutor,
   withUpdateCommandExecutorChild,
 } from "./update-command-executor.js";
@@ -51,6 +52,46 @@ function replaceOwner() {
 }
 
 describe("live update executor", () => {
+  it("retires the direct preflight owner before a supervised helper independently acquires", async () => {
+    const store = createManagedHandoffLeaseStore();
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const fence = await executor.enter(root, { preflight: true });
+      const original = store.read(root);
+      expect(original.kind).toBe("current");
+      releaseUpdateCommandPreflightForHandoff(fence);
+      expect(fence.assertCurrent).toThrow("no longer current");
+      expect(store.read(root)).toEqual({ kind: "absent" });
+      const acquired = store.acquire(root, "independent-helper", { kind: "update" });
+      expect(acquired.kind).toBe("acquired");
+      await expect(executor.enter(root)).rejects.toThrow("closed or busy");
+      expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
+      if (acquired.kind === "acquired") {
+        expect(store.release(acquired.lease)).toBe(true);
+      }
+    });
+  });
+
+  it("closes preflight release on mutable admission without revoking its current owner", async () => {
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const fence = await executor.enter(root, { preflight: true });
+      expect(await executor.enter(root)).toBe(fence);
+      expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
+      expect(fence.assertCurrent).not.toThrow();
+    });
+  });
+
+  it("refuses to release a replaced preflight owner and preserves the new lease", async () => {
+    await expect(
+      withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(root, { preflight: true });
+        replaceOwner();
+        expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("no longer current");
+        const observed = createManagedHandoffLeaseStore().read(root);
+        expect(observed).toMatchObject({ kind: "current", lease: { owner: "replacement" } });
+      }),
+    ).rejects.toThrow();
+  });
+
   it("reclaims a dead direct executor through the existing process-liveness owner", async () => {
     stageManagedHandoffRuntime(root);
     const runtimeEntry = path.join(root, "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY);
@@ -131,7 +172,8 @@ describe("live update executor", () => {
       expect(ready).toBe("assigned");
       const store = createManagedHandoffLeaseStore();
       await withUpdateCommandExecutor(runId, async (executor) => {
-        const fence = await executor.enter(root);
+        const fence = await executor.enter(root, { preflight: true });
+        expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
         await Promise.resolve();
         fence.assertCurrent();
       });

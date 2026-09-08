@@ -28,6 +28,7 @@ export async function readUpdateCommandNativeObservation(params: {
   definitionPaths: readonly string[];
   assertCurrent: () => void;
   timeoutMs?: number;
+  quiescingFailedCandidate?: true;
 }): Promise<UpdateRecoveryNativeObservation> {
   const unavailable = () =>
     new UpdateCommandRecoveryPendingError("Original native-manager state cannot be verified.");
@@ -35,6 +36,29 @@ export async function readUpdateCommandNativeObservation(params: {
   if (!source || source.profile === undefined) {
     throw unavailable();
   }
+  // A failed start may leave a positively inspected systemd auto-restart job.
+  // This proves only non-quiescence, never readiness or a stopped service.
+  const autoRestarting = (value: GatewayServiceState) =>
+    params.quiescingFailedCandidate === true &&
+    Boolean(params.record.primaryFailure) &&
+    Boolean(params.record.checkpoint) &&
+    Boolean(params.record.nativeManager) &&
+    params.record.effects?.some(
+      (effect) =>
+        effect.kind === "service-restart" &&
+        effect.state === "intent" &&
+        effect.runtime === "candidate",
+    ) === true &&
+    !params.record.terminal &&
+    platform() === "linux" &&
+    value.loadState.status === "loaded" &&
+    value.runtime?.status === "unknown" &&
+    value.runtime.state === "activating" &&
+    value.runtime.subState === "auto-restart" &&
+    (value.runtime.pid === undefined || value.runtime.pid === 0) &&
+    typeof value.runtime.systemd?.nRestarts === "number" &&
+    Number.isInteger(value.runtime.systemd.nRestarts) &&
+    value.runtime.systemd.nRestarts >= 0;
   params.assertCurrent();
   const service = resolveGatewayService();
   const state = await readGatewayServiceState(service, {
@@ -48,7 +72,7 @@ export async function readUpdateCommandNativeObservation(params: {
     !state.installed ||
     !state.command?.sourcePath ||
     state.loadState.status === "unknown" ||
-    !["running", "stopped"].includes(state.runtime?.status ?? "") ||
+    (!["running", "stopped"].includes(state.runtime?.status ?? "") && !autoRestarting(state)) ||
     resolveStateDir(state.env) !== source.stateDir ||
     resolveConfigPath(state.env) !== source.configPath ||
     (state.env.OPENCLAW_PROFILE?.trim() || null) !== source.profile ||
@@ -95,6 +119,13 @@ export async function readUpdateCommandNativeObservation(params: {
     pid: value.runtime?.pid,
     unit: value.runtime?.systemd?.unit,
     managerUid: value.runtime?.systemd?.managerUid,
+    autoRestart: autoRestarting(value)
+      ? {
+          state: value.runtime?.state,
+          subState: value.runtime?.subState,
+          restarts: value.runtime?.systemd?.nRestarts,
+        }
+      : undefined,
   });
   if (!isDeepStrictEqual(identityFacts(state), identityFacts(finalState))) {
     throw unavailable();

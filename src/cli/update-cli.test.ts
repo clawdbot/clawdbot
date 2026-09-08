@@ -5728,6 +5728,65 @@ describe("update-cli", () => {
     expect(packageInstallCommandCall()).toBeDefined();
   });
 
+  it.each(["SIGINT", "SIGTERM"] as const)(
+    "settles a fresh update interrupted during target metadata admission (%s)",
+    async (signal) => {
+      await useFileBackedConfig();
+      const root = await mockPackageInstallAtCaseDir("openclaw-early-signal");
+      const packageBefore = await fs.readFile(path.join(root, "package.json"), "utf8");
+      const processOnSpy = vi.spyOn(process, "on");
+      const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+      let entered!: () => void;
+      let release!: () => void;
+      const requested = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      vi.mocked(resolveNpmChannelTag).mockImplementation(async () => {
+        entered();
+        await pending;
+        throw new Error("interrupted target metadata request");
+      });
+      const update = updateCommand({ yes: true, restart: false }).catch((error: unknown) => error);
+      try {
+        await Promise.race([
+          requested,
+          update.then(() => {
+            throw new Error("Update ended before metadata admission");
+          }),
+        ]);
+        const before = listUpdateRuns({ limit: 1 })[0]!;
+        expect(before.status).toBe("running");
+        const listeners = processOnSpy.mock.calls
+          .filter(([event]) => event === signal)
+          .map(([, listener]) => listener);
+        expect(listeners.length).toBeGreaterThan(0);
+        for (const listener of listeners) {
+          listener();
+        }
+        // Inspect while metadata remains blocked: ordinary unwind cannot settle this row.
+        expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({
+          runId: before.runId,
+          status: "failed",
+          phase: "finished",
+          reason: "interrupted",
+          finishedAtMs: expect.any(Number),
+        });
+        await vi.waitFor(() =>
+          expect(processExitSpy).toHaveBeenCalledWith(signal === "SIGINT" ? 130 : 143),
+        );
+        expect(await fs.readFile(path.join(root, "package.json"), "utf8")).toBe(packageBefore);
+        expect(packageInstallCommandCall()).toBeUndefined();
+        expect(serviceStop).not.toHaveBeenCalled();
+      } finally {
+        release();
+        await update;
+      }
+    },
+  );
+
   it("refuses a package update when exact target metadata lookup fails", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-schema-metadata-failure"));
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(

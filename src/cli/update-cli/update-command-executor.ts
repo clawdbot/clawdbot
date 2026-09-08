@@ -14,8 +14,19 @@ import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js"
 /** A live invocation, never a serialized claim, PID or recovered history row. */
 export type UpdateCommandExecutor = {
   /** Acquire only after read-only service admission, before the first mutable phase. */
-  enter(root: string): Promise<UpdateRecoveryFence>;
+  enter(root: string, options?: { preflight?: true }): Promise<UpdateRecoveryFence>;
 };
+
+// Only a direct preflight owner can release before a supervised handoff. Neither
+// a saved fence nor a borrowed helper lease grants this one-way transition.
+const preflightReleases = new WeakMap<UpdateRecoveryFence, () => void>();
+export function releaseUpdateCommandPreflightForHandoff(fence: UpdateRecoveryFence): void {
+  const release = preflightReleases.get(fence);
+  if (!release) {
+    throw new UpdateCommandRecoveryPendingError("Update preflight handoff is not current.");
+  }
+  release();
+}
 
 /** Private correlation sent only to the spawned candidate's stdin. The receiver
  * independently reads both live owners and checks its own PID/start identity. */
@@ -148,6 +159,7 @@ export async function withUpdateCommandExecutor<T>(
       if (!childAdmissionOpen || !store || !lease || !databasePath) {
         throw new UpdateCommandRecoveryPendingError("Child executor admission is closed.");
       }
+      preflightReleases.delete(fence);
       const control = store;
       const original = lease;
       const acquired = control.acquire(
@@ -234,7 +246,7 @@ export async function withUpdateCommandExecutor<T>(
     },
   );
   const executor: UpdateCommandExecutor = {
-    async enter(root) {
+    async enter(root, options) {
       if (!active || entering) {
         throw new UpdateCommandRecoveryPendingError("Update executor admission is closed or busy.");
       }
@@ -243,6 +255,9 @@ export async function withUpdateCommandExecutor<T>(
         assertCurrent();
         if (lease.key !== key) {
           throw new UpdateCommandRecoveryPendingError("Update executor installation changed.");
+        }
+        if (!options?.preflight) {
+          preflightReleases.delete(fence);
         }
         return fence;
       }
@@ -284,6 +299,20 @@ export async function withUpdateCommandExecutor<T>(
           lease = acquired.lease;
         }
         assertCurrent();
+        if (options?.preflight && !borrowed) {
+          preflightReleases.set(fence, () => {
+            assertCurrent();
+            if (!store || !lease || childWork || !store.release(lease)) {
+              throw new UpdateCommandRecoveryPendingError("Preflight executor release failed.");
+            }
+            // Never reactivate this fence; the supervised helper must acquire its own.
+            active = false;
+            lease = undefined;
+            childAdmissionOpen = false;
+            childOwners.delete(fence);
+            preflightReleases.delete(fence);
+          });
+        }
         return fence;
       } finally {
         entering = false;
@@ -323,6 +352,7 @@ export async function withUpdateCommandExecutor<T>(
     };
   }
   active = false;
+  preflightReleases.delete(fence);
   childOwners.delete(fence);
   try {
     if (lease && store && !borrowed && !store.release(lease)) {

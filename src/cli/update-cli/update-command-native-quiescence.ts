@@ -49,6 +49,7 @@ export async function quiesceFailedUpdateCommand(params: {
         definitionPaths,
         assertCurrent,
         timeoutMs: params.timeoutMs,
+        quiescingFailedCandidate: true,
       });
     const verify = async () => {
       const expected = recovery.getRecord();

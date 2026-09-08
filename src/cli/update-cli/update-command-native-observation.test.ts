@@ -162,3 +162,22 @@ it("rejects native state changes during the last enable-policy probe", async () 
   };
   await expect(readUpdateCommandNativeObservation(f.params)).rejects.toThrow("cannot be verified");
 });
+
+it.each([undefined, true] as const)(
+  "does not interpret an unbound auto-restart as a usable native state (quiescing=%s)",
+  async (quiescingFailedCandidate) => {
+    const f = await fixture();
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.mocked(f.service.isLoaded).mockResolvedValue(true);
+    vi.mocked(f.service.readRuntime).mockResolvedValue({
+      status: "unknown",
+      state: "activating",
+      subState: "auto-restart",
+      systemd: { unit: "openclaw-gateway.service", managerUid: 1973, nRestarts: 1 },
+    });
+    await expect(
+      readUpdateCommandNativeObservation({ ...f.params, quiescingFailedCandidate }),
+    ).rejects.toThrow("cannot be verified");
+    expect(f.service.isEnabled).not.toHaveBeenCalled();
+  },
+);

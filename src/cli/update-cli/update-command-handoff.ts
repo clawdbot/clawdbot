@@ -29,6 +29,7 @@ import { isPidAlive } from "../../shared/pid-alive.js";
 import { formatInstallationTargetCommand } from "../installation-target-format.js";
 import { printResult } from "./progress.js";
 import { resolveNodeRunner, UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
+import { releaseUpdateCommandPreflightForHandoff } from "./update-command-executor.js";
 import { resolveOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
 function parsePositivePid(value: unknown): number | null {
@@ -155,6 +156,10 @@ export async function handoffUpdateFromGateway(params: {
       "managed-service-handoff-failed",
       "Cannot locate the installed updater; run `openclaw doctor` before retrying.",
     );
+  }
+  if (params.opts.run?.executorFence) {
+    releaseUpdateCommandPreflightForHandoff(params.opts.run.executorFence);
+    delete params.opts.run.executorFence;
   }
   const started = await startManagedServiceUpdateHandoff({
     runId: params.opts.run?.runId,

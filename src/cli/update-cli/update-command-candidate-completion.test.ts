@@ -86,6 +86,10 @@ it.each([
   "health-rollback",
   "start-rollback",
   "unapplied-start-rollback",
+  "auto-restart-rollback",
+  "auto-restart-foreign-manager",
+  "auto-restart-counter-drift",
+  "auto-restart-unverified",
   "readiness-rollback",
   "readiness-failed",
   "boot-switched",
@@ -107,7 +111,9 @@ it.each([
     const interrupted = mode === "rollback-interrupted";
     const replay = mode.startsWith("replay-");
     const packageGap = mode.startsWith("replay-package-gap");
-    if (packageGap) {
+    const autoRestart = mode.startsWith("auto-restart-");
+    const refusedAutoRestart = autoRestart && mode !== "auto-restart-rollback";
+    if (packageGap || autoRestart) {
       vi.mocked(os.platform).mockReturnValue("linux");
     }
     const rollback =
@@ -120,12 +126,14 @@ it.each([
     if (replay) {
       useShortRealReplayLeases(mode === "replay-package-gap-slow-checkpoint" ? 10_000 : 30_000);
     }
-    const lateRollback = [
-      "health-rollback",
-      "start-rollback",
-      "unapplied-start-rollback",
-      "readiness-rollback",
-    ].includes(mode);
+    const lateRollback =
+      [
+        "health-rollback",
+        "start-rollback",
+        "unapplied-start-rollback",
+        "auto-restart-rollback",
+        "readiness-rollback",
+      ].includes(mode) || autoRestart;
     if (rollback || lateRollback) {
       await buildCheckpointReaderRuntime(pkg.packageRoot, false, false, {
         selfContained: true,
@@ -224,6 +232,8 @@ it.each([
           let enabled = !disabled;
           let recovery: UpdateCommandRecovery;
           const events: string[] = [];
+          let autoRestarting = false;
+          let restartCount = 1;
           const start = vi.fn(
             async (
               args: Parameters<ReturnType<typeof services.resolveGatewayService>["start"]>[0],
@@ -251,6 +261,11 @@ it.each([
               servingVersion = previous ? "1.0.0" : "2.0.0";
               servingBoot = previous ? "previous-boot" : "candidate-boot";
               running = previous || mode !== "unapplied-start-rollback";
+              if (!previous && autoRestart) {
+                running = false;
+                autoRestarting = true;
+                throw new Error("candidate ExecStartPre exited 71; automatic restart queued");
+              }
               if (!previous && (mode === "start-rollback" || mode === "unapplied-start-rollback")) {
                 throw new Error("candidate start acknowledgement lost");
               }
@@ -267,9 +282,22 @@ it.each([
                 sourcePath: definition,
               }),
               readRuntime: async () => ({
-                status: running ? "running" : "stopped",
+                status: autoRestarting ? "unknown" : running ? "running" : "stopped",
+                ...(autoRestarting
+                  ? {
+                      state: "activating",
+                      subState: mode === "auto-restart-unverified" ? "start" : "auto-restart",
+                    }
+                  : {}),
                 ...(running ? { pid: process.pid } : {}),
-                systemd: { unit: "openclaw-gateway.service", managerUid: 2001 },
+                systemd: {
+                  unit: "openclaw-gateway.service",
+                  managerUid:
+                    autoRestarting && mode === "auto-restart-foreign-manager" ? 2002 : 2001,
+                  ...(autoRestarting
+                    ? { nRestarts: mode === "auto-restart-counter-drift" ? restartCount++ : 1 }
+                    : {}),
+                },
               }),
               isLoaded: async () => windows || os.platform() !== "darwin" || running,
               isEnabled: async () => enabled,
@@ -286,6 +314,7 @@ it.each([
                 });
                 events.push("stop");
                 running = false;
+                autoRestarting = false;
               },
             }),
           );
@@ -666,6 +695,21 @@ it.each([
                 operatorChange: "must remain",
               });
               expect(start).not.toHaveBeenCalled();
+            } else if (refusedAutoRestart) {
+              await expect(completeUpdateCommandCandidate(params)).rejects.toThrow();
+              expect(record.terminal).toBeUndefined();
+              expect(record.restore).toBeNull();
+              expect(getUpdateRun(run.runId, options)?.status).toBe("running");
+              expect(record.nativeManager!.effects.at(-1)).toMatchObject({
+                action: "restore",
+                state: "intent",
+              });
+              expect(record.effects.at(-1)).toMatchObject({
+                kind: "service-restart",
+                state: "intent",
+                runtime: "candidate",
+              });
+              expect(await fs.readFile(pkg.launcher, "utf8")).toBe("candidate launcher\n");
             } else if (rollback || lateRollback) {
               const outcome = await completeUpdateCommandCandidate(params).catch(
                 (error: unknown) => error,
@@ -720,7 +764,10 @@ it.each([
               expect(record.retainedPair).toBeUndefined();
               expect(getUpdateRun(run.runId, options)?.status).toBe("running");
             }
-            if (lateRollback) {
+            if (refusedAutoRestart) {
+              expect(events).toEqual(["enable", "start"]);
+              expect(start).toHaveBeenCalledOnce();
+            } else if (lateRollback) {
               expect(events).toEqual(
                 mode === "unapplied-start-rollback"
                   ? ["enable", "start", "disable", "enable", "start"]

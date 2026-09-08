@@ -175,6 +175,7 @@ async function updateCommandInternal(
   } = prepared;
   let { devTarget } = prepared;
   const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
+  const run = opts.run!;
 
   let root = discoveredRoot;
   let updateInstallKind = installKind;
@@ -312,6 +313,13 @@ async function updateCommandInternal(
     packageUpdateNodeRunner = managedServiceNodeRunner;
   }
 
+  // Read-only native/root admission is complete. Own interruption settlement
+  // before metadata can block, but defer mutable housekeeping until target admission.
+  if (updateInstallKind === "package" && !opts.dryRun) {
+    run.executorFence = await executor.enter(root, { preflight: true });
+    run.executorFence.assertCurrent();
+  }
+
   if (updateInstallKind !== "git") {
     recoveryState.triageTarget.root = root;
     recoveryState.triageTarget.nodeRunner = packageUpdateNodeRunner;
@@ -434,7 +442,6 @@ async function updateCommandInternal(
     }
   }
 
-  const run = opts.run!;
   recordUpdateRunPhase(
     run.runId,
     "staging",
