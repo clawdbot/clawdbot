@@ -44,6 +44,25 @@ function skillCandidate(params: {
   };
 }
 
+function resolveFilesystemCodeModeSkill(filePath: string): CodeModeSkill {
+  const name = "demo";
+  return expectDefined(
+    resolveCodeModeSkills({
+      skillsPrompt: [
+        "<available_skills>",
+        "  <skill>",
+        `    <name>${name}</name>`,
+        "    <description>Demo</description>",
+        `    <location>${filePath}</location>`,
+        "  </skill>",
+        "</available_skills>",
+      ].join("\n"),
+      candidates: [skillCandidate({ name, description: "Demo skill", filePath })],
+    })[0],
+    "filesystem Code Mode skill test invariant",
+  );
+}
+
 describe("Code Mode skills and read tools", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -345,6 +364,31 @@ describe("Code Mode skills and read tools", () => {
     expect(codeModeTools[0]?.description).toContain("not available for node-hosted skills");
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects a selected skill root that is rebound before a companion read",
+    async () => {
+      const tmpParent = await fs.realpath(
+        await fs.mkdtemp(nodePath.join(os.tmpdir(), "oc-skill-root-rebind-")),
+      );
+      const skillRoot = nodePath.join(tmpParent, "demo");
+      const selectedRoot = nodePath.join(tmpParent, "selected-demo");
+      const replacementRoot = nodePath.join(tmpParent, "replacement");
+      await fs.mkdir(skillRoot, { recursive: true });
+      await fs.mkdir(nodePath.join(replacementRoot, ".ssh"), { recursive: true });
+      await fs.writeFile(nodePath.join(skillRoot, "SKILL.md"), "# selected skill\n", "utf8");
+      await fs.writeFile(nodePath.join(replacementRoot, ".ssh", "id_rsa"), "SECRET", "utf8");
+
+      const skill = resolveFilesystemCodeModeSkill(nodePath.join(skillRoot, "SKILL.md"));
+      await fs.rename(skillRoot, selectedRoot);
+      await fs.symlink(replacementRoot, skillRoot, "dir");
+
+      await expect(readCodeModeSkill(skill, undefined, ".ssh/id_rsa")).rejects.toThrow(
+        /escapes skill root/,
+      );
+      await fs.rm(tmpParent, { recursive: true, force: true });
+    },
+  );
+
   it("rejects an oversized companion file before returning it", async () => {
     const tmpParent = await fs.realpath(
       await fs.mkdtemp(nodePath.join(os.tmpdir(), "oc-skill-bound-")),
@@ -353,12 +397,7 @@ describe("Code Mode skills and read tools", () => {
     await fs.mkdir(skillRoot, { recursive: true });
     await fs.writeFile(nodePath.join(skillRoot, "SKILL.md"), "# skill\n", "utf8");
     await fs.writeFile(nodePath.join(skillRoot, "huge.md"), "x".repeat(256_001), "utf8");
-    const skill: CodeModeSkill = {
-      name: "demo",
-      description: "demo",
-      location: nodePath.join(skillRoot, "SKILL.md"),
-      source: { filePath: nodePath.join(skillRoot, "SKILL.md") },
-    };
+    const skill = resolveFilesystemCodeModeSkill(nodePath.join(skillRoot, "SKILL.md"));
     await expect(readCodeModeSkill(skill, undefined, "huge.md")).rejects.toThrow(
       'skill relative file exceeds 256000 bytes: "huge.md"',
     );
@@ -475,12 +514,7 @@ describe("Code Mode skills and read tools", () => {
       );
       await fs.writeFile(outside, "secret\n", "utf8");
       await fs.symlink(outside, nodePath.join(skillRoot, "modules", "link.md"));
-      const skill: CodeModeSkill = {
-        name: "demo",
-        description: "demo",
-        location: nodePath.join(skillRoot, "SKILL.md"),
-        source: { filePath: nodePath.join(skillRoot, "SKILL.md") },
-      };
+      const skill = resolveFilesystemCodeModeSkill(nodePath.join(skillRoot, "SKILL.md"));
       await expect(readCodeModeSkill(skill, undefined, "modules/during-dining.md")).resolves.toBe(
         "# dining\n",
       );
@@ -503,12 +537,7 @@ describe("Code Mode skills and read tools", () => {
       await fs.writeFile(nodePath.join(skillRoot, "SKILL.md"), "# skill\n", "utf8");
       await fs.writeFile(outside, "secret\n", "utf8");
       await fs.link(outside, nodePath.join(skillRoot, "modules", "alias.md"));
-      const skill: CodeModeSkill = {
-        name: "demo",
-        description: "demo",
-        location: nodePath.join(skillRoot, "SKILL.md"),
-        source: { filePath: nodePath.join(skillRoot, "SKILL.md") },
-      };
+      const skill = resolveFilesystemCodeModeSkill(nodePath.join(skillRoot, "SKILL.md"));
       await expect(readCodeModeSkill(skill, undefined, "modules/alias.md")).rejects.toThrow(
         /escapes skill root/,
       );

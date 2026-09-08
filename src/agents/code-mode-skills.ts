@@ -1,13 +1,20 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { FsSafeError, readFileWithinRoot, type FsSafeErrorCode } from "../infra/fs-safe.js";
+import {
+  FsSafeError,
+  root as createFsSafeRoot,
+  type FsSafeErrorCode,
+  type Root,
+} from "../infra/fs-safe.js";
 import { decodeSkillXml, type Skill } from "../skills/loading/skill-contract.js";
+
+type PinnedSkillRoot = Promise<{ ok: true; root: Root } | { ok: false; error: unknown }>;
 
 export type CodeModeSkill = {
   name: string;
   description: string;
   location: string;
-  source: Pick<Skill, "filePath" | "readContent">;
+  source: Pick<Skill, "filePath" | "readContent"> & { pinnedRoot?: PinnedSkillRoot };
   reader?: CodeModeSkillReader;
 };
 
@@ -26,6 +33,18 @@ function readSkillField(block: string, pattern: RegExp): string | undefined {
 
 function isNodeHostedSkillLocator(value: string): boolean {
   return value.startsWith("node://");
+}
+
+function pinFilesystemSkillRoot(skillFilePath: string): PinnedSkillRoot | undefined {
+  if (isNodeHostedSkillLocator(skillFilePath)) {
+    return undefined;
+  }
+  // root() captures the canonical directory identity before yielding. Keeping
+  // this handle ties later companion reads to the selected/materialized root.
+  return createFsSafeRoot(path.dirname(path.resolve(skillFilePath))).then(
+    (pinnedRoot) => ({ ok: true as const, root: pinnedRoot }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
 }
 
 function normalizeSkillRelativePath(relativePath: string): string {
@@ -125,13 +144,15 @@ export function resolveCodeModeSkills(params: {
     if (!name || !location || !source) {
       continue;
     }
+    const sourceFilePath = source.hostFilePath ?? source.filePath;
     result.push({
       name,
       description: [source.description, source.locationNote].filter(Boolean).join("\n"),
       location,
       source: {
-        filePath: source.hostFilePath ?? source.filePath,
+        filePath: sourceFilePath,
         readContent: source.readContent,
+        pinnedRoot: pinFilesystemSkillRoot(sourceFilePath),
       },
       reader: params.reader,
     });
@@ -153,19 +174,24 @@ function assertSkillFileWithinBound(text: string, relativePath: string): string 
 }
 
 async function readFilesystemSkillRelative(
-  skillFilePath: string,
+  pinnedRoot: PinnedSkillRoot | undefined,
   relativePath: string,
 ): Promise<string> {
   const relative = normalizeSkillRelativePath(relativePath);
-  const skillRoot = path.dirname(path.resolve(skillFilePath));
   try {
-    // Selected skill root only. Facade defaults reject symlink/hardlink and
-    // forward maxBytes to locked fs-safe 0.8.1 (O_NOFOLLOW, nlink>1, eager
-    // too-large). The collection sandbox reader would follow a sibling link.
-    const result = await readFileWithinRoot({
-      rootDir: skillRoot,
-      relativePath: relative,
+    if (!pinnedRoot) {
+      throw new FsSafeError("path-mismatch", "selected skill root identity is unavailable");
+    }
+    const resolvedRoot = await pinnedRoot;
+    if (!resolvedRoot.ok) {
+      throw resolvedRoot.error;
+    }
+    // The selected root handle verifies its captured directory identity. Its
+    // defaults reject symlinks/hardlinks and enforce the eager size bound.
+    const result = await resolvedRoot.root.read(relative, {
+      hardlinks: "reject",
       maxBytes: CODE_MODE_SKILL_FILE_MAX_BYTES,
+      symlinks: "reject",
     });
     return result.buffer.toString("utf8");
   } catch (error) {
@@ -224,5 +250,5 @@ export async function readCodeModeSkill(
       `node-hosted skill relative reads require a node skill reader: ${JSON.stringify(relative)}`,
     );
   }
-  return await readFilesystemSkillRelative(skill.source.filePath, relative);
+  return await readFilesystemSkillRelative(skill.source.pinnedRoot, relative);
 }
