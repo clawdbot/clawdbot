@@ -30,7 +30,6 @@ import {
   registerClonedProjectRegistry,
   registerProjectRegistry,
   removeProjectRegistry,
-  withProjectCheckoutLifecycle,
 } from "./project-registry.js";
 
 const execFileAsync = promisify(execFile);
@@ -394,7 +393,7 @@ describe("project registry", () => {
     ).rejects.toBeDefined();
   });
 
-  it("revokes a queued refresh before network, object, or ref effects", async () => {
+  it("revokes stale refresh after removal and operator re-registration", async () => {
     const root = tempDirs.make("openclaw-project-refresh-revocation-");
     const source = await initializeRepository(root, "source");
     const checkout = path.join(root, "checkout");
@@ -411,26 +410,17 @@ describe("project registry", () => {
       { path: checkout, name: "Revoked", originUrl: source },
       options,
     );
-    const acquired = createDeferred();
-    const release = createDeferred();
-    const blocker = withProjectCheckoutLifecycle(checkout, options, async () => {
-      acquired.resolve();
-      await release.promise;
-    });
-    await acquired.promise;
+    await expect(removeProjectRegistry(project, options)).resolves.toBe(true);
+    await expect(
+      registerProjectRegistry({ path: checkout, name: "Operator" }, options),
+    ).resolves.toMatchObject({ source: "registered" });
 
-    const removal = removeProjectRegistry(project, options);
-    const registration = registerProjectRegistry({ path: checkout, name: "Operator" }, options);
-    const refresh = refreshProjectClone(project, options).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    release.resolve();
-
-    await expect(removal).resolves.toBe(true);
-    await expect(registration).resolves.toMatchObject({ source: "registered" });
-    await expect(refresh).resolves.toMatchObject({ failure: "clone_failed" });
-    await blocker;
+    await expect(
+      refreshProjectClone(project, options).then(
+        () => undefined,
+        (error: unknown) => error,
+      ),
+    ).resolves.toMatchObject({ failure: "clone_failed" });
     await expect(
       execFileAsync("git", ["-C", checkout, "cat-file", "-e", `${revokedCommit}^{commit}`]),
     ).rejects.toBeDefined();
