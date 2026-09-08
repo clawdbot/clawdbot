@@ -40,11 +40,11 @@ type CoreGatewayMethodSpecRow = readonly [
   policy?: CoreGatewayMethodPolicy,
 ];
 const CONTROL_PLANE_WRITE = { controlPlaneWrite: true } as const;
-const CHANNEL_ADMINISTRATOR_READ = { channelAdministrator: "read" } as const;
-const CHANNEL_ADMINISTRATOR_MUTATION = { channelAdministrator: "mutation" } as const;
-const CHANNEL_ADMINISTRATOR_WRITE = {
+const CHANNEL_ADMIN_READ = { channelAdministrator: "read" } as const;
+const CHANNEL_ADMIN_MUTATION = { channelAdministrator: "mutation" } as const;
+const CHANNEL_ADMIN_WRITE = {
   ...CONTROL_PLANE_WRITE,
-  ...CHANNEL_ADMINISTRATOR_MUTATION,
+  ...CHANNEL_ADMIN_MUTATION,
 } as const;
 
 // This is the canonical core method policy table: every core handler must appear here so
@@ -75,12 +75,12 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["tts.convert", "tts", "operator.write", "<=2026.7"],
   ["tts.setProvider", "tts", "operator.write", "<=2026.7"],
   ["tts.setPersona", "tts", "operator.write", "<=2026.7"],
-  ["config.get", "config", "operator.read", "<=2026.7", CHANNEL_ADMINISTRATOR_READ],
-  ["config.set", "config", "operator.admin", "<=2026.7", CHANNEL_ADMINISTRATOR_MUTATION],
-  ["config.apply", "config", "operator.admin", "<=2026.7", CHANNEL_ADMINISTRATOR_WRITE],
-  ["config.patch", "config", "operator.admin", "<=2026.7", CHANNEL_ADMINISTRATOR_WRITE],
-  ["config.schema", "config", "operator.read", "<=2026.7", CHANNEL_ADMINISTRATOR_READ],
-  ["config.schema.lookup", "config", "operator.read", "<=2026.7", CHANNEL_ADMINISTRATOR_READ],
+  ["config.get", "config", "operator.read", "<=2026.7", CHANNEL_ADMIN_READ],
+  ["config.set", "config", "operator.admin", "<=2026.7", CHANNEL_ADMIN_MUTATION],
+  ["config.apply", "config", "operator.admin", "<=2026.7", CHANNEL_ADMIN_WRITE],
+  ["config.patch", "config", "operator.admin", "<=2026.7", CHANNEL_ADMIN_WRITE],
+  ["config.schema", "config", "operator.read", "<=2026.7", CHANNEL_ADMIN_READ],
+  ["config.schema.lookup", "config", "operator.read", "<=2026.7", CHANNEL_ADMIN_READ],
   ["exec.approvals.get", "exec-approvals", "operator.admin", "<=2026.7"],
   ["exec.approvals.set", "exec-approvals", "operator.admin", "<=2026.7"],
   ["exec.approvals.node.get", "exec-approvals", "operator.admin", "<=2026.7"],
@@ -185,7 +185,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["worktrees.list", "worktrees", "operator.read", "2026.7"],
   // Read-only git probe, but it accepts arbitrary host paths; keep it at the
   // same bar as starting worktree sessions instead of plain read scope.
-  ["worktrees.branches", "worktrees", "operator.write", "2026.7", CHANNEL_ADMINISTRATOR_READ],
+  ["worktrees.branches", "worktrees", "operator.write", "2026.7", CHANNEL_ADMIN_READ],
   // Params-aware: Gateway paths start at write scope and are containment-checked
   // by the handler; node browsing remains admin-only.
   ["fs.listDir", "fs", "dynamic", "<=2026.7"],
@@ -258,13 +258,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.compaction.list", "sessions-compaction-queries", "operator.read", "<=2026.7"],
   ["sessions.compaction.branch", "sessions-compaction-checkpoints", "operator.write", "<=2026.7"],
   ["sessions.compaction.restore", "sessions-compaction-checkpoints", "operator.admin", "<=2026.7"],
-  [
-    "sessions.branches.list",
-    "sessions-rewind",
-    "operator.read",
-    "<=2026.7",
-    CHANNEL_ADMINISTRATOR_READ,
-  ],
+  ["sessions.branches.list", "sessions-rewind", "operator.read", "<=2026.7", CHANNEL_ADMIN_READ],
   ["sessions.branches.switch", "sessions-rewind", "operator.admin", "<=2026.7"],
   ["sessions.rewind", "sessions-rewind", "operator.admin", "<=2026.7"],
   ["sessions.fork", "sessions-rewind", "operator.write", "<=2026.7"],
@@ -338,16 +332,16 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["node.invoke.progress", "nodes", "node", "<=2026.7"],
   ["node.invoke.result", "nodes", "node", "<=2026.7"],
   ["node.event", "nodes", "node", "<=2026.7"],
-  ["cron.get", "cron", "operator.read", "<=2026.7", CHANNEL_ADMINISTRATOR_READ],
-  ["cron.list", "cron", "operator.read", "<=2026.7", CHANNEL_ADMINISTRATOR_READ],
-  ["cron.status", "cron", "operator.read", "<=2026.7", CHANNEL_ADMINISTRATOR_READ],
-  ["cron.scratch.get", "cron", "operator.admin", "2026.7", CHANNEL_ADMINISTRATOR_READ],
-  ["cron.scratch.set", "cron", "operator.admin", "2026.7", CHANNEL_ADMINISTRATOR_MUTATION],
-  ["cron.add", "cron", "operator.admin", "<=2026.7", CHANNEL_ADMINISTRATOR_WRITE],
-  ["cron.update", "cron", "operator.admin", "<=2026.7", CHANNEL_ADMINISTRATOR_WRITE],
-  ["cron.remove", "cron", "operator.admin", "<=2026.7", CHANNEL_ADMINISTRATOR_WRITE],
-  ["cron.run", "cron", "operator.admin", "<=2026.7", CHANNEL_ADMINISTRATOR_WRITE],
-  ["cron.runs", "cron", "operator.read", "<=2026.7", CHANNEL_ADMINISTRATOR_READ],
+  ["cron.get", "cron", "operator.read", "<=2026.7", CHANNEL_ADMIN_READ],
+  ["cron.list", "cron", "operator.read", "<=2026.7", CHANNEL_ADMIN_READ],
+  ["cron.status", "cron", "operator.read", "<=2026.7", CHANNEL_ADMIN_READ],
+  ["cron.scratch.get", "cron", "operator.admin", "2026.7", CHANNEL_ADMIN_READ],
+  ["cron.scratch.set", "cron", "operator.admin", "2026.7", CHANNEL_ADMIN_MUTATION],
+  ["cron.add", "cron", "operator.admin", "<=2026.7", CHANNEL_ADMIN_WRITE],
+  ["cron.update", "cron", "operator.admin", "<=2026.7", CHANNEL_ADMIN_WRITE],
+  ["cron.remove", "cron", "operator.admin", "<=2026.7", CHANNEL_ADMIN_WRITE],
+  ["cron.run", "cron", "operator.admin", "<=2026.7", CHANNEL_ADMIN_WRITE],
+  ["cron.runs", "cron", "operator.read", "<=2026.7", CHANNEL_ADMIN_READ],
   ["gateway.identity.get", "system", "operator.read", "<=2026.7"],
   // Deprecated read-only compatibility preview; new restart flows request the
   // restart directly, while atomic host suspension uses gateway.suspend.prepare.
@@ -435,13 +429,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["plugins.list", "plugins", "operator.read", "<=2026.7"],
   ["plugins.search", "plugins", "operator.read", "<=2026.7"],
   ["plugins.install", "plugins-mutations", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
-  [
-    "plugins.setEnabled",
-    "plugins-mutations",
-    "operator.admin",
-    "<=2026.7",
-    CHANNEL_ADMINISTRATOR_WRITE,
-  ],
+  ["plugins.setEnabled", "plugins-mutations", "operator.admin", "<=2026.7", CHANNEL_ADMIN_WRITE],
   ["plugins.uninstall", "plugins-mutations", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["plugins.refresh", "plugins", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   // Session PR chips read the session's own checkout metadata, matching the

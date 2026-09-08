@@ -137,11 +137,9 @@ function mintChannelAdmissionEvidence(
   return evidence;
 }
 
-function scopedParticipantRef(params: {
-  channelId: string;
-  accountId?: string;
-  rawPrincipalRef: string | number | null | undefined;
-}): string | undefined {
+function scopedParticipantRef(
+  params: Pick<ChannelIngressResolutionBinding, "channelId" | "accountId" | "rawPrincipalRef">,
+): string | undefined {
   const channelId = params.channelId;
   const accountId = params.accountId || "default";
   const rawPrincipalRef = params.rawPrincipalRef == null ? "" : String(params.rawPrincipalRef);
@@ -154,11 +152,9 @@ function scopedParticipantRef(params: {
   return scoped.length <= 4_096 ? scoped : undefined;
 }
 
-function participantContribution(params: {
-  channelId: string;
-  accountId?: string;
-  rawPrincipalRef: string | number | null | undefined;
-}): ChannelAdmissionContribution {
+function participantContribution(
+  params: Pick<ChannelIngressResolutionBinding, "channelId" | "accountId" | "rawPrincipalRef">,
+): ChannelAdmissionContribution {
   const rawPrincipalRef = scopedParticipantRef(params);
   return Object.freeze(
     rawPrincipalRef
@@ -609,10 +605,7 @@ export function combineChannelAdmissionEvidence(
     return evidence[0];
   }
   if (evidence.length > CHANNEL_ADMISSION_EVIDENCE_MAX_CONTRIBUTIONS) {
-    return mintChannelAdmissionEvidence({
-      kind: "leaf",
-      contribution: Object.freeze({ participant: { state: "unknown" } }),
-    });
+    return unknownChannelAdmissionEvidence();
   }
   return mintChannelAdmissionEvidence({ kind: "aggregate", sources: Object.freeze([...evidence]) });
 }
@@ -677,11 +670,7 @@ function consumeContributions(params: {
     : [{ participant: { state: "unknown" } }];
 }
 
-function freezeConsumed(
-  value: Omit<ConsumedChannelAdmissionEvidence, "invoker"> & {
-    invoker: ConsumedChannelAdmissionEvidence["invoker"];
-  },
-): ConsumedChannelAdmissionEvidence {
+function freezeConsumed(value: ConsumedChannelAdmissionEvidence): ConsumedChannelAdmissionEvidence {
   return Object.freeze({
     ...value,
     invoker: Object.freeze(value.invoker),
@@ -747,13 +736,8 @@ export function consumeChannelAdmissionEvidence(
 }
 
 /** Queue the channel decision after its exact identity tuple on the shared audit FIFO. */
-export function recordChannelAdmissionDecision(params: {
-  contextId: ChannelAdmissionDecisionReceiptInput["contextId"];
-  executionId: ChannelAdmissionDecisionReceiptInput["executionId"];
-  runId: ChannelAdmissionDecisionReceiptInput["runId"];
-  occurredAt: ChannelAdmissionDecisionReceiptInput["occurredAt"];
-  coverageState: ChannelAdmissionDecisionReceiptInput["coverageState"];
-  identifierAuthentication: ChannelAdmissionDecisionReceiptInput["identifierAuthentication"];
-}): boolean {
+export function recordChannelAdmissionDecision(
+  params: ChannelAdmissionDecisionReceiptInput,
+): boolean {
   return state.decisionSink?.(createChannelAdmissionDecisionReceipt(params)) ?? false;
 }

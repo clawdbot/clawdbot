@@ -158,7 +158,7 @@ test("authenticated channel admission controls cross-session cron effects over t
   const expectPersistedJob = async (name: string) => {
     const job = (
       await loadCronStore(expectDefined(testState.cronStorePath, "isolated cron store"))
-    ).jobs.find((job) => job.id === jobId);
+    ).jobs.find((candidate) => candidate.id === jobId);
     expect(job).toMatchObject({
       name,
       owner: { agentId: "main", sessionKey: "agent:main:main", accountId: "default" },
