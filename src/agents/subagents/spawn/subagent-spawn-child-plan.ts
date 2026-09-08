@@ -17,6 +17,7 @@ import { resolveSpawnSandboxError, mintSpawnSessionKey } from "../../spawn-plan.
 import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
 import {
   mapToolContextToSpawnedRunMetadata,
+  resolveExplicitSpawnedCwd,
   resolveSpawnedWorkspaceInheritance,
 } from "../../spawned-context.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
@@ -158,8 +159,7 @@ export async function resolveSubagentChildPlan(params: {
   sandboxMode: "require" | "inherit";
   swarmEnabled: boolean;
 }): Promise<ResolveSubagentChildPlanResult> {
-  const requestedCwd = normalizeOptionalString(params.request.cwd);
-  const spawnedCwd = requestedCwd ? resolveUserPath(requestedCwd) : undefined;
+  const spawnedCwd = resolveExplicitSpawnedCwd(params.request.cwd);
   const toolSpawnMetadata = mapToolContextToSpawnedRunMetadata({
     agentGroupId: params.ctx.agentGroupId,
     agentGroupChannel: params.ctx.agentGroupChannel,

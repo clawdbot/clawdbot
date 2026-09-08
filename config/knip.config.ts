@@ -135,6 +135,7 @@ const repositoryScriptEntries = [
   // Maintainer proof harnesses are invoked manually from PR evidence.
   "scripts/proof-126924-isolated-gateway.ts!",
   "scripts/proof-126924-subagent-wait-expiry-not-death.ts!",
+  "scripts/proof-135480-subagent-shared-cwd-advisory.ts!",
   "scripts/qa-coverage-report.ts!",
   "scripts/qa-parity-report.ts!",
   "scripts/resolve-frozen-codex-live-suite.mjs!",

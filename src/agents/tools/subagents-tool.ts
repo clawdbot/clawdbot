@@ -190,6 +190,8 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
           total: list.total,
           taskTotal: tasks.length,
           tasks,
+          sharedCwdGroupTotal: list.sharedCwdGroupTotal,
+          sharedCwdGroups: list.sharedCwdGroups,
           active: list.active.map(({ line: _line, ...view }) => view),
           recent: list.recent.map(({ line: _line, ...view }) => view),
           text: list.text,
