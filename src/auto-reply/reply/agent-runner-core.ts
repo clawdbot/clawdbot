@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
 import { hasVisibleCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import { resolveFailoverStatus, type FailoverReason } from "../../agents/failover-error.js";
 import type { ModelRef } from "../../agents/model-ref-shared.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -75,9 +76,28 @@ export function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): Rep
   );
 }
 
+function isTransportUnreachableFailoverReason(reason: FailoverReason): boolean {
+  // Match resolveFailoverStatus's 5xx/timeout partition — the only classes where
+  // "couldn't reach" is accurate for the configured backend (#141694).
+  const status = resolveFailoverStatus(reason);
+  return (
+    status === 408 || status === 502 || status === 503 || (status !== undefined && status >= 500)
+  );
+}
+
+function shouldClaimConfiguredBackendUnreachable(
+  attempts: ReadonlyArray<{ reason: FailoverReason }>,
+): boolean {
+  return (
+    attempts.length > 0 &&
+    attempts.every((attempt) => isTransportUnreachableFailoverReason(attempt.reason))
+  );
+}
+
 export function buildSilentFallbackFailurePayload(params: {
   fallbackTransition: ReturnType<typeof resolveFallbackTransition>;
   fallbackFailureKnown: boolean;
+  fallbackAttempts?: ReadonlyArray<{ reason: FailoverReason }>;
   isHeartbeat: boolean;
   hasSuccessfulTerminalDelivery: boolean;
   allowEmptyAssistantReplyAsSilent?: boolean;
@@ -95,10 +115,14 @@ export function buildSilentFallbackFailurePayload(params: {
   ) {
     return undefined;
   }
+  const selected = params.fallbackTransition.selectedModelRef;
+  const active = params.fallbackTransition.activeModelRef;
+  const claimUnreachable = shouldClaimConfiguredBackendUnreachable(params.fallbackAttempts ?? []);
+  const primary = claimUnreachable
+    ? `⚠️ I couldn't reach the configured model backend ${selected}. `
+    : `⚠️ The configured model backend ${selected} responded but produced no usable reply. `;
   return markReplyPayloadForSourceSuppressionDelivery({
-    text:
-      `⚠️ I couldn't reach the configured model backend ${params.fallbackTransition.selectedModelRef}. ` +
-      `Fallback used ${params.fallbackTransition.activeModelRef}, but it produced no visible reply.`,
+    text: `${primary}Fallback used ${active}, but it produced no visible reply.`,
     isError: true,
   });
 }

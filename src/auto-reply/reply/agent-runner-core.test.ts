@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TemplateContext } from "../templating.js";
 import {
+  buildSilentFallbackFailurePayload,
   resolveAdmittedRunSessionFile,
   resolveReplyRunDeliveryContext,
 } from "./agent-runner-core.js";
@@ -58,5 +59,48 @@ describe("resolveReplyRunDeliveryContext", () => {
       accountId: "work",
       threadId,
     });
+  });
+});
+
+describe("buildSilentFallbackFailurePayload", () => {
+  const transition = {
+    fallbackActive: true,
+    selectedModelRef: "openrouter/z-ai/glm-5.3",
+    activeModelRef: "amazon-bedrock/claude-haiku",
+  } as Parameters<typeof buildSilentFallbackFailurePayload>[0]["fallbackTransition"];
+
+  const base = {
+    fallbackTransition: transition,
+    fallbackFailureKnown: true,
+    isHeartbeat: false,
+    hasSuccessfulTerminalDelivery: false,
+  };
+
+  it("keeps couldn't-reach wording for transport-class attempts", () => {
+    const payload = buildSilentFallbackFailurePayload({
+      ...base,
+      fallbackAttempts: [{ reason: "timeout" }, { reason: "server_error" }],
+    });
+    expect(payload?.text).toContain("couldn't reach the configured model backend");
+    expect(payload?.text).toContain(transition.selectedModelRef);
+    expect(payload?.text).toContain(transition.activeModelRef);
+  });
+
+  it("avoids couldn't-reach when attempts are format/4xx", () => {
+    const payload = buildSilentFallbackFailurePayload({
+      ...base,
+      fallbackAttempts: [{ reason: "format" }, { reason: "format" }],
+    });
+    expect(payload?.text).toContain("responded but produced no usable reply");
+    expect(payload?.text).not.toContain("couldn't reach");
+  });
+
+  it("does not claim unreachable when attempts are empty", () => {
+    const payload = buildSilentFallbackFailurePayload({
+      ...base,
+      fallbackAttempts: [],
+    });
+    expect(payload?.text).toContain("responded but produced no usable reply");
+    expect(payload?.text).not.toContain("couldn't reach");
   });
 });

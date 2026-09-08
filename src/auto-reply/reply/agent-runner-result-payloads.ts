@@ -308,6 +308,7 @@ export async function prepareReplyAgentPayloads(state: {
     const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
       fallbackTransition,
       fallbackFailureKnown,
+      fallbackAttempts,
       isHeartbeat,
       hasSuccessfulTerminalDelivery: successfulTerminalDelivery,
       allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
