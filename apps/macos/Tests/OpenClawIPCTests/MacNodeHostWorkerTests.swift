@@ -302,6 +302,33 @@ struct MacNodeHostWorkerTests {
             ["system", "mcp"]) == ["canvas", "screen", "system", "mcp"])
     }
 
+    @Test func `local worker manifest omits session catalogs`() throws {
+        let manifest = MacNodeHostManifest(
+            version: "test",
+            caps: [
+                "system",
+                MacNodeCodexThreadCatalogContract.capability,
+                MacNodeClaudeSessionCatalogContract.capability,
+            ],
+            commands: [
+                "system.run",
+                MacNodeCodexThreadCatalogContract.listCommand,
+                MacNodeClaudeSessionCatalogContract.listCommand,
+            ],
+            computerUse: nil,
+            pathEnv: "/usr/bin:/bin")
+        let worker = try #require(MacNodeModeCoordinator.workerManifest(
+            manifest,
+            for: .cua,
+            connectionMode: .local))
+        #expect(worker.caps == ["system"])
+        #expect(worker.commands == ["system.run"])
+        #expect(MacNodeModeCoordinator.workerManifest(
+            manifest,
+            for: .cua,
+            connectionMode: .remote) == manifest)
+    }
+
     @Test func `provider selection filters command ownership and publishes each provider descriptor`() throws {
         let descriptor = OpenClawProtocol.AnyCodable([
             "contractVersion": OpenClawProtocol.AnyCodable(2),

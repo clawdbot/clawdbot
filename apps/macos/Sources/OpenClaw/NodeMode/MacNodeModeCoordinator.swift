@@ -562,7 +562,9 @@ final class MacNodeModeCoordinator: NSObject {
         let config = endpoint.config
         let provider = ComputerControlProvider.current()
         let (workerManifest, workerUnavailable) =
-            try await self.resolveWorkerManifestForConnection(provider: provider)
+            try await self.resolveWorkerManifestForConnection(
+                provider: provider,
+                connectionMode: AppStateStore.shared.connectionMode)
         let nativeCaps = self.currentCaps(
             browserControlEnabled: browserControlEnabled,
             cameraEnabled: cameraEnabled,
@@ -879,10 +881,13 @@ final class MacNodeModeCoordinator: NSObject {
     }
 
     func resolveWorkerManifestForConnectionForTesting(
-        provider: ComputerControlProvider = .peekaboo) async throws
+        provider: ComputerControlProvider = .peekaboo,
+        connectionMode: AppState.ConnectionMode = .remote) async throws
         -> (manifest: MacNodeHostManifest?, unavailable: (reason: String, diagnostic: String?)?)
     {
-        try await self.resolveWorkerManifestForConnection(provider: provider)
+        try await self.resolveWorkerManifestForConnection(
+            provider: provider,
+            connectionMode: connectionMode)
     }
     #endif
 
@@ -956,13 +961,15 @@ extension MacNodeModeCoordinator {
     /// retries shortly); every other worker failure connects this Mac with
     /// native capabilities only and surfaces the reason to the operator.
     private func resolveWorkerManifestForConnection(
-        provider: ComputerControlProvider) async throws
+        provider: ComputerControlProvider,
+        connectionMode: AppState.ConnectionMode) async throws
         -> (manifest: MacNodeHostManifest?, unavailable: (reason: String, diagnostic: String?)?)
     {
         do {
             let manifest = try await Self.workerManifest(
                 self.startNodeHostWorkerIfConfigured(provider: provider),
-                for: provider)
+                for: provider,
+                connectionMode: connectionMode)
             return (manifest, nil)
         } catch let backoff as MacNodeHostWorkerRetryPolicy.RetryBackoffPending {
             throw backoff
@@ -1319,19 +1326,33 @@ extension MacNodeModeCoordinator {
 
     nonisolated static func workerManifest(
         _ manifest: MacNodeHostManifest?,
-        for provider: ComputerControlProvider) -> MacNodeHostManifest?
+        for provider: ComputerControlProvider,
+        connectionMode: AppState.ConnectionMode = .remote) -> MacNodeHostManifest?
     {
         guard let manifest else { return nil }
-        guard provider == .peekaboo else { return manifest }
-        let providerCommands = Set([
-            MacNodeScreenCommand.snapshot.rawValue,
-            OpenClawComputerCommand.act.rawValue,
-        ])
+        var omittedCaps = Set<String>()
+        var omittedCommands = Set<String>()
+        if connectionMode == .local {
+            omittedCaps = Set([
+                MacNodeCodexThreadCatalogContract.capability,
+                MacNodeClaudeSessionCatalogContract.capability,
+            ])
+            omittedCommands = Set(
+                MacNodeCodexThreadCatalogContract.commands +
+                    MacNodeClaudeSessionCatalogContract.commands)
+        }
+        if provider == .peekaboo {
+            omittedCaps.insert(OpenClawCapability.computer.rawValue)
+            omittedCommands.formUnion([
+                MacNodeScreenCommand.snapshot.rawValue,
+                OpenClawComputerCommand.act.rawValue,
+            ])
+        }
         return MacNodeHostManifest(
             version: manifest.version,
-            caps: manifest.caps.filter { $0 != OpenClawCapability.computer.rawValue },
-            commands: manifest.commands.filter { !providerCommands.contains($0) },
-            computerUse: nil,
+            caps: manifest.caps.filter { !omittedCaps.contains($0) },
+            commands: manifest.commands.filter { !omittedCommands.contains($0) },
+            computerUse: provider == .peekaboo ? nil : manifest.computerUse,
             pathEnv: manifest.pathEnv)
     }
 
