@@ -249,6 +249,7 @@ export async function readIncrementalChatHistoryTail(params: {
   let projectionDirty = false;
   let scanLimit = rawHistoryWindowMessages;
   let scannedBytes = 0;
+  const unmeasuredPages: unknown[][] = [];
   let nextChunkMessages = SILENT_CHAT_HISTORY_TAIL_SCAN_CHUNK_MESSAGES;
   while (offset + rawPageMessages < readPage.totalMessages) {
     if (projectionDirty && estimatedVisibleMessages >= params.max) {
@@ -302,9 +303,17 @@ export async function readIncrementalChatHistoryTail(params: {
     estimatedVisibleMessages += project(chunkRawMessages, contextMessage, false, []).projection
       .messages.length;
     projectionDirty = true;
-    scannedBytes += Buffer.byteLength(JSON.stringify(page.messages), "utf8");
-    if (rawPageMessages > rawHistoryWindowMessages && scannedBytes >= params.maxBytes) {
-      break;
+    unmeasuredPages.push(page.messages);
+    if (rawPageMessages > rawHistoryWindowMessages) {
+      // The byte guard only bounds the extended sparse scan. Preserve its exact
+      // accounting without serializing pages that already fill the ordinary window.
+      for (const messages of unmeasuredPages) {
+        scannedBytes += Buffer.byteLength(JSON.stringify(messages), "utf8");
+      }
+      unmeasuredPages.length = 0;
+      if (scannedBytes >= params.maxBytes) {
+        break;
+      }
     }
     // Grow sparse scans geometrically while bounding each indexed page's allocation.
     nextChunkMessages = Math.min(
