@@ -32,7 +32,7 @@ export function isDesktopObserveRequesterCurrent(
   if (!requester) {
     return true;
   }
-  return requester.isCurrent() !== false && requester.signal?.aborted !== true;
+  return requester.isCurrent() && !requester.signal?.aborted;
 }
 
 /**
