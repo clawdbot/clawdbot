@@ -9,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveTelegramConfigReasoningDefault } from "./agent-config.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
-import type { TelegramMessageContext } from "./bot-message-context.js";
+import type { TelegramReplyContext as TelegramMessageContext } from "./bot-message-context.js";
 import { getSessionEntry } from "./bot-message-dispatch.runtime.js";
 import type {
   CurrentTurnTranscriptFinal,

@@ -9,6 +9,7 @@ import {
   createChannelMessageReplyPipeline,
   resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { isFastModeAutoProgressPayload } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { sendPayload } from "./bot-message-dispatch-delivery.js";
@@ -104,218 +105,233 @@ export async function runTelegramDispatchTurn(turn: Turn) {
         logVerbose(`telegram reply error callback failed: ${String(callbackError)}`);
       });
     };
-    const turnResult = await runChannelInboundEvent({
+    const resolveTurn = (): ChannelInboundTurnPlan<"provider_message_sending"> => ({
+      cfg: turn.cfg,
       channel: "telegram",
       accountId: context.route.accountId,
-      raw: context,
-      adapter: {
-        ingest: () => ({
-          id: context.ctxPayload.MessageSid ?? `${context.chatId}:${Date.now()}`,
-          timestamp:
-            typeof context.ctxPayload.Timestamp === "number"
-              ? context.ctxPayload.Timestamp
-              : undefined,
-          rawText: context.ctxPayload.RawBody ?? "",
-          textForAgent: context.ctxPayload.BodyForAgent,
-          textForCommands: context.ctxPayload.CommandBody,
-          raw: context,
-        }),
-        resolveTurn: (): ChannelInboundTurnPlan<"provider_message_sending"> => ({
-          cfg: turn.cfg,
-          channel: "telegram",
-          accountId: context.route.accountId,
-          route: {
-            agentId: context.route.agentId,
-            sessionKey: context.route.sessionKey,
-          },
-          ctxPayload: context.ctxPayload,
-          record: context.turn.record,
-          dispatchReplyFromConfig: turn.opts.dispatchReplyFromConfig,
-          delivery: {
-            deliverWithProviderMessageSending: async (payload, info) =>
-              await deliverReply(turn, payload, info),
-            // The shipped SDK declaration stays void; core still awaits the runtime promise.
-            onError: handleDeliveryError as NonNullable<
-              ChannelInboundTurnPlan["delivery"]["onError"]
-            >,
-          },
-          dispatcherOptions: {
-            ...replyPipeline,
-            humanDelay: resolveHumanDelayConfig(turn.cfg, context.route.agentId),
-            beforeDeliver: async (payload) => payload,
-            onBeforeDeliverCancelled: (payload, info) =>
-              handleBeforeDeliverCancelled(turn, payload, info),
-            onSkip: (payload, info) => handleReplySkip(turn, payload, info),
-          },
-          replyOptions: {
-            skillFilter: context.skillFilter,
-            disableBlockStreaming: turn.disableBlockStreaming,
-            preserveProgressCallbackStartOrder: true,
-            abortSignal: turn.turnAdoptionLifecycle?.abortSignal,
-            turnAdoptionLifecycle: turn.turnAdoptionLifecycle
-              ? {
-                  admission: turn.turnAdoptionLifecycle.admission ?? "exclusive",
-                  onAdopted: turn.turnAdoptionLifecycle.onAdopted,
-                  onDeferred: turn.turnAdoptionLifecycle.onDeferred,
-                  onDeferredHeartbeat: turn.turnAdoptionLifecycle.onDeferredHeartbeat,
-                  onAbandoned: turn.turnAdoptionLifecycle.onAbandoned,
-                  abortSignal: turn.turnAdoptionLifecycle.abortSignal,
-                }
-              : undefined,
-            sourceReplyDeliveryMode: isRoomEvent ? "message_tool_only" : undefined,
-            queuedDeliveryCorrelations: isRoomEvent
-              ? [{ begin: beginDeliveryCorrelation }]
-              : undefined,
-            suppressTyping: isRoomEvent,
-            onPartialReply:
-              turn.answerLane.stream || turn.reasoningLane.stream
-                ? (payload) => {
-                    const queued = enqueueDraftEvent(turn, async () => {
-                      await ingestDraftLaneSegments(turn, payload);
-                    });
-                    // Queue settlement records draft intent; a numeric provider message ID
-                    // proves operator visibility for terminal recovery.
-                    return queued.then(async () => {
-                      const answerStream = turn.answerLane.stream;
-                      await answerStream?.waitForInFlight();
-                      const providerMessageId = answerStream?.messageId();
-                      return (
-                        typeof providerMessageId === "number" && Number.isFinite(providerMessageId)
-                      );
-                    });
-                  }
-                : undefined,
-            onBlockReplyQueued: turn.answerLane.stream
-              ? (payload, blockContext) => {
-                  const queued = enqueueDraftEvent(turn, async () => {
-                    await prepareQueuedAnswerBlock(turn, payload, blockContext);
-                  });
-                  return queued.then(() => false);
-                }
-              : undefined,
-            onReasoningStream: turn.reasoningLane.stream
-              ? (payload) => {
-                  const queued = enqueueDraftEvent(turn, async () => {
-                    if (turn.splitReasoningOnNextStream) {
-                      repositionLaneForNewMessage(turn, turn.reasoningLane);
-                      turn.splitReasoningOnNextStream = false;
-                    }
-                    await ingestDraftLaneSegments(turn, payload, true);
-                  });
-                  return queued.then(() => false);
-                }
-              : turn.streamReasoningInProgressDraft
-                ? (payload) => {
-                    const queued = enqueueDraftEvent(turn, async () => {
-                      await pushReasoningProgress(turn, payload);
-                    });
-                    return queued.then(() => false);
-                  }
-                : undefined,
-            onReasoningProgress: turn.answerLane.stream
-              ? (payload) =>
-                  enqueueDraftEvent(turn, async () => {
-                    await pushThinkingTokenProgress(turn, payload.progressTokens);
-                  })
-              : undefined,
-            onAssistantMessageStart: turn.answerLane.stream
-              ? () => {
-                  const queued = enqueueDraftEvent(turn, async () => {
-                    resetReasoningStepState(turn);
-                    turn.finalAnswerDelivered = false;
-                    turn.progressCompositor.beginAssistantMessage();
-                    if (turn.answerLane.finalized) {
-                      await rotateLaneForNewMessage(turn, turn.answerLane);
-                      turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
-                    } else if (
-                      turn.answerLane.hasStreamedMessage &&
-                      !turn.activeAnswerDraftIsToolProgressOnly &&
-                      (turn.activeAnswerBlockDelivery || turn.queuedAnswerBlockRotations.length > 0)
-                    ) {
-                      // Only accepted blocks need a new message. A provider retry must
-                      // keep editing its unfinished preview instead of retaining it as final.
-                      turn.rotateAnswerLaneWhenQueuedBlocksSettle = true;
-                    }
-                  });
-                  return queued.then(() => false);
-                }
-              : undefined,
-            onReasoningEnd: turn.reasoningLane.stream
-              ? () => {
-                  const queued = enqueueDraftEvent(turn, async () => {
-                    turn.splitReasoningOnNextStream = turn.reasoningLane.hasStreamedMessage;
-                    turn.progressCompositor.resetReasoningProgress();
-                  });
-                  return queued.then(() => false);
-                }
-              : () => false,
-            onQueuedFollowupAdmitted: () => {
-              beginDraftQueuedFollowup(turn);
-              turn.finalAnswerDeliveryStarted = false;
-              turn.finalAnswerDelivered = false;
-              turn.progressCompositor.beginNewTurn({ force: true });
-            },
-            onQueuedFollowupSettled: async () => {
-              turn.progressCompositor.cancel();
-              await waitForDraftEvents(turn);
-              await cleanupDrafts(turn, turn.isSuperseded());
-            },
-            suppressDefaultToolProgressMessages:
-              !turn.streamDeliveryEnabled || Boolean(turn.answerLane.stream),
-            suppressToolProgressMessages: !toolProgressEnabled,
-            allowProgressCallbacksWhenSourceDeliverySuppressed:
-              !isRoomEvent && Boolean(turn.answerLane.stream),
-            onVerboseProgressVisibility: (isActive) => {
-              turn.verboseProgressActive = isActive;
-            },
-            commentaryProgressEnabled:
-              turn.streamMode === "progress" ? turn.commentaryProgressEnabled : undefined,
-            progressPreambleEnabled: turn.progressPreambleEnabled,
-            commentaryPayloadsEnabled: turn.progressPreambleEnabled,
-            // The progress draft is the only commentary owner and retires before
-            // the clean final. A durable copy would restore the queue burst this
-            // owner boundary prevents; verbose still controls durable tool output.
-            shouldDeliverCommentaryPayloads:
-              turn.progressPreambleEnabled === true ? () => false : undefined,
-            reasoningPayloadsEnabled: turn.durableReasoningPayloadsEnabled,
-            onToolStart: (payload) => handleToolStart(turn, payload),
-            onItemEvent: (payload) => handleItemEvent(turn, payload),
-            onPlanUpdate: (payload) => handlePlanUpdate(turn, payload),
-            onApprovalEvent: (payload) => handleApprovalEvent(turn, payload),
-            onToolResult: async (payload) => {
-              const text = payload.text?.trim();
-              if (!text) {
-                return false;
+      route: {
+        agentId: context.route.agentId,
+        sessionKey: context.route.sessionKey,
+      },
+      ctxPayload: context.ctxPayload,
+      record:
+        context.ctxPayload.InternalTurnSource === "restart-recovery"
+          ? undefined
+          : context.turn.record,
+      dispatchReplyFromConfig: turn.opts.dispatchReplyFromConfig,
+      delivery: {
+        deliverWithProviderMessageSending: async (payload, info) =>
+          await deliverReply(turn, payload, info),
+        // The shipped SDK declaration stays void; core still awaits the runtime promise.
+        onError: handleDeliveryError as NonNullable<ChannelInboundTurnPlan["delivery"]["onError"]>,
+      },
+      dispatcherOptions: {
+        ...replyPipeline,
+        humanDelay: resolveHumanDelayConfig(turn.cfg, context.route.agentId),
+        beforeDeliver: async (payload) => payload,
+        onBeforeDeliverCancelled: (payload, info) =>
+          handleBeforeDeliverCancelled(turn, payload, info),
+        onSkip: (payload, info) => handleReplySkip(turn, payload, info),
+      },
+      replyOptions: {
+        skillFilter: context.skillFilter,
+        disableBlockStreaming: turn.disableBlockStreaming,
+        preserveProgressCallbackStartOrder: true,
+        abortSignal: turn.turnAdoptionLifecycle?.abortSignal,
+        turnAdoptionLifecycle: turn.turnAdoptionLifecycle
+          ? {
+              admission: turn.turnAdoptionLifecycle.admission ?? "exclusive",
+              onAdopted: turn.turnAdoptionLifecycle.onAdopted,
+              onDeferred: turn.turnAdoptionLifecycle.onDeferred,
+              onDeferredHeartbeat: turn.turnAdoptionLifecycle.onDeferredHeartbeat,
+              onAbandoned: turn.turnAdoptionLifecycle.onAbandoned,
+              abortSignal: turn.turnAdoptionLifecycle.abortSignal,
+            }
+          : undefined,
+        sourceReplyDeliveryMode: isRoomEvent ? "message_tool_only" : undefined,
+        queuedDeliveryCorrelations: isRoomEvent ? [{ begin: beginDeliveryCorrelation }] : undefined,
+        suppressTyping: isRoomEvent,
+        onPartialReply:
+          turn.answerLane.stream || turn.reasoningLane.stream
+            ? (payload) => {
+                const queued = enqueueDraftEvent(turn, async () => {
+                  await ingestDraftLaneSegments(turn, payload);
+                });
+                // Queue settlement records draft intent; a numeric provider message ID
+                // proves operator visibility for terminal recovery.
+                return queued.then(async () => {
+                  const answerStream = turn.answerLane.stream;
+                  await answerStream?.waitForInFlight();
+                  const providerMessageId = answerStream?.messageId();
+                  return (
+                    typeof providerMessageId === "number" && Number.isFinite(providerMessageId)
+                  );
+                });
               }
-              const progressId = payload.channelData?.openclawToolProgressId;
-              const updatedDraft = await pushToolProgress(turn, text, {
-                startImmediately: true,
-                id: typeof progressId === "string" ? progressId : undefined,
+            : undefined,
+        onBlockReplyQueued: turn.answerLane.stream
+          ? (payload, blockContext) => {
+              const queued = enqueueDraftEvent(turn, async () => {
+                await prepareQueuedAnswerBlock(turn, payload, blockContext);
               });
-              if (updatedDraft) {
-                return true;
+              return queued.then(() => false);
+            }
+          : undefined,
+        onReasoningStream: turn.reasoningLane.stream
+          ? (payload) => {
+              const queued = enqueueDraftEvent(turn, async () => {
+                if (turn.splitReasoningOnNextStream) {
+                  repositionLaneForNewMessage(turn, turn.reasoningLane);
+                  turn.splitReasoningOnNextStream = false;
+                }
+                await ingestDraftLaneSegments(turn, payload, true);
+              });
+              return queued.then(() => false);
+            }
+          : turn.streamReasoningInProgressDraft
+            ? (payload) => {
+                const queued = enqueueDraftEvent(turn, async () => {
+                  await pushReasoningProgress(turn, payload);
+                });
+                return queued.then(() => false);
               }
-              if (isFastModeAutoProgressPayload(payload) && !canPushToolProgress(turn)) {
-                await sendPayload(turn, payload);
-                return true;
-              }
-              return false;
-            },
-            onCommandOutput: (payload) => handleCommandOutput(turn, payload),
-            onPatchSummary: (payload) => handlePatchSummary(turn, payload),
-            // Ambient room events are intentionally invisible, including reactions.
-            // User requests in group chats are not room_event turns and retain these callbacks.
-            onCompactionStart: isRoomEvent
-              ? undefined
-              : async () => await handleCompactionStart(turn),
-            onCompactionEnd: isRoomEvent
-              ? undefined
-              : async (payload) => await handleCompactionEnd(turn, payload),
-            onModelSelected,
-          },
-        }),
+            : undefined,
+        onReasoningProgress: turn.answerLane.stream
+          ? (payload) =>
+              enqueueDraftEvent(turn, async () => {
+                await pushThinkingTokenProgress(turn, payload.progressTokens);
+              })
+          : undefined,
+        onAssistantMessageStart: turn.answerLane.stream
+          ? () => {
+              const queued = enqueueDraftEvent(turn, async () => {
+                resetReasoningStepState(turn);
+                turn.finalAnswerDelivered = false;
+                turn.progressCompositor.beginAssistantMessage();
+                if (turn.answerLane.finalized) {
+                  await rotateLaneForNewMessage(turn, turn.answerLane);
+                  turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
+                } else if (
+                  turn.answerLane.hasStreamedMessage &&
+                  !turn.activeAnswerDraftIsToolProgressOnly &&
+                  (turn.activeAnswerBlockDelivery || turn.queuedAnswerBlockRotations.length > 0)
+                ) {
+                  // Only accepted blocks need a new message. A provider retry must
+                  // keep editing its unfinished preview instead of retaining it as final.
+                  turn.rotateAnswerLaneWhenQueuedBlocksSettle = true;
+                }
+              });
+              return queued.then(() => false);
+            }
+          : undefined,
+        onReasoningEnd: turn.reasoningLane.stream
+          ? () => {
+              const queued = enqueueDraftEvent(turn, async () => {
+                turn.splitReasoningOnNextStream = turn.reasoningLane.hasStreamedMessage;
+                turn.progressCompositor.resetReasoningProgress();
+              });
+              return queued.then(() => false);
+            }
+          : () => false,
+        onQueuedFollowupAdmitted: () => {
+          beginDraftQueuedFollowup(turn);
+          turn.finalAnswerDeliveryStarted = false;
+          turn.finalAnswerDelivered = false;
+          turn.progressCompositor.beginNewTurn({ force: true });
+        },
+        onQueuedFollowupSettled: async () => {
+          turn.progressCompositor.cancel();
+          await waitForDraftEvents(turn);
+          await cleanupDrafts(turn, turn.isSuperseded());
+        },
+        suppressDefaultToolProgressMessages:
+          !turn.streamDeliveryEnabled || Boolean(turn.answerLane.stream),
+        suppressToolProgressMessages: !toolProgressEnabled,
+        allowProgressCallbacksWhenSourceDeliverySuppressed:
+          !isRoomEvent && Boolean(turn.answerLane.stream),
+        onVerboseProgressVisibility: (isActive) => {
+          turn.verboseProgressActive = isActive;
+        },
+        commentaryProgressEnabled:
+          turn.streamMode === "progress" ? turn.commentaryProgressEnabled : undefined,
+        progressPreambleEnabled: turn.progressPreambleEnabled,
+        commentaryPayloadsEnabled: turn.progressPreambleEnabled,
+        // The progress draft is the only commentary owner and retires before
+        // the clean final. A durable copy would restore the queue burst this
+        // owner boundary prevents; verbose still controls durable tool output.
+        shouldDeliverCommentaryPayloads:
+          turn.progressPreambleEnabled === true ? () => false : undefined,
+        reasoningPayloadsEnabled: turn.durableReasoningPayloadsEnabled,
+        onToolStart: (payload) => handleToolStart(turn, payload),
+        onItemEvent: (payload) => handleItemEvent(turn, payload),
+        onPlanUpdate: (payload) => handlePlanUpdate(turn, payload),
+        onApprovalEvent: (payload) => handleApprovalEvent(turn, payload),
+        onToolResult: async (payload) => {
+          const text = payload.text?.trim();
+          if (!text) {
+            return false;
+          }
+          const progressId = payload.channelData?.openclawToolProgressId;
+          const updatedDraft = await pushToolProgress(turn, text, {
+            startImmediately: true,
+            id: typeof progressId === "string" ? progressId : undefined,
+          });
+          if (updatedDraft) {
+            return true;
+          }
+          if (isFastModeAutoProgressPayload(payload) && !canPushToolProgress(turn)) {
+            await sendPayload(turn, payload);
+            return true;
+          }
+          return false;
+        },
+        onCommandOutput: (payload) => handleCommandOutput(turn, payload),
+        onPatchSummary: (payload) => handlePatchSummary(turn, payload),
+        // Ambient room events are intentionally invisible, including reactions.
+        // User requests in group chats are not room_event turns and retain these callbacks.
+        onCompactionStart: isRoomEvent ? undefined : async () => await handleCompactionStart(turn),
+        onCompactionEnd: isRoomEvent
+          ? undefined
+          : async (payload) => await handleCompactionEnd(turn, payload),
+        onModelSelected,
       },
     });
+    const recoveryPlan =
+      context.ctxPayload.InternalTurnSource === "restart-recovery" ? resolveTurn() : undefined;
+    const turnResult = recoveryPlan
+      ? {
+          dispatched: true,
+          dispatchResult: await dispatchReplyWithBufferedBlockDispatcher({
+            cfg: recoveryPlan.cfg,
+            ctx: context.ctxPayload,
+            dispatchReplyFromConfig: recoveryPlan.dispatchReplyFromConfig,
+            dispatcherOptions: {
+              ...recoveryPlan.dispatcherOptions,
+              deliver: recoveryPlan.delivery.deliverWithProviderMessageSending,
+              onError: recoveryPlan.delivery.onError,
+            },
+            replyOptions: recoveryPlan.replyOptions,
+          }),
+        }
+      : await runChannelInboundEvent({
+          channel: "telegram",
+          accountId: context.route.accountId,
+          raw: context,
+          adapter: {
+            ingest: () => ({
+              id: context.ctxPayload.MessageSid ?? `${context.chatId}:${Date.now()}`,
+              timestamp:
+                typeof context.ctxPayload.Timestamp === "number"
+                  ? context.ctxPayload.Timestamp
+                  : undefined,
+              rawText: context.ctxPayload.RawBody ?? "",
+              textForAgent: context.ctxPayload.BodyForAgent,
+              textForCommands: context.ctxPayload.CommandBody,
+              raw: context,
+            }),
+            resolveTurn,
+          },
+        });
     if (!turnResult.dispatched) {
       return false;
     }

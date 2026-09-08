@@ -341,7 +341,21 @@ export type ChannelMentionAdapter = {
   }) => string;
 };
 
+export type ChannelRecoveryReplyContext = {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  to: string;
+  accountId?: string;
+  threadId?: string | number;
+  abortSignal?: AbortSignal;
+  /** Run the admitted continuation through the channel's ordinary reply presentation. */
+  dispatchReplyFromConfig: import("../../auto-reply/reply/dispatch-from-config.types.js").DispatchReplyFromConfig;
+};
+
 export type ChannelStreamingAdapter = {
+  dispatchRecoveryReply?: (params: ChannelRecoveryReplyContext) => Promise<void>;
   blockStreamingCoalesceDefaults?: {
     minChars: number;
     idleMs: number;

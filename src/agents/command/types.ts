@@ -149,6 +149,13 @@ export type AgentCommandOpts = {
   lifecycleGeneration?: string;
   /** Called once when the selected runtime actually admits the prompt for execution. */
   onExecutionStarted?: () => void;
+  /** In-process channel presentation owned by the admitted restart continuation. */
+  channelReply?: {
+    options: import("../../auto-reply/reply/get-reply.types.js").InternalGetReplyOptions;
+    deliverFinal: (
+      payloads: import("../../auto-reply/reply-payload.js").ReplyPayload[],
+    ) => Promise<import("./delivery.js").AgentCommandDeliveryStatus>;
+  };
   extraSystemPrompt?: string;
   /** Frozen profile-backed human Git attribution prepared by trusted ingress. */
   gitCoauthorAttribution?: string;
@@ -245,6 +252,7 @@ export type AgentCommandOpts = {
 /** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
+  | "channelReply"
   | "runtimeContextFragments"
   | "senderIsOwner"
   | "allowModelOverride"
@@ -270,6 +278,7 @@ export type AgentCommandIngressOpts = Omit<
 export type AgentCommandGatewayIngressOpts = AgentCommandIngressOpts &
   Pick<
     AgentCommandOpts,
+    | "channelReply"
     | "runtimeContextFragments"
     | "mainRestartRecoveryOwnerLease"
     | "mainRestartRecoveryAdmitted"

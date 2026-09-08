@@ -88,7 +88,7 @@ function createRestartOnlyAbortSignal(source: AbortSignal | undefined): {
 }
 
 /** Aggregate delivery status for an agent command result. */
-type AgentCommandDeliveryStatus = {
+export type AgentCommandDeliveryStatus = {
   requested: true;
   attempted: boolean;
   status: "sent" | "suppressed" | "partial_failed" | "failed";
@@ -957,6 +957,11 @@ export async function deliverAgentCommandResult(
     return captureDeliveryResult(
       buildDeliveryResult({ payloads: normalizedPayloads, meta: result.meta, result }),
     );
+  }
+  if (opts.channelReply && deliveryChannel && deliveryTarget && !deliveryStatus) {
+    params.assertDeliveryCurrent?.();
+    deliveryStatus = await opts.channelReply.deliverFinal(deliveryPayloads);
+    deliverySucceeded = deliveryStatus.succeeded === true;
   }
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
     if (deliveryTarget && !deliveryStatus) {

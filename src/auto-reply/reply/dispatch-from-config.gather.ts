@@ -100,7 +100,9 @@ export async function gatherDispatchRequest(
   const state = {
     params: normalizedParams,
     messageAuditTerminal,
-    allowInboundHandlers: replyOperationRunState.heartbeat === undefined,
+    allowInboundHandlers:
+      replyOperationRunState.heartbeat === undefined &&
+      params.ctx.InternalTurnSource !== "restart-recovery",
     get inboundDedupeReplayUnsafe() {
       // Read the recorded input outcome even when source adoption or cleanup fails.
       // Queued followups have not transferred custody to the active run yet.

@@ -14,7 +14,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import type { TelegramBotDeps } from "./bot-deps.js";
-import type { TelegramMessageContext } from "./bot-message-context.js";
+import type { TelegramReplyContext as TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import type { TelegramNativeQuoteCandidateByMessageId } from "./bot/native-quote.js";
 import type { TelegramStreamMode } from "./bot/types.js";
@@ -27,7 +27,7 @@ import type {
 
 export type DispatchTelegramMessageParams = {
   context: TelegramMessageContext;
-  bot: Bot;
+  bot: Pick<Bot, "api">;
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
   replyToMode: ReplyToMode;

@@ -276,7 +276,7 @@ async function deliverMediaReply(params: {
   sender: TelegramPreparedSender;
   reply: ReplyPayload;
   mediaList: string[];
-  bot: Bot;
+  bot: Pick<Bot, "api">;
   chatId: string;
   runtime: RuntimeEnv;
   thread?: TelegramThreadSpec | null;
@@ -613,7 +613,7 @@ async function deliverMediaReply(params: {
 
 async function maybePinFirstDeliveredMessage(params: {
   pin: ReplyPayloadDelivery["pin"];
-  bot: Bot;
+  bot: Pick<Bot, "api">;
   chatId: string;
   runtime: RuntimeEnv;
   firstDeliveredMessageId?: number;
@@ -727,7 +727,7 @@ export async function deliverReplies(params: {
   mirrorGroupId?: string;
   token: string;
   runtime: RuntimeEnv;
-  bot: Bot;
+  bot: Pick<Bot, "api">;
   mediaLocalRoots?: readonly string[];
   mediaMaxBytes?: number;
   replyToMode: ReplyToMode;
