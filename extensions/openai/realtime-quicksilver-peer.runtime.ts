@@ -42,16 +42,10 @@ type InboundRtpState = {
   pendingPackets: Map<number, WeriftRtpPacket>;
 };
 
-// SSRC switches and large backward sequence jumps violate stream invariants the
-// peer never resyncs, so they must stay fatal instead of dropping audio forever.
-class InboundRtpInvariantError extends Error {}
-
 export type OpenAIQuicksilverAudioPeerCallbacks = {
   onAudio: (audio: Buffer) => void;
   onError: (error: Error) => void;
-  // Per-packet media failures (decode/reorder/send of a single RTP packet).
-  // Recoverable by design: the peer drops the packet and continues. When
-  // omitted, they fall back to onError so existing hosts keep fail-fast.
+  // Omission preserves the existing fatal packet-error callback contract.
   onMediaError?: (error: Error) => void;
   onRtpPacket?: () => void;
 };
@@ -158,6 +152,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
         callbacks: params.callbacks,
         decoder,
         encoder,
+        libopus,
         peer,
         transceiver,
         werift,
@@ -179,6 +174,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
 
   private connected = false;
   private closed = false;
+  private outboundPacketFailed = false;
   private activeInboundSsrc: number | undefined;
   private inboundRtpState: InboundRtpState = { pendingPackets: new Map() };
   private mediaTimer: ReturnType<typeof setInterval> | undefined;
@@ -201,6 +197,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       callbacks: OpenAIQuicksilverAudioPeerCallbacks;
       decoder: LibopusDecoder;
       encoder: LibopusEncoder;
+      libopus: LibopusModule;
       peer: WeriftPeerConnection;
       transceiver: WeriftTransceiver;
       werift: WeriftModule;
@@ -291,13 +288,8 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
   }
 
   private reportMediaError(error: unknown): void {
-    const mediaError = toErrorObject(error, "OpenAI GPT-Live WebRTC media failed");
-    const onMediaError = this.state.callbacks.onMediaError;
-    if (onMediaError) {
-      onMediaError(mediaError);
-      return;
-    }
-    this.state.callbacks.onError(mediaError);
+    const report = this.state.callbacks.onMediaError ?? this.state.callbacks.onError;
+    report(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
   }
 
   private handleInboundRtp(packet: WeriftRtpPacket): void {
@@ -310,7 +302,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       if (this.activeInboundSsrc === undefined) {
         this.activeInboundSsrc = packet.header.ssrc;
       } else if (packet.header.ssrc !== this.activeInboundSsrc) {
-        throw new InboundRtpInvariantError("GPT-Live WebRTC audio source changed unexpectedly");
+        throw new Error("GPT-Live WebRTC audio source changed unexpectedly");
       }
       const state = this.inboundRtpState;
       if (state.nextSequence === undefined) {
@@ -324,7 +316,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
         if (backwardDistance <= INBOUND_MAX_LATE_PACKETS) {
           return;
         }
-        throw new InboundRtpInvariantError("GPT-Live WebRTC RTP sequence changed unexpectedly");
+        throw new Error("GPT-Live WebRTC RTP sequence changed unexpectedly");
       }
       if (state.pendingPackets.has(sequenceNumber)) {
         return;
@@ -340,13 +332,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       this.flushInboundReorderWindow(state);
       this.scheduleInboundFlush(state);
     } catch (error) {
-      // Stream-invariant violations never recover, so they stay fatal; only
-      // genuine per-packet failures (decode/reorder) are downgraded.
-      if (error instanceof InboundRtpInvariantError) {
-        this.state.callbacks.onError(error);
-        return;
-      }
-      this.reportMediaError(error);
+      this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
     }
   }
 
@@ -396,12 +382,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       }
       state.pendingPackets.delete(state.nextSequence);
       state.nextSequence = (state.nextSequence + 1) & 0xffff;
-      try {
-        this.decodeInboundPacket(packet);
-      } catch (error) {
-        // One undecodable packet must not strand the queued audio behind it.
-        this.reportMediaError(error);
-      }
+      this.decodeInboundPacket(packet);
     }
     if (state.pendingPackets.size === 0) {
       this.clearInboundFlushTimer(state);
@@ -422,7 +403,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       try {
         this.flushInboundReorderWindow(state, true);
       } catch (error) {
-        this.reportMediaError(error);
+        this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
       }
     }, INBOUND_REORDER_DEPTH * OPUS_FRAME_DURATION_MS);
     state.flushTimer.unref?.();
@@ -437,7 +418,26 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
 
   private decodeInboundPacket(packet: WeriftRtpPacket): void {
     const opusPacket = this.state.werift.dePacketizeRtpPackets("opus", [packet]).data;
-    this.emitInboundPcm(this.state.decoder.decode(opusPacket, { maxFrameSize: 5_760 }));
+    let decoded: Int16Array;
+    try {
+      decoded = this.state.decoder.decode(opusPacket, { maxFrameSize: 5_760 });
+    } catch (error) {
+      const invalidPacket =
+        (error instanceof this.state.libopus.OpusError &&
+          error.code === this.state.libopus.OpusErrorCode.InvalidPacket) ||
+        (opusPacket.length === 0 && error instanceof RangeError);
+      if (!invalidPacket || !this.state.callbacks.onMediaError) {
+        throw error;
+      }
+      this.reportMediaError(error);
+      if (this.closed) {
+        return;
+      }
+      // Conceal this packet once and let the same drain continue. Codec-state and
+      // audio-consumer failures still escape to the fatal boundary.
+      decoded = this.state.decoder.decodePacketLoss(OPUS_FRAME_SAMPLES);
+    }
+    this.emitInboundPcm(decoded);
   }
 
   private decodeInboundPacketLoss(): void {
@@ -496,9 +496,26 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       this.timestamp = (this.timestamp + OPUS_FRAME_SAMPLES) >>> 0;
       // werift queues encrypted UDP synchronously before sendRtp yields
       // (rtpSender.js:538; transport/dtls.js:455), preserving per-tick order.
-      void this.state.transceiver.sender.sendRtp(rtp).catch((error: unknown) => {
-        this.reportMediaError(error);
-      });
+      void this.state.transceiver.sender.sendRtp(rtp).then(
+        () => {
+          this.outboundPacketFailed = false;
+        },
+        (error: unknown) => {
+          if (this.closed) {
+            return;
+          }
+          // A successful send restores usability. Another failure without one
+          // means the transport cannot sustain packet-level recovery.
+          if (this.outboundPacketFailed) {
+            this.state.callbacks.onError(
+              toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"),
+            );
+            return;
+          }
+          this.outboundPacketFailed = true;
+          this.reportMediaError(error);
+        },
+      );
     } catch (error) {
       this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
     }
