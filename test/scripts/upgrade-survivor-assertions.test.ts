@@ -1878,6 +1878,7 @@ process.stdout.write(sessionDir + "\\n");
     "ok",
     "queued",
     "wait-timeout",
+    "cli-failed",
     "not-started",
     "turn-failed",
     "wrong-session",
@@ -1895,6 +1896,10 @@ const fs = require("node:fs");
 const method = process.argv[4];
 const params = JSON.parse(process.argv[process.argv.indexOf("--params") + 1]);
 const outcome = process.env.PROBE_OUTCOME;
+if (outcome === "cli-failed") {
+  process.stderr.write(JSON.stringify(process.argv));
+  process.exit(47);
+}
 let result;
 if (method === "chat.send") {
   fs.writeFileSync(process.env.PROBE_MARKER_FILE, params.message.match(/OPENCLAW_E2E_SURVIVOR_[A-F0-9]+/)[0]);
@@ -1931,6 +1936,10 @@ process.stdout.write(JSON.stringify(result));
       const succeeded = outcome === "ok" || outcome === "queued" || outcome === "wait-timeout";
       expect(result.status, result.stderr).toBe(succeeded ? 0 : 1);
       expect(existsSync(receipt)).toBe(succeeded);
+      expect(result.stderr).not.toContain("synthetic-serving-token");
+      if (outcome === "cli-failed") {
+        expect(result.stderr).toContain("chat.send managed serving probe failed (status 47)");
+      }
       if (succeeded) {
         const proof = JSON.parse(readFileSync(receipt, "utf8"));
         expect(proof.sessionId).toBe("upgrade-main-session");

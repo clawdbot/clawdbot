@@ -1,5 +1,5 @@
 import assertStrict from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 // Assertions for upgrade-survivor E2E scenarios.
 import fs from "node:fs";
@@ -975,34 +975,31 @@ async function assertRestartServingTurn(file) {
   const call = (method, params) => {
     const remainingMs = deadline - Date.now();
     assert(remainingMs > 0, "managed serving turn exceeded its two-minute budget");
-    let output;
-    try {
-      output = execFileSync(
-        "openclaw",
-        [
-          "gateway",
-          "call",
-          method,
-          "--url",
-          "ws://127.0.0.1:18789",
-          "--token",
-          token,
-          "--timeout",
-          String(remainingMs),
-          "--json",
-          "--params",
-          JSON.stringify(params),
-        ],
-        { timeout: remainingMs, maxBuffer: 2 * 1024 * 1024, encoding: "utf8" },
-      );
-    } catch (error) {
-      // execFileSync errors include argv; never retain the authentication token.
-      // eslint-disable-next-line preserve-caught-error -- Never retain credential-bearing argv.
+    const result = spawnSync(
+      "openclaw",
+      [
+        "gateway",
+        "call",
+        method,
+        "--url",
+        "ws://127.0.0.1:18789",
+        "--token",
+        token,
+        "--timeout",
+        String(remainingMs),
+        "--json",
+        "--params",
+        JSON.stringify(params),
+      ],
+      { timeout: remainingMs, maxBuffer: 2 * 1024 * 1024, encoding: "utf8" },
+    );
+    if (result.error || result.status !== 0) {
+      // Keep credential-bearing argv, stderr, and error objects out of failures.
       throw new Error(
-        `${method} managed serving probe failed (status ${error.status ?? "unknown"})`,
+        `${method} managed serving probe failed (status ${result.status ?? "unknown"})`,
       );
     }
-    return JSON.parse(output);
+    return JSON.parse(result.stdout);
   };
   const accepted = call("chat.send", {
     sessionKey,
