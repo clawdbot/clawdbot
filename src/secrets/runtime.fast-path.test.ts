@@ -195,6 +195,296 @@ describe("secrets runtime fast path", () => {
     expect(runtimePrepareImportMock).not.toHaveBeenCalled();
   });
 
+  it("uses the fast path for keyless host-proxied web search", async () => {
+    const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              provider: "host-proxy-search",
+            },
+          },
+        },
+        plugins: {
+          enabled: true,
+          allow: ["host-proxy-search"],
+          entries: {
+            "host-proxy-search": {
+              enabled: true,
+              config: {
+                webSearch: {
+                  omitAuth: true,
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: emptyAuthStore,
+    });
+
+    expect(runtimePrepareImportMock).not.toHaveBeenCalled();
+    expect(snapshot.webTools.search.providerSource).toBe("none");
+  });
+
+  it("uses the fast path with the host's unrelated plugin loadout", async () => {
+    const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: { web: { search: { provider: "webiq" } } },
+        plugins: {
+          enabled: true,
+          allow: ["workiq-code-mode", "tools-code-mode", "webiq", "diagnostics-otel"],
+          load: {
+            paths: [
+              "/app/plugins/workiq-code-mode",
+              "/app/plugins/tools-code-mode",
+              "/app/plugins/webiq",
+              "/usr/lib/node_modules/@openclaw/diagnostics-otel",
+            ],
+          },
+          entries: {
+            "workiq-code-mode": { config: { enabledNamespaces: ["m365", "search"] } },
+            "tools-code-mode": { enabled: true },
+            webiq: {
+              enabled: true,
+              config: { webSearch: { omitAuth: true, region: "US" } },
+            },
+            "diagnostics-otel": { enabled: true },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: emptyAuthStore,
+    });
+
+    expect(runtimePrepareImportMock).not.toHaveBeenCalled();
+    expect(snapshot.webTools.search.providerSource).toBe("none");
+  });
+
+  it.each([
+    {
+      name: "credential-bearing keyless provider config",
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "host-proxy-search",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            "host-proxy-search": {
+              config: {
+                webSearch: {
+                  omitAuth: true,
+                  apiKey: "search-test-key",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "provider without a matching keyless plugin entry",
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "missing-keyless-provider",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            "different-provider": {
+              config: {
+                webSearch: {
+                  omitAuth: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "selected provider entry without web search config",
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "host-proxy-search",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            "host-proxy-search": {
+              config: {},
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "empty plugin entries",
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "host-proxy-search",
+            },
+          },
+        },
+        plugins: {
+          entries: {},
+        },
+      },
+    },
+    {
+      name: "globally disabled plugins",
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "host-proxy-search",
+            },
+          },
+        },
+        plugins: {
+          enabled: false,
+          entries: {
+            "host-proxy-search": {
+              config: {
+                webSearch: {
+                  omitAuth: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "legacy x_search surface",
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "host-proxy-search",
+            },
+            x_search: {},
+          },
+        },
+        plugins: {
+          entries: {
+            "host-proxy-search": {
+              config: {
+                webSearch: {
+                  omitAuth: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "active web fetch surface",
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "host-proxy-search",
+            },
+            fetch: {
+              provider: "firecrawl",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            "host-proxy-search": {
+              config: {
+                webSearch: {
+                  omitAuth: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "allowlist that omits the selected provider",
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "host-proxy-search",
+            },
+          },
+        },
+        plugins: {
+          allow: ["different-plugin"],
+          entries: {
+            "host-proxy-search": {
+              config: {
+                webSearch: {
+                  omitAuth: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "denylist containing the selected provider",
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "host-proxy-search",
+            },
+          },
+        },
+        plugins: {
+          deny: ["host-proxy-search"],
+          entries: {
+            "host-proxy-search": {
+              config: {
+                webSearch: {
+                  omitAuth: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  ])("keeps $name on the resolver path", async ({ config }) => {
+    const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
+
+    await prepareSecretsRuntimeSnapshot({
+      config: asConfig(config),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: emptyAuthStore,
+    });
+
+    expect(resolveRuntimeWebToolsMock).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the resolver path when an auth profile store contains a SecretRef", async () => {
     const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
 
