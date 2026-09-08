@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   modelsAliasesRemoveCommand: vi.fn().mockResolvedValue(undefined),
   modelsScanCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthAddCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAuthClearCooldownCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthListCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLogoutCommand: vi.fn().mockResolvedValue(undefined),
@@ -39,6 +40,7 @@ const {
   modelsAliasesListCommand,
   modelsAliasesRemoveCommand,
   modelsAuthAddCommand,
+  modelsAuthClearCooldownCommand,
   modelsAuthListCommand,
   modelsAuthLoginCommand,
   modelsAuthLogoutCommand,
@@ -63,6 +65,7 @@ vi.mock("../commands/models/list.status-command.js", () => ({
 }));
 vi.mock("../commands/models/auth.js", () => ({
   modelsAuthAddCommand: mocks.modelsAuthAddCommand,
+  modelsAuthClearCooldownCommand: mocks.modelsAuthClearCooldownCommand,
   modelsAuthLoginCommand: mocks.modelsAuthLoginCommand,
   modelsAuthPasteApiKeyCommand: mocks.modelsAuthPasteApiKeyCommand,
   modelsAuthPasteTokenCommand: mocks.modelsAuthPasteTokenCommand,
@@ -122,6 +125,7 @@ describe("models cli", () => {
     modelsRefreshCommand.mockClear();
     modelsScanCommand.mockClear();
     modelsAuthAddCommand.mockClear();
+    modelsAuthClearCooldownCommand.mockClear();
     modelsAuthListCommand.mockClear();
     modelsAuthLoginCommand.mockClear();
     modelsAuthLogoutCommand.mockClear();
@@ -388,6 +392,12 @@ describe("models cli", () => {
       args: ["models", "auth", "--agent", "poe", "list", "--provider", "openai"],
       command: modelsAuthListCommand,
       expected: { agent: "poe", provider: "openai" },
+    },
+    {
+      label: "clear-cooldown",
+      args: ["models", "auth", "--agent", "poe", "clear-cooldown", "openai:user@example.com"],
+      command: modelsAuthClearCooldownCommand,
+      expected: { agent: "poe", profileId: "openai:user@example.com" },
     },
     {
       label: "login",

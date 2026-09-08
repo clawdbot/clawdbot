@@ -112,6 +112,8 @@ function expectProfileErrorStateCleared(
 ) {
   expect(stats?.blockedUntil).toBeUndefined();
   expect(stats?.blockedReason).toBeUndefined();
+  expect(stats?.blockedSource).toBeUndefined();
+  expect(stats?.blockedModel).toBeUndefined();
   expect(stats?.blockedScope).toBeUndefined();
   expect(stats?.cooldownUntil).toBeUndefined();
   expect(stats?.cooldownClassification).toBeUndefined();
@@ -868,6 +870,11 @@ describe("clearAuthProfileCooldown", () => {
   it("clears all error state fields including disabledUntil and failureCounts", async () => {
     const store = makeStore({
       "anthropic:default": {
+        blockedUntil: Date.now() + 7_200_000,
+        blockedReason: "subscription_limit",
+        blockedSource: "codex_rate_limits",
+        blockedModel: "claude-sonnet-4-5",
+        blockedScope: "model",
         cooldownUntil: Date.now() + 60_000,
         cooldownClassification: "wham_token_expired",
         disabledUntil: Date.now() + 3_600_000,
@@ -878,8 +885,9 @@ describe("clearAuthProfileCooldown", () => {
     });
     mockLockedUpdateForStore(store);
 
-    await clearAuthProfileCooldown({ store, profileId: "anthropic:default" });
+    const cleared = await clearAuthProfileCooldown({ store, profileId: "anthropic:default" });
 
+    expect(cleared).toBe(true);
     const stats = store.usageStats?.["anthropic:default"];
     expectProfileErrorStateCleared(stats);
   });
@@ -907,8 +915,24 @@ describe("clearAuthProfileCooldown", () => {
   it("no-ops for unknown profile id", async () => {
     const store = makeStore(undefined);
     mockLockedUpdateForStore(store);
-    await clearAuthProfileCooldown({ store, profileId: "nonexistent" });
+    const cleared = await clearAuthProfileCooldown({ store, profileId: "nonexistent" });
+    expect(cleared).toBe(true);
     expect(store.usageStats).toBeUndefined();
+  });
+
+  it("reports a failed locked update", async () => {
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: Date.now() + 60_000,
+        errorCount: 1,
+      },
+    });
+    storeMocks.updateAuthProfileStoreWithLock.mockResolvedValueOnce(null);
+
+    const cleared = await clearAuthProfileCooldown({ store, profileId: "anthropic:default" });
+
+    expect(cleared).toBe(false);
+    expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(1);
   });
 });
 

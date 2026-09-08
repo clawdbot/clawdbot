@@ -268,6 +268,7 @@ Before a `models auth` command changes the local auth store, OpenClaw compares t
 ```bash
 openclaw models auth add
 openclaw models auth list [--provider <id>] [--json]
+openclaw models auth clear-cooldown <profile-id>
 openclaw models auth login --provider <id> [--agent <agentId>]
 openclaw models auth login --provider openai --profile-id openai:work
 openclaw models auth login-github-copilot
@@ -284,6 +285,8 @@ openclaw models auth order clear --provider <id>
 
 `models auth list` lists saved auth profiles for the selected agent without printing token, API-key, or OAuth secret material. Active cooldown and disable entries include their reason and recovery action. Legacy Gemini CLI OAuth cooldowns direct you to the supported Google AI Studio API-key setup instead of offering an unavailable Gemini CLI login flow. Use `--provider <id>` to filter to one provider, such as `openai`, and `--json` for scripting.
 
+`models auth clear-cooldown <profile-id>` clears persisted cooldown, blocked, disabled, and failure-counter state for one saved profile without changing its credentials or auth order. Use it after the underlying condition has been resolved early, such as adding credit or resetting a subscription limit before the provider's original reset time. A running Gateway can retain live failure bookkeeping, so restart it safely with `openclaw gateway restart --safe` before retrying. The next request re-evaluates provider availability and can restore the cooldown if the failure still applies.
+
 `models auth login` runs a provider plugin's auth flow (OAuth/API key). Use `openclaw plugins list` to see which providers are installed. `login` accepts `--profile-id <id>` for providers that support named profiles during login (use this to keep multiple logins for the same provider separate), `--method <id>` to pick a specific auth method, `--device-code` as a shortcut for `--method device-code`, `--set-default` to apply the provider's recommended default model, and `--force` to remove existing profiles for that provider first (use when a cached OAuth profile is stuck or you want to switch accounts).
 
 For the shared-main agent, `--force` clears the provider's shared credentials and main-agent local overrides, including their order and health state. For another agent it clears only that agent's local profiles, leaving shared credentials unchanged. A busy auth store stops the command before login starts; close other OpenClaw commands using the same state directory and retry. SQLite lock diagnostics can name either the shared state database or an agent database, so checking only the legacy auth file for open handles does not rule out contention.
@@ -292,7 +295,7 @@ For the shared-main agent, `--force` clears the provider's shared credentials an
 
 `models auth login-github-copilot` is a shortcut for `models auth login --provider github-copilot --method device` (GitHub device flow); it accepts `--yes` to overwrite an existing profile without prompting.
 
-Use either `openclaw models auth --agent <id> <subcommand>` or `openclaw models auth <subcommand> --agent <id>` to target a specific configured agent store. Both forms are supported by `add`, `list`, `login`, `logout`, `paste-api-key`, `setup-token`, `paste-token`, `login-github-copilot`, and `order get`/`set`/`clear`.
+Use either `openclaw models auth --agent <id> <subcommand>` or `openclaw models auth <subcommand> --agent <id>` to target a specific configured agent store. Both forms are supported by `add`, `list`, `clear-cooldown`, `login`, `logout`, `paste-api-key`, `setup-token`, `paste-token`, `login-github-copilot`, and `order get`/`set`/`clear`.
 
 For OpenAI models, `--provider openai` defaults to ChatGPT/Codex account login. Use `--method api-key` only when you want to add an OpenAI API-key profile, usually as a backup for Codex subscription limits. Run `openclaw doctor --fix` to migrate older legacy OpenAI Codex prefix auth/profile state to `openai`.
 

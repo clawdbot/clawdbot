@@ -23,7 +23,11 @@ import {
   upsertAuthProfileAfterLoginWithLockOrThrow,
   upsertAuthProfileWithLockOrThrow,
 } from "../../agents/auth-profiles/profiles.js";
+import { resolveAuthProfileDatabasePath } from "../../agents/auth-profiles/sqlite.js";
+import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store-runtime.js";
+import { resolvePersistedAuthProfileOwnerAgentDir } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
+import { clearAuthProfileCooldown } from "../../agents/auth-profiles/usage.js";
 import { normalizeProviderId } from "../../agents/model-ref-shared.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
@@ -785,6 +789,50 @@ export async function modelsAuthPasteApiKeyCommand(
   runtime.log(`Auth profile: ${profileId} (${provider}/api_key)`);
 }
 
+/** Clears persisted failure windows for one auth profile without changing credentials. */
+export async function modelsAuthClearCooldownCommand(
+  opts: { profileId: string; agent?: string },
+  runtime: RuntimeEnv,
+): Promise<void> {
+  const profileId = opts.profileId.trim();
+  const { agentDir } = await resolveModelsAuthAgent(opts.agent);
+  const store = loadAuthProfileStoreForRuntime(agentDir, { syncExternalCli: false });
+  if (!Object.hasOwn(store.profiles, profileId)) {
+    throw new Error(
+      `Auth profile "${profileId}" not found. Run ${formatCliCommand("openclaw models auth list")} to see saved profiles.`,
+    );
+  }
+
+  const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({ agentDir, profileId });
+  const selectedStoreCleared = await clearAuthProfileCooldown({ store, profileId, agentDir });
+  if (!selectedStoreCleared) {
+    throw new Error(
+      `Failed to clear cooldown state for auth profile "${profileId}". Wait a moment and retry.`,
+    );
+  }
+  if (
+    !ownerAgentDir ||
+    resolveAuthProfileDatabasePath(ownerAgentDir) !== resolveAuthProfileDatabasePath(agentDir)
+  ) {
+    const ownerStoreCleared = await clearAuthProfileCooldown({
+      store,
+      profileId,
+      agentDir: ownerAgentDir,
+    });
+    if (!ownerStoreCleared) {
+      throw new Error(
+        `Failed to clear cooldown state for auth profile "${profileId}". Wait a moment and retry.`,
+      );
+    }
+  }
+  runtime.log(`Cleared persisted cooldown state for auth profile "${profileId}".`);
+  runtime.log(
+    `Restart any running Gateway before retrying: ${formatCliCommand("openclaw gateway restart --safe")}.`,
+  );
+  runtime.log(
+    "The next request will re-evaluate provider availability and may restore the cooldown if the failure still applies.",
+  );
+}
 /** Interactive helper for adding token auth profiles, with provider/method prompts. */
 export async function modelsAuthAddCommand(opts: { agent?: string }, runtime: RuntimeEnv) {
   const { config, agentId, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
