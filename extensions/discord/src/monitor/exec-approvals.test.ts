@@ -71,6 +71,8 @@ describe("discord exec approval monitor helpers", () => {
   it.each([
     ["exec", "plugin:looks-like-plugin", "allow-once"],
     ["plugin", "plain-plugin-id", "deny"],
+    ["system-agent", "change-1", "allow-once"],
+    ["system-agent", "change-2", "deny"],
   ] as const)("round-trips %s approval custom ids", (approvalKind, approvalId, action) => {
     const customId = buildExecApprovalCustomId(approvalId, approvalKind, action);
     const parsed = parseCustomId(customId);
@@ -106,22 +108,33 @@ describe("discord exec approval monitor helpers", () => {
     });
   });
 
-  it("blocks non-approvers from approving", async () => {
-    const interaction = createInteraction({ userId: "999" });
-    const button = createExecApprovalButton({
-      getApprovers: () => ["123"],
-      resolveApproval: async () => ({ ok: true, resolution: createApprovalResolution() }),
-    });
+  it.each(["exec", "plugin", "system-agent"] as const)(
+    "blocks non-approvers from approving %s clicks before resolution",
+    async (approvalKind) => {
+      const interaction = createInteraction({ userId: "999" });
+      const resolveApproval = vi.fn(
+        async () =>
+          ({
+            ok: true,
+            resolution: createApprovalResolution(),
+          }) as const,
+      );
+      const button = createExecApprovalButton({
+        getApprovers: () => ["123"],
+        resolveApproval,
+      });
 
-    await button.run(interaction, { kind: "exec", id: "abc", action: "allow-once" });
+      await button.run(interaction, { kind: approvalKind, id: "abc", action: "allow-once" });
 
-    expect(interaction["reply"]).toHaveBeenCalledWith({
-      content: "⛔ You are not authorized to approve requests.",
-      ephemeral: true,
-    });
-  });
+      expect(interaction["reply"]).toHaveBeenCalledWith({
+        content: "⛔ You are not authorized to approve requests.",
+        ephemeral: true,
+      });
+      expect(resolveApproval).not.toHaveBeenCalled();
+    },
+  );
 
-  it.each(["exec", "plugin"] as const)(
+  it.each(["exec", "plugin", "system-agent"] as const)(
     "acknowledges and resolves valid %s approval clicks",
     async (approvalKind) => {
       const editReply = vi.fn();
@@ -248,7 +261,7 @@ describe("discord exec approval monitor helpers", () => {
     });
   });
 
-  it.each(["exec", "plugin"] as const)(
+  it.each(["exec", "plugin", "system-agent"] as const)(
     "routes %s button resolutions through the canonical gateway method",
     async (approvalKind) => {
       const cfg = buildConfig({ enabled: true, approvers: ["123"] });

@@ -1,6 +1,8 @@
 // Discord tests cover approval handler plugin behavior.
 import { describe, expect, it } from "vitest";
+import { parseExecApprovalData } from "./approval-custom-id.js";
 import { discordApprovalNativeRuntime } from "./approval-handler.runtime.js";
+import { parseCustomId } from "./internal/discord.js";
 import { DiscordUiContainer } from "./ui.js";
 
 async function buildExecApprovalPayloadText(commandText: string): Promise<string> {
@@ -140,6 +142,89 @@ describe("discordApprovalNativeRuntime", () => {
     await expect(buildPluginApprovalPayloadText()).resolves.toContain(
       "execapproval:kind=plugin;id=plain-plugin-id;action=deny",
     );
+  });
+
+  it("round-trips system-agent approval buttons through the callback codec", async () => {
+    const pending = await discordApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: {} as never,
+      accountId: "main",
+      context: {
+        token: "discord-token",
+        config: {} as never,
+      },
+      request: {
+        id: "change-1",
+        request: {
+          title: "Apply proposed change",
+          description: "Rewrite the scheduler.",
+          command: "rewrite scheduler",
+          proposalHash: "hash-1",
+          sessionId: "session-1",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1_000,
+      },
+      approvalKind: "system-agent",
+      nowMs: 0,
+      view: {
+        approvalKind: "system-agent",
+        phase: "pending",
+        approvalId: "change-1",
+        title: "OpenClaw change requires approval",
+        description: "Rewrite the scheduler.",
+        commandText: "Rewrite the scheduler.",
+        commandPreview: "Rewrite the scheduler.",
+        operationSummary: "Rewrite the scheduler.",
+        cwd: null,
+        host: "gateway",
+        nodeId: null,
+        sessionKey: "session-1",
+        metadata: [],
+        expiresAtMs: 1_000,
+        actions: [
+          {
+            label: "Allow Once",
+            decision: "allow-once",
+            style: "success",
+            command: "/approve change-1 allow-once",
+            action: {
+              type: "approval",
+              approvalId: "change-1",
+              approvalKind: "system-agent",
+              decision: "allow-once",
+            },
+          },
+          {
+            label: "Deny",
+            decision: "deny",
+            style: "danger",
+            command: "/approve change-1 deny",
+            action: {
+              type: "approval",
+              approvalId: "change-1",
+              approvalKind: "system-agent",
+              decision: "deny",
+            },
+          },
+        ],
+      },
+    });
+    const payload = JSON.stringify(pending);
+    expect(payload).toContain("execapproval:kind=system-agent;id=change-1;action=allow-once");
+    expect(payload).toContain("execapproval:kind=system-agent;id=change-1;action=deny");
+    expect(payload).not.toContain("action=allow-always");
+    // The emitted system-agent custom id must survive the callback codec used by
+    // the interaction path; otherwise the card renders but its buttons die on click.
+    expect(
+      parseExecApprovalData(
+        parseCustomId("execapproval:kind=system-agent;id=change-1;action=allow-once").data,
+      ),
+    ).toEqual({
+      approvalId: "change-1",
+      approvalKind: "system-agent",
+      action: "allow-once",
+    });
   });
 
   it.each([
