@@ -64,6 +64,26 @@ export function resolveGatewaySystemdServiceName(profile?: string): string {
   return `openclaw-gateway${suffix}`;
 }
 
+/**
+ * Service-name candidates for a profile, preferred order.
+ *
+ * Current installs use `openclaw-gateway[-profile]`. Older multi-agent hosts
+ * used `openclaw-<profile>` (no "gateway" segment). Doctor/runtime resolution
+ * must try both for the same profile before scanning unrelated units.
+ */
+export function resolveGatewaySystemdServiceNameCandidates(profile?: string): string[] {
+  const canonical = resolveGatewaySystemdServiceName(profile);
+  const suffix = resolveGatewayProfileSuffix(profile);
+  if (!suffix) {
+    // Default profile: openclaw-gateway is current; bare openclaw is a known
+    // legacy system-unit name (parallel to openclaw-<profile> for named agents).
+    // Arbitrary custom units are not candidates; use OPENCLAW_SYSTEMD_UNIT.
+    return canonical === "openclaw" ? [canonical] : [canonical, "openclaw"];
+  }
+  const legacy = `openclaw${suffix}`;
+  return legacy === canonical ? [canonical] : [canonical, legacy];
+}
+
 export function resolveGatewayWindowsTaskName(profile?: string): string {
   const normalized = normalizeGatewayProfile(profile);
   if (!normalized) {
