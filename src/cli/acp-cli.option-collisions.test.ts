@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
+import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { withTempSecretFiles } from "../test-utils/secret-file-fixture.js";
 import { registerAcpCli } from "./acp-cli.js";
 
@@ -62,14 +63,6 @@ describe("acp cli option collisions", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   }
 
-  function requireFirstMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }) {
-    const call = mock.mock.calls[0];
-    if (!call) {
-      throw new Error("expected mock to have at least one call");
-    }
-    return call[0];
-  }
-
   beforeEach(() => {
     runAcpClientInteractive.mockClear();
     serveAcpGateway.mockClear();
@@ -87,7 +80,7 @@ describe("acp cli option collisions", () => {
     });
 
     expect(runAcpClientInteractive).toHaveBeenCalledTimes(1);
-    const clientOptions = requireFirstMockArg(runAcpClientInteractive) as { verbose?: boolean };
+    const clientOptions = mockCall(runAcpClientInteractive)[0] as { verbose?: boolean };
     expect(clientOptions?.verbose).toBe(true);
   });
 
@@ -95,7 +88,7 @@ describe("acp cli option collisions", () => {
     await parseAcp(["--no-prefix-cwd"]);
 
     expect(serveAcpGateway).toHaveBeenCalledTimes(1);
-    const gatewayOptions = requireFirstMockArg(serveAcpGateway) as {
+    const gatewayOptions = mockCall(serveAcpGateway)[0] as {
       prefixCwd?: boolean;
     };
     expect(gatewayOptions?.prefixCwd).toBe(false);
@@ -105,7 +98,7 @@ describe("acp cli option collisions", () => {
     await parseAcp([]);
 
     expect(serveAcpGateway).toHaveBeenCalledTimes(1);
-    const gatewayOptions = requireFirstMockArg(serveAcpGateway) as {
+    const gatewayOptions = mockCall(serveAcpGateway)[0] as {
       prefixCwd?: boolean;
     };
     expect(gatewayOptions?.prefixCwd).toBe(true);
@@ -127,7 +120,7 @@ describe("acp cli option collisions", () => {
     );
 
     expect(serveAcpGateway).toHaveBeenCalledTimes(1);
-    const gatewayOptions = requireFirstMockArg(serveAcpGateway) as {
+    const gatewayOptions = mockCall(serveAcpGateway)[0] as {
       gatewayPassword?: string;
       gatewayToken?: string;
     };
@@ -179,7 +172,7 @@ describe("acp cli option collisions", () => {
     });
 
     expect(serveAcpGateway).toHaveBeenCalledTimes(1);
-    const gatewayOptions = requireFirstMockArg(serveAcpGateway) as { gatewayToken?: string };
+    const gatewayOptions = mockCall(serveAcpGateway)[0] as { gatewayToken?: string };
     expect(gatewayOptions?.gatewayToken).toBe("tok_file");
   });
 
