@@ -5,6 +5,7 @@ import {
   runInitialModelFallbackAttempt,
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
+import { mockCall } from "../../test-utils/mock-call-assertions.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
@@ -32,24 +33,11 @@ const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
 
-function getMockCallArg(
-  mock: { mock: { calls: readonly unknown[][] } },
-  callIndex: number,
-  argIndex: number,
-  label: string,
-): unknown {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected ${label} call ${callIndex}`);
-  }
-  return call[argIndex];
-}
-
 function getFirstMockArg(
   mock: { mock: { calls: readonly unknown[][] } },
   label: string,
 ): Record<string, unknown> {
-  return requireRecord(getMockCallArg(mock, 0, 0, label), `${label} params`);
+  return requireRecord(mockCall(mock)[0], `${label} params`);
 }
 
 // ---------- tests ----------
@@ -94,10 +82,10 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       agentId: "scout",
     });
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
-    expect(getMockCallArg(buildWorkspaceSkillSnapshotMock, 0, 1, "skill snapshot")).toHaveProperty(
-      "skillFilter",
-      ["meme-factory", "weather"],
-    );
+    expect(mockCall(buildWorkspaceSkillSnapshotMock)[1]).toHaveProperty("skillFilter", [
+      "meme-factory",
+      "weather",
+    ]);
   });
 
   it("omits skillFilter when agent has no skills config", async () => {
@@ -110,10 +98,8 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
     // When no skills config, skillFilter should be undefined (no filtering applied)
     expect(
-      requireRecord(
-        getMockCallArg(buildWorkspaceSkillSnapshotMock, 0, 1, "skill snapshot"),
-        "skill snapshot options",
-      ).skillFilter,
+      requireRecord(mockCall(buildWorkspaceSkillSnapshotMock)[1], "skill snapshot options")
+        .skillFilter,
     ).toBeUndefined();
   });
 
@@ -126,10 +112,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     });
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
     // Explicit empty skills list should forward [] to filter out all skills
-    expect(getMockCallArg(buildWorkspaceSkillSnapshotMock, 0, 1, "skill snapshot")).toHaveProperty(
-      "skillFilter",
-      [],
-    );
+    expect(mockCall(buildWorkspaceSkillSnapshotMock)[1]).toHaveProperty("skillFilter", []);
   });
 
   it("refreshes cached snapshot when skillFilter changes without version bump", async () => {
@@ -156,10 +139,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       agentId: "weather-bot",
     });
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
-    expect(getMockCallArg(buildWorkspaceSkillSnapshotMock, 0, 1, "skill snapshot")).toHaveProperty(
-      "skillFilter",
-      ["weather"],
-    );
+    expect(mockCall(buildWorkspaceSkillSnapshotMock)[1]).toHaveProperty("skillFilter", ["weather"]);
   });
 
   it("forces a fresh session for isolated cron runs", async () => {
@@ -180,10 +160,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     );
     runEmbeddedAgentMock.mockImplementationOnce(async () => {
       for (const [index, result] of patchSessionEntryMock.mock.results.entries()) {
-        const scope = requireRecord(
-          getMockCallArg(patchSessionEntryMock, index, 0, "session patch"),
-          "patch scope",
-        );
+        const scope = requireRecord(mockCall(patchSessionEntryMock, index)[0], "patch scope");
         const entry = requireRecord(await result.value, "persisted session entry");
         persistedAtStartup.set(String(scope.sessionKey), entry);
       }
