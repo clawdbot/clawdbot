@@ -205,7 +205,7 @@ describe("project registry", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "isolates refresh from checkout hooks and late transport config",
+    "does not run checkout hooks while refreshing managed refs",
     async () => {
       const root = tempDirs.make("openclaw-project-refresh-hooks-");
       const source = await initializeRepository(root, "source");
@@ -224,24 +224,7 @@ describe("project registry", () => {
       const sourceHead = (
         await execFileAsync("git", ["-C", source, "rev-parse", "HEAD"])
       ).stdout.trim();
-      const mkdtemp = fs.mkdtemp.bind(fs);
-      const stagedMutation = vi.spyOn(fs, "mkdtemp").mockImplementationOnce(async (prefix) => {
-        const staging = await mkdtemp(prefix);
-        await execFileAsync("git", [
-          "-C",
-          target,
-          "config",
-          "url.file:///does-not-exist/.insteadOf",
-          source,
-        ]);
-        return staging;
-      });
-
-      try {
-        await refreshProjectCheckout({ url: source, target });
-      } finally {
-        stagedMutation.mockRestore();
-      }
+      await refreshProjectCheckout({ url: source, target });
 
       await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
       expect(
@@ -374,20 +357,31 @@ describe("project registry", () => {
     await expect(fs.stat(checkout)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("rejects checkout URL rewrites before refreshing the recorded project", async () => {
+  it("ignores checkout URL rewrites while refreshing the recorded project", async () => {
     const root = tempDirs.make("openclaw-project-refresh-rewrite-");
-    const checkout = await initializeRepository(root, "checkout");
+    const source = await initializeRepository(root, "source");
+    const checkout = path.join(root, "checkout");
+    await execFileAsync("git", ["clone", source, checkout]);
+    await execFileAsync("git", ["-C", source, "branch", "expected-base"]);
     const unrelated = await initializeRepository(root, "unrelated");
     await execFileAsync("git", ["-C", unrelated, "branch", "injected-base"]);
-    const originUrl = "https://github.com/acme/recorded-project.git";
     const options = { path: path.join(root, "state.sqlite") };
     const project = await registerClonedProjectRegistry(
-      { path: checkout, name: "Recorded", originUrl },
+      { path: checkout, name: "Recorded", originUrl: source },
       options,
     );
-    await execFileAsync("git", ["-C", checkout, "config", `url.${unrelated}.insteadOf`, originUrl]);
+    await execFileAsync("git", ["-C", checkout, "config", `url.${unrelated}.insteadOf`, source]);
 
-    await expect(refreshProjectClone(project, options)).rejects.toThrow("transport configuration");
+    await expect(refreshProjectClone(project, options)).resolves.toBeUndefined();
+    await expect(
+      execFileAsync("git", [
+        "-C",
+        checkout,
+        "rev-parse",
+        "--verify",
+        "refs/remotes/origin/expected-base",
+      ]),
+    ).resolves.toBeDefined();
     await expect(
       execFileAsync("git", [
         "-C",

@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ProjectCloneFailureCause } from "../../packages/gateway-protocol/src/index.js";
-import { assertSafeGitTransportConfig } from "../infra/git-transport-config.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 
 const PROJECT_CLONE_TIMEOUT_MS = 10 * 60_000;
@@ -152,11 +151,6 @@ export async function refreshProjectCheckout(
   input: { target: string; url: string },
   options: ProjectCloneOptions = {},
 ): Promise<void> {
-  await assertSafeGitTransportConfig(input.target, async (argv) => {
-    // This runner already isolates global/system config and carries the checkout lease signal.
-    const checked = await runProjectCheckoutGit(input, options, argv.slice(1));
-    return { code: checked.code, stdout: Buffer.from(checked.stdout) };
-  });
   const objectPath = await runProjectCheckoutGit(input, options, [
     "rev-parse",
     "--path-format=absolute",

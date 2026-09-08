@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { assertSafeGitTransportConfig } from "../infra/git-transport-config.js";
 import { runCommandBuffered } from "../process/exec.js";
+import { githubPublicationUnsafeConfigArgs } from "./github-publication-base.js";
 
 type GitCommandOptions = {
   cwd?: string;
@@ -68,7 +68,32 @@ export async function assertSafeGitPublicationWorkspace(
   cwd: string,
   run: (argv: string[], options?: GitCommandOptions) => Promise<GitCommandResult>,
 ): Promise<void> {
-  await assertSafeGitTransportConfig(cwd, run);
+  const isolatedConfig = { GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_SYSTEM: os.devNull };
+  const [localUnsafe, worktreeConfig] = await Promise.all([
+    run(githubPublicationUnsafeConfigArgs("--local"), { cwd, env: isolatedConfig }),
+    run(
+      ["git", "config", "--local", "--includes", "--bool", "--get", "extensions.worktreeConfig"],
+      { cwd, env: isolatedConfig },
+    ),
+  ]);
+  const worktreeConfigValue = worktreeConfig.stdout.toString("utf8").trim();
+  const worktreeConfigKnown =
+    (worktreeConfig.code === 0 &&
+      (worktreeConfigValue === "true" || worktreeConfigValue === "false")) ||
+    (worktreeConfig.code === 1 && worktreeConfig.stdout.length === 0);
+  if (localUnsafe.code !== 1 || localUnsafe.stdout.length > 0 || !worktreeConfigKnown) {
+    throw new Error("GitHub publication workspace has unsupported Git transport configuration.");
+  }
+  const worktreeUnsafe =
+    worktreeConfigValue === "true"
+      ? await run(githubPublicationUnsafeConfigArgs("--worktree"), {
+          cwd,
+          env: isolatedConfig,
+        })
+      : undefined;
+  if (worktreeUnsafe && (worktreeUnsafe.code !== 1 || worktreeUnsafe.stdout.length > 0)) {
+    throw new Error("GitHub publication workspace has unsupported Git transport configuration.");
+  }
   const [replacements, graftPath] = await Promise.all([
     run(["git", "for-each-ref", "--count=1", "--format=%(refname)", "refs/replace"], { cwd }),
     run(["git", "rev-parse", "--git-path", "info/grafts"], { cwd }),
