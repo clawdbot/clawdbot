@@ -201,6 +201,31 @@ describe("Discord outbound channel activity", () => {
     },
   );
 
+  it.each(["poll", "sticker"] as const)(
+    "records outbound activity when a %s caption tail fails",
+    async (kind) => {
+      const { rest, postMock } = makeDiscordRest();
+      postMock
+        .mockResolvedValueOnce({ id: "msg-1", channel_id: "789" })
+        .mockRejectedValueOnce(new Error("tail rejected"));
+
+      await expect(
+        sendStructuredMessage(kind, {
+          cfg: { channels: { discord: { token: "resolved-token" } } },
+          rest,
+          token: "test-token",
+          content: "hello world",
+          textLimit: 5,
+        }),
+      ).rejects.toThrow("tail rejected");
+      expect(recordChannelActivityMock).toHaveBeenCalledExactlyOnceWith({
+        channel: "discord",
+        accountId: "default",
+        direction: "outbound",
+      });
+    },
+  );
+
   it("rewrites configured mention aliases for webhook sends", async () => {
     const cfg = {
       channels: {

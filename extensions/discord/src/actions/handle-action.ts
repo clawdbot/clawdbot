@@ -25,6 +25,8 @@ import {
   DISCORD_PRESENTATION_CAPABILITIES,
   isDiscordComponentSpecWithinMessageLimit,
 } from "../outbound-components.js";
+import { toDiscordOutboundDeliveryResult } from "../send.receipt.js";
+import type { DiscordSendResult } from "../send.types.js";
 import {
   buildDiscordInteractiveComponents,
   buildDiscordPresentationComponents,
@@ -76,6 +78,7 @@ export async function handleDiscordMessageAction(
     | "inboundEventKind"
     | "conversationReadOrigin"
     | "reply"
+    | "onDeliveryResult"
   >,
 ): Promise<AgentToolResult<unknown>> {
   const { action, params, cfg } = ctx;
@@ -104,6 +107,12 @@ export async function handleDiscordMessageAction(
     mediaLocalRoots: ctx.mediaLocalRoots,
     mediaReadFile: ctx.mediaReadFile,
     ...(ctx.reply ? { reply: ctx.reply } : {}),
+    ...(ctx.onDeliveryResult
+      ? {
+          onDeliveryResult: async (result: DiscordSendResult) =>
+            ctx.onDeliveryResult?.(toDiscordOutboundDeliveryResult(result)),
+        }
+      : {}),
     ...readPolicyOptions,
   } as const;
   const notifyVisibleOutbound = (

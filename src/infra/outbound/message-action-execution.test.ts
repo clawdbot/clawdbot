@@ -4,7 +4,10 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import type {
+  ChannelMessageActionContext,
+  ChannelPlugin,
+} from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -313,6 +316,49 @@ describe("runMessageAction plugin dispatch", () => {
     afterEach(() => {
       setActivePluginRegistry(createTestRegistry([]));
       vi.clearAllMocks();
+    });
+
+    it("forwards delivery progress from local plugin actions", async () => {
+      const evidence = {
+        messageId: "sticker-1",
+        receipt: {
+          primaryPlatformMessageId: "sticker-1",
+          platformMessageIds: ["sticker-1"],
+          parts: [],
+          sentAt: 1,
+        },
+      };
+      const onDeliveryResult = vi.fn();
+      const progressHandler = vi.fn(async (ctx: ChannelMessageActionContext) => {
+        await ctx.onDeliveryResult?.(evidence);
+        return jsonResult({ ok: true });
+      });
+      setTestPlugin(
+        createGatewayActionPlugin({
+          pluginId: "forumchat",
+          label: "Forum Chat",
+          blurb: "Forum chat delivery progress test plugin.",
+          actions: ["sticker"],
+          gatewayActions: [],
+          handleAction: progressHandler,
+          messaging: {
+            targetResolver: {
+              looksLikeId: () => true,
+            },
+          },
+        }),
+        "forumchat",
+      );
+
+      await runMessageAction({
+        cfg,
+        action: "sticker",
+        params: { channel: "forumchat", target: "forum:123", stickerName: "wave" },
+        onDeliveryResult,
+        dryRun: false,
+      });
+
+      expect(onDeliveryResult).toHaveBeenCalledWith({ channel: "forumchat", ...evidence });
     });
 
     it.each(["local", "gateway"] as const)(

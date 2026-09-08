@@ -16,7 +16,7 @@ import {
   resolveDiscordChannelConfigWithFallback,
   type DiscordGuildEntryResolved,
 } from "../monitor/allow-list.js";
-import type { DiscordReactOpts } from "../send.types.js";
+import type { DiscordReactOpts, DiscordSendResult } from "../send.types.js";
 import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
 import { createDiscordActionOptions } from "./runtime.shared.js";
 
@@ -30,6 +30,7 @@ export type DiscordMessagingActionOptions = {
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
+  onDeliveryResult?: (result: DiscordSendResult) => Promise<void> | void;
   readContext?: {
     requesterAccountId?: string | null;
     currentChannelProvider?: string | null;
@@ -53,7 +54,11 @@ export type DiscordMessagingActionContext = {
   }) => Promise<void>;
   filterGuildChannelList: <T>(params: { guildId: string; channels: T[] }) => Promise<T[]>;
   resolveReactionChannelId: () => Promise<string>;
-  withOpts: (extra?: Record<string, unknown>) => { cfg: OpenClawConfig; accountId?: string };
+  withOpts: (extra?: Record<string, unknown>) => {
+    cfg: OpenClawConfig;
+    accountId?: string;
+    onDeliveryResult?: (result: DiscordSendResult) => Promise<void> | void;
+  };
   withReactionRuntimeOptions: <T extends Record<string, unknown> = Record<string, never>>(
     extra?: T,
   ) => DiscordReactOpts & T;
@@ -303,7 +308,16 @@ export function createDiscordMessagingActionContext(params: {
   const directDmEnabled =
     accountConfig.dm?.enabled !== false && (accountConfig.dmPolicy ?? "pairing") !== "disabled";
   const withOpts = (extra?: Record<string, unknown>) =>
-    createDiscordActionOptions({ cfg: params.cfg, accountId, extra });
+    createDiscordActionOptions({
+      cfg: params.cfg,
+      accountId,
+      extra: {
+        ...(params.options?.onDeliveryResult
+          ? { onDeliveryResult: params.options.onDeliveryResult }
+          : {}),
+        ...extra,
+      },
+    });
   const resolvedReactionAccountId = accountId ?? resolveDefaultDiscordAccountId(params.cfg);
   const isCurrentReadTarget = (channelId: string): boolean => {
     const requesterAccountId = currentReadContext?.requesterAccountId?.trim();

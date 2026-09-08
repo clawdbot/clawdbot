@@ -758,6 +758,8 @@ export type ChannelMessageActionContext = {
    * them. Plugins forward it into durable sends so recovery does not replay too.
    */
   deliveryRetryOwner?: "caller";
+  /** Reports concrete platform sends before a later multi-send action can fail. */
+  onDeliveryResult?: ChannelMessageSendPollContext["onDeliveryResult"];
   /** Host-owned live authority check; never read from model-controlled params. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** Revalidate the same owner synchronously after waits and immediately before platform I/O. */
@@ -874,6 +876,7 @@ export type ChannelPollContext = Pick<
   | "silent"
   | "isAnonymous"
   | "gatewayClientScopes"
+  | "onDeliveryResult"
   | "onPlatformSendDispatch"
   | "assertDirectAdapterHandoff"
 > & {

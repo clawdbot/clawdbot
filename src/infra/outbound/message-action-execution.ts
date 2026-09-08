@@ -26,6 +26,7 @@ import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
+import { normalizeChannelMessageSendResult } from "./deliver-types.js";
 import type {
   MessageActionGateway,
   MessageActionResult,
@@ -454,6 +455,7 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
         sessionId: input.sessionId,
         inboundEventKind: input.inboundEventKind,
         toolContext: input.toolContext,
+        ...(input.onDeliveryResult ? { onDeliveryResult: input.onDeliveryResult } : {}),
       },
       silent: silent ?? undefined,
     },
@@ -608,6 +610,13 @@ export async function executeMessagePlugin(
     gateway,
     toolContext: authorization !== undefined ? authorization.toolContext : input.toolContext,
     dryRun,
+    ...(input.onDeliveryResult
+      ? {
+          onDeliveryResult: async (result) => {
+            await input.onDeliveryResult?.(normalizeChannelMessageSendResult(channel, result));
+          },
+        }
+      : {}),
   });
   if (!handled) {
     throw new Error(`Message action ${action} not supported for channel ${channel}.`);
