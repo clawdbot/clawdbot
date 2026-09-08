@@ -68,6 +68,79 @@ function movedWorkspace(attestationOnly = false) {
 }
 
 describe("workspace move recovery", () => {
+  it("finds a repointed alias with decomposed Unicode in its own name", async () => {
+    const original = state.workspaceDir;
+    const alias = state.path("alias-e\u0301");
+    const moved = state.path("unicode-alias-moved");
+    link(original, alias);
+    mergeWorkspaceSetupState(alias, { setupCompletedAt: "2026-07-16T02:00:00.000Z" });
+    fs.renameSync(original, moved);
+    repoint(alias, moved);
+    const facts = detectRepointedWorkspaceAlias(alias);
+    expect(facts).toBeDefined();
+    expect(await rebindRepointedWorkspaceAlias(alias, facts!)).toBe("rebound");
+    expect(readWorkspaceStateSnapshot(alias).setup.setupCompletedAt).toBe(
+      "2026-07-16T02:00:00.000Z",
+    );
+  });
+
+  it("recovers when the original configured directory becomes the moved directory's alias", async () => {
+    const original = state.workspaceDir;
+    const moved = state.path("direct-move");
+    mergeWorkspaceSetupState(original, { setupCompletedAt: "2026-07-16T02:00:00.000Z" });
+    fs.renameSync(original, moved);
+    link(moved, original);
+    expect(
+      await rebindRepointedWorkspaceAlias(original, detectRepointedWorkspaceAlias(original)!),
+    ).toBe("rebound");
+    expect(readWorkspaceStateSnapshot(original).setup.setupCompletedAt).toBe(
+      "2026-07-16T02:00:00.000Z",
+    );
+  });
+
+  it.each(["original-e\u0301", "parent-e\u0301/original-\u00e9", "parent-\u00e9/original-e\u0301"])(
+    "retains ownership when Unicode original %s still exists",
+    async (relative) => {
+      const original = state.path(relative);
+      const alias = state.path("unicode-link");
+      const moved = state.path("unicode-copy");
+      fs.mkdirSync(original, { recursive: true });
+      fs.mkdirSync(moved);
+      link(original, alias);
+      mergeWorkspaceSetupState(alias, { setupCompletedAt: "2026-07-16T02:00:00.000Z" });
+      repoint(alias, moved);
+      expect(
+        await rebindRepointedWorkspaceAlias(alias, detectRepointedWorkspaceAlias(alias)!),
+      ).toBe("original-workspace-exists");
+      expect(readWorkspaceStateSnapshot(original).setup.setupCompletedAt).toBe(
+        "2026-07-16T02:00:00.000Z",
+      );
+      expect(readWorkspaceStateSnapshot(moved).setupExists).toBe(false);
+    },
+  );
+
+  it("refuses a surviving Unicode sibling even when the normalized spelling points at the destination", async ({
+    skip,
+  }) => {
+    const original = state.path("original-e\u0301");
+    const normalized = original.normalize("NFC");
+    const alias = state.path("unicode-link");
+    const moved = state.path("unicode-copy");
+    fs.mkdirSync(original);
+    fs.mkdirSync(moved);
+    link(original, alias);
+    mergeWorkspaceSetupState(alias, { setupCompletedAt: "2026-07-16T02:00:00.000Z" });
+    if (fs.existsSync(normalized)) {
+      skip();
+    }
+    link(moved, normalized);
+    repoint(alias, moved);
+    expect(await rebindRepointedWorkspaceAlias(alias, detectRepointedWorkspaceAlias(alias)!)).toBe(
+      "original-workspace-exists",
+    );
+    expect(readWorkspaceStateSnapshot(moved).setupExists).toBe(false);
+  });
+
   it.each([false, true])(
     "preserves setup and attestation without changing files (attestation only: %s)",
     async (attestationOnly) => {

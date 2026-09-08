@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { hasErrnoCode } from "../infra/errors.js";
 import {
   executeSqliteQuerySync,
@@ -23,6 +24,7 @@ import { resolveUserPath } from "../utils.js";
 import { retireWorkspaceFileCache } from "./workspace-file-cache.js";
 import {
   createWorkspaceStateIdentity,
+  normalizeWorkspaceIdentityPath,
   resolveCanonicalWorkspacePath,
   resolveWorkspaceStateAliases,
   type WorkspaceStateIdentity,
@@ -48,6 +50,30 @@ function directoryIdentity(workspacePath: string): string | undefined {
     }
     return undefined;
   }
+}
+
+// Stored identities discard Unicode spelling. Inspect every matching filesystem
+// spelling, including ancestors, so a surviving original cannot lose its history.
+function existingWorkspacePathSpellings(storedPath: string): string[] {
+  const root = path.parse(storedPath).root;
+  let parents = [root];
+  for (const segment of storedPath.slice(root.length).split(path.sep)) {
+    parents = parents.flatMap((parent) => {
+      try {
+        return fs
+          .readdirSync(parent)
+          .filter((entry) => normalizeWorkspaceIdentityPath(entry) === segment)
+          .toSorted()
+          .map((entry) => path.join(parent, entry));
+      } catch (error) {
+        if (hasErrnoCode(error, "ENOENT")) {
+          return [];
+        }
+        throw error;
+      }
+    });
+  }
+  return parents;
 }
 
 function readWorkspaceMoveState(
@@ -165,20 +191,31 @@ export function inspectWorkspaceAliasMove(
   }
   const stored = createWorkspaceStateIdentity(expected.storedWorkspacePath);
   const current = createWorkspaceStateIdentity(expected.currentWorkspacePath);
-  if (pathMayExistSync(stored.workspacePath)) {
-    return { kind: "blocked", outcome: "original-workspace-exists" };
-  }
   if (!expected.targetDirectoryIdentity) {
     return { kind: "blocked", outcome: "target-directory-missing" };
   }
   if (directoryIdentity(expected.currentDirectoryPath) !== expected.targetDirectoryIdentity) {
     return { kind: "blocked", outcome: "repoint-changed" };
   }
+  const matchesDestination = (candidate: string) =>
+    resolveWorkspaceStateAliases(candidate).at(-1)!.workspaceKey === current.workspaceKey &&
+    directoryIdentity(resolveCanonicalWorkspacePath(candidate)) ===
+      expected.targetDirectoryIdentity;
+  if (
+    existingWorkspacePathSpellings(stored.workspacePath).some(
+      (candidate) => !matchesDestination(candidate),
+    )
+  ) {
+    return { kind: "blocked", outcome: "original-workspace-exists" };
+  }
   const aliases = new Map<string, WorkspaceStateIdentity>();
   const oldAliasKeys = new Set(expected.state.aliases.map((alias) => alias.alias_key));
   const configuredPaths = new Set(configuredWorkspaceDirs);
   for (const candidate of [
-    ...expected.state.aliases.map((alias) => alias.alias_path),
+    ...expected.state.aliases.flatMap((alias) => [
+      alias.alias_path,
+      ...existingWorkspacePathSpellings(alias.alias_path),
+    ]),
     ...configuredPaths,
     workspaceDir,
   ]) {
@@ -188,11 +225,7 @@ export function inspectWorkspaceAliasMove(
     if (configuredPaths.has(candidate) && target.workspaceKey === stored.workspaceKey) {
       return { kind: "blocked", outcome: "configured-workspace-conflict" };
     }
-    if (
-      target.workspaceKey === current.workspaceKey &&
-      directoryIdentity(resolveCanonicalWorkspacePath(candidate)) ===
-        expected.targetDirectoryIdentity
-    ) {
+    if (matchesDestination(candidate)) {
       for (const alias of resolved) {
         aliases.set(alias.workspaceKey, alias);
       }

@@ -13,7 +13,7 @@ export type WorkspaceStateIdentity = {
 
 const MAX_WORKSPACE_IDENTITY_SYMLINKS = 40;
 
-function normalizeWorkspaceIdentityPath(value: string): string {
+export function normalizeWorkspaceIdentityPath(value: string): string {
   const normalized = path.normalize(value).normalize("NFC");
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
@@ -22,8 +22,8 @@ function canonicalizeWorkspacePath(
   workspaceDir: string,
   normalizePath: (value: string) => string,
 ): string {
-  const fallback = normalizePath(path.resolve(resolveUserPath(workspaceDir)));
-  let candidate = fallback;
+  let candidate = path.resolve(resolveUserPath(workspaceDir));
+  const fallback = normalizePath(candidate);
   const followedSymlinks = new Set<string>();
 
   for (let redirectCount = 0; redirectCount < MAX_WORKSPACE_IDENTITY_SYMLINKS; redirectCount += 1) {
@@ -40,7 +40,7 @@ function canonicalizeWorkspacePath(
       }
       try {
         if (fs.lstatSync(current).isSymbolicLink()) {
-          const normalizedLink = normalizePath(current);
+          const normalizedLink = path.normalize(current);
           if (followedSymlinks.has(normalizedLink)) {
             return fallback;
           }
